@@ -71,7 +71,7 @@ function BaseSettingsModule:createMenu(title, items)
     -- 左右滑动: 左滑下一页 / 右滑上一页, 已在第一页时右滑 = 返回
     -- (规则与列表页、详情页、主页一致; 见 ui/common/menu_swipe.lua)
     MenuSwipe.attach(menu, function()
-        if self.manager then self.manager:goBack() end
+        self:goBack()
     end)
     return menu
 end

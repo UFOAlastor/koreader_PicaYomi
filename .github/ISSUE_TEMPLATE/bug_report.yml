@@ -1,0 +1,44 @@
+name: 问题反馈
+description: 报告可以复现的异常
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索是否已有相同问题。请勿提交密码、Cookie、token、私钥或个人阅读记录；日志和截图请先脱敏。
+  - type: input
+    id: version
+    attributes:
+      label: 插件版本
+      description: 请填写实际使用的版本。
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 设备型号、KOReader 版本；漫画源问题还请填写插件版本。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从哪个页面开始，执行哪些操作后出现问题？
+      placeholder: |
+        1. 打开…
+        2. 点击…
+        3. 出现…
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 预期行为与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏日志或截图（选填）
+      description: 可粘贴相关报错或上传已检查的截图，无需上传完整日志与账号信息。

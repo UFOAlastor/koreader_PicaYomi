@@ -7,6 +7,8 @@ local function noop() end
 local M = { enabled = enabled }
 M.dbg = enabled and backend.dbg or noop
 M.info = enabled and backend.info or noop
+-- Low-frequency operational events survive release diagnostics being disabled.
+M.notice = backend.info
 M.warn = backend.warn
 M.err = backend.err
 return M

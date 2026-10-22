@@ -20,7 +20,7 @@ end
 
 function Offline.new(id)
     local source = require("source.base"):extend{
-        identifier = id, name = id .. "（离线）", capabilities = { local_favorites = true },
+        identifier = id, name = id .. "（源已删除）", capabilities = { local_favorites = true },
         _offline = true,
         init = function(self) self._http_client = {} end,
     }

@@ -2,38 +2,47 @@
 
 面向 Kindle 等设备的 [KOReader](https://github.com/koreader/koreader) 漫画阅读插件。支持多源浏览、搜索、流式阅读、章节下载、收藏和阅读历史，针对墨水屏提供刷新、版式与内存管理设置。
 
-本文使用说明适用于 **0.11.3**。安装前请核对仓库 `_meta.lua` 或安装包版本；旧版本可能不含下述功能。漫画源独立分发，可用功能及最低插件版本由各源决定。
-
 ## 页面预览
 
-以下为 copymanga 未登录状态下的模拟器截图，实际显示会随设备、字体及源站内容变化。
+以下为模拟器页面预览。
 
 | 主页 | 设置 | 漫画列表 | 分类 | 漫画详情 |
 |---|---|---|---|---|
-| ![copymanga 主页](docs/screenshots/home.png) | ![设置](docs/screenshots/settings.png) | ![copymanga 漫画列表](docs/screenshots/comic-list.png) | ![copymanga 分类](docs/screenshots/categories.png) | ![copymanga 琉璃龍龍详情页](docs/screenshots/detail.png) |
+| ![主页](docs/screenshots/home.png) | ![设置](docs/screenshots/settings.png) | ![漫画列表](docs/screenshots/comic-list.png) | ![分类](docs/screenshots/categories.png) | ![琉璃龍龍详情页](docs/screenshots/detail.png) |
 
 ## 安装
 
 设备需已安装并能正常运行 KOReader。
 
-1. 通过仓库的 **Code → Download ZIP** 下载源码，解压后找到直接包含 `main.lua` 和 `_meta.lua` 的目录。
-2. 将该目录重命名为 `picayomi.koplugin`，复制到 KOReader 的 `plugins/` 目录。若使用已提供的插件安装包，直接复制其中的同名目录即可。
-3. 确认目录结构为 `koreader/plugins/picayomi.koplugin/main.lua`，避免额外套一层文件夹。
-4. 重启 KOReader，从“工具”菜单打开 PicaYomi。插件为 Lua 代码，无需编译。
+1. 从 [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases) 下载附件 **`picayomi.koplugin-<版本>.zip`**。
+2. 解压后，将 **`picayomi.koplugin`** 文件夹直接复制到设备的 **`koreader/plugins/`** 目录，无需重命名。
+3. 重启 KOReader，从“工具”菜单打开 PicaYomi。
 
-Kindle 上请复制真实文件夹，不使用符号链接。
+安装后的路径为：
 
-## 安装漫画源
+```text
+koreader/
+└── plugins/
+    └── picayomi.koplugin/
+        ├── main.lua
+        └── _meta.lua
+```
 
-插件预置 [PicaYomi MangaSources](https://github.com/UFOAlastor/PicaYomi_MangaSources) 的签名订阅。无需输入链接或导入文件。删除全部订阅后，订阅管理会显示“恢复默认订阅”，无需重新输入地址。
+> Kindle 通过 USB 连接电脑后，打开设备盘中的 `koreader/plugins/` 即可。下载 Release 中的插件 ZIP 附件；GitHub 自动生成的 “Source code” 压缩包是源码归档。
 
-需要安装 copymanga 时，进入 **设置 → 源管理 → 订阅管理 → 订阅：PicaYomi 漫画源 → 更新漫画源（含新源）**。插件获取并验证目录与源包，完成后重启 KOReader。自动更新不会恢复主动卸载的源；手动“更新漫画源（含新源）”可重新安装 copymanga。成功后可点击“立即重启 KOReader”，也可稍后从源管理重启。
+## 漫画源管理
 
-自动检查更新默认关闭。开启后，每次启动 KOReader 的进程最多在已联网且首页空闲时检查一次，同时遵守 24 小时间隔及失败退避；返回首页和翻页不会反复检查。开启后会自动更新已安装且已信任的签名源，不会添加新源或重启阅读器。
+在 **设置 → 源管理** 中管理漫画源与订阅。插件预置默认订阅，无需手动输入地址。
+
+自动检查更新默认关闭。开启后，插件会在已联网且首页空闲时检查并更新已安装的漫画源。更新成功后显示结果，并提供 **“立即重启 KOReader”／“稍后”**；选择立即重启后会先显示“正在重启 KOReader…”。
+
+> 每次启动 KOReader 最多完成一轮自动检查，同时遵守 24 小时间隔与失败退避；不会自动开启 Wi-Fi、添加新源或恢复已卸载的源。
+>
+> 删除全部订阅后，订阅管理会显示“恢复默认订阅”，无需重新输入地址。
 
 ## 第一次使用
 
-1. 从 KOReader 的“工具”菜单进入 PicaYomi，在首页切换到要使用的漫画源。首次使用 `copymanga` 时，先按上面的订阅步骤安装。
+1. 从 KOReader 的“工具”菜单进入 PicaYomi，在首页切换到要使用的漫画源。
 2. 按源站要求登录；支持匿名浏览的源可直接使用。推荐、最新、分类、排行等入口取决于当前源的能力。
 3. 搜索或浏览作品，点击条目进入详情。**开始**从第一章第一页阅读，**继续**恢复已有进度，也可以直接选择章节。
 4. 阅读前建议看一遍 **设置 → 阅读设置** 和 **设置 → 操作与手势**，特别是翻页刷新、条漫滚动和边缘返回。
@@ -100,10 +109,14 @@ Kindle 上请复制真实文件夹，不使用符号链接。
 - [诊断日志](docs/DEBUG.md)
 - [低内存图片阅读设计](docs/IMAGE_MEMORY.md)
 - [漫画源 SDK、模板与制作指南](https://github.com/UFOAlastor/PicaYomi_MangaSources)
-- [代码来源与许可证状态](THIRD_PARTY.md)
+- [MIT 许可证](LICENSE)与[第三方说明](THIRD_PARTY.md)
 
 感谢 [PicaComic](https://github.com/Pacalini/PicaComic)、[rakuyomi](https://github.com/hanatsumi/rakuyomi) 和 KOReader 提供的设计参考。
 
-## 免责声明
+## 许可证
 
-本项目仅供学习、研究与技术交流，不内置漫画内容，也不提供内容托管服务。作品版权归原作者及相关权利人所有，请支持正版，勿下载、传播或分享未经授权的资源；误获取的盗版资源请立即删除，临时测试文件请于下载后 24 小时内清理。该时限不构成版权授权或免责依据。使用者应遵守所在地法律法规及内容平台的使用规则，并自行承担使用行为产生的责任。
+本项目代码采用 [MIT License](LICENSE)。第三方组件保留各自的版权与许可声明。
+
+## 使用说明与免责声明
+
+本项目用于学习、研究与技术交流，不内置漫画内容，也不提供内容托管服务。代码的使用与分发按 MIT 许可证执行；以下说明针对第三方内容。作品版权归原作者及相关权利人所有，请支持正版，勿下载、传播或分享未经授权的资源；误获取的盗版资源请立即删除，临时测试文件请于下载后 24 小时内清理。该时限不构成版权授权或免责依据。使用者应遵守所在地法律法规及内容平台的使用规则，并自行承担使用行为产生的责任。

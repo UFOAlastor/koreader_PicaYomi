@@ -352,6 +352,7 @@ function Home.returnToHome()
     local UIManager = require("ui/uimanager")
     local shown = Home.findShownMenu()
     if shown then
+        require("source.extensions.updater").schedule()
         if Home.instance then Home.instance:refreshFavoritesLabel() end
         UIManager:setDirty(shown, "ui")
         return true

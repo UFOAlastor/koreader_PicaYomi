@@ -415,6 +415,25 @@ end
 -- These APIs crop during decoding, before allocating the output image.
 ----------------------------------------------------------------------------
 
+-- Progressive JPEG retains quantized 8x8 DCT blocks for every component.
+-- Calculate padded MCU/component storage (16-bit coefficients), rather than
+-- assuming eight bytes per pixel for grayscale and chroma-subsampled images.
+-- Native MAXMEMORY remains the final limit even for unusual JPEG layouts.
+-- libjpeg-turbo/src/jdcoefct.c: request_virt_barray in jinit_d_coef_controller.
+function ScaledDecode.jpeg_workspace(width,height,subsampling,colorspace)
+    local base=width*256+1024*1024
+    local sampling=({[0]={1,1},[1]={2,1},[2]={2,2},[3]={1,1},
+        [4]={1,2},[5]={4,1},[6]={1,4},[7]={4,2},[8]={2,4}})[subsampling]
+    if not sampling then return base+math.ceil(width/16)*16*math.ceil(height/16)*16*8 end
+    local horizontal,vertical=sampling[1],sampling[2]
+    local blocks=horizontal*vertical
+    if subsampling==3 then blocks=1
+    elseif colorspace==3 or colorspace==4 then blocks=2*blocks+2
+    else blocks=blocks+2 end
+    local mcus=math.ceil(width/(8*horizontal))*math.ceil(height/(8*vertical))
+    return base+mcus*blocks*64*2
+end
+
 function ScaledDecode.region_input(path, budget)
     local size=require("libs/libkoreader-lfs").attributes(path,"size")
     if not size then return nil,"read_failed" end
@@ -456,7 +475,8 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             -- when cropped. Enforce the codec's own limit before decompressing.
             workspace = width * 256 + 1024 * 1024
             if lib.tj3Get(handle, lib.TJPARAM_PROGRESSIVE) ~= 0 then
-                workspace = workspace + math.ceil(width/16)*16 * math.ceil(full_h/16)*16 * 8
+                workspace = ScaledDecode.jpeg_workspace(width,full_h,lib.tj3Get(handle,lib.TJPARAM_SUBSAMP),
+                    lib.tj3Get(handle,lib.TJPARAM_COLORSPACE))
             end
             y = math.max(0, math.floor(y))
             height = math.min(math.ceil(height), full_h-y)

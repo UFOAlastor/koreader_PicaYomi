@@ -10,7 +10,7 @@ local function version()
     local path=assert(debug.getinfo(1,"S").source:match("^@(.*)/[^/]+$"))
     return assert(dofile(path.."/../../_meta.lua").version)
 end
-local function blank() return {format=2,sources={},repositories={},removed={},archives={},auto_check=true} end
+local function blank() return {format=2,sources={},repositories={},removed={},archives={},auto_check=false,update_policy_version=1} end
 function Manager.new(opts)
     opts=opts or {}
     local self=setmetatable({root=opts.root or os.getenv("PICAYOMI_EXTENSION_DATA_DIR") or require("datastorage"):getDataDir().."/picayomi/extensions",
@@ -23,7 +23,8 @@ function Manager.new(opts)
         local s=json.decode(raw)
         assert(type(s)=="table" and (s.format==1 or s.format==2) and type(s.sources)=="table" and type(s.repositories)=="table","扩展状态损坏")
         local migrating=s.format==1
-        s.removed=s.removed or {}; s.archives=s.archives or {}; s.auto_check=s.auto_check~=false
+        s.removed=s.removed or {}; s.archives=s.archives or {}; s.auto_check=s.update_policy_version==1 and s.auto_check==true
+        s.update_policy_version=1
         assert(type(s.archives)=="table","处理包信任记录损坏")
         for id,versions in pairs(s.archives) do
             assert(Bundle.id(id) and type(versions)=="table","处理包信任记录损坏")
@@ -46,8 +47,12 @@ function Manager.new(opts)
         end
         for url,repo in pairs(s.repositories) do
             assert(Net.validURL(url) and type(repo)=="table" and type(repo.name)=="string" and type(repo.sources)=="table","订阅状态损坏")
-            Catalog.validate({format=repo.public_key and 2 or 1,name=repo.name,sources=repo.sources,
-                publisher_id=repo.publisher_id,revision=repo.revision})
+            if repo.public_key and not repo.revision then
+                assert(#repo.sources==0,"预置信任订阅不能带未验证目录")
+            else
+                Catalog.validate({format=repo.catalog_format or (repo.public_key and 2 or 1),name=repo.name,sources=repo.sources,
+                    publisher_id=repo.publisher_id,revision=repo.revision})
+            end
             if repo.public_key then require("source.extensions.signature").unhex(repo.public_key,32) end
             repo.url=url; repo.auto_install=repo.auto_install==true
         end
@@ -67,6 +72,11 @@ function Manager.new(opts)
     end
     if not self.state_error then
         local seeded,err=pcall(function() self:seed() end)
+        if not seeded then self.state_error=tostring(err) end
+    end
+    self.default_repository=opts.default_repository or (not opts.root and require("source.extensions.default_repository"))
+    if not self.state_error and self.default_repository then
+        local seeded,err=pcall(self.seedRepository,self)
         if not seeded then self.state_error=tostring(err) end
     end
     self.initial=copy(self.state.sources)
@@ -119,6 +129,32 @@ function Manager:seed()
     if changed then self:_save(state) end
 end
 
+-- Trust is shipped with the host, so refresh needs no URL/key entry by users.
+-- Only the official IDs with their unchanged publisher identity are migrated.
+function Manager:seedRepository()
+    local config=self.default_repository
+    local state=copy(self.state)
+    state.default_subscriptions=state.default_subscriptions or {}
+    if not state.default_subscriptions[config.url] then
+        if not state.repositories[config.url] then
+            state.repositories[config.url]={url=config.url,name=config.name,sources={},auto_install=false,
+                public_key=config.public_key,publisher_id=config.publisher_id,catalog_format=3}
+        end
+        state.default_subscriptions[config.url]=true
+    end
+    local repo=state.repositories[config.url]
+    if repo and repo.public_key==config.public_key and repo.publisher_id==config.publisher_id then
+        for id,r in pairs(state.sources) do
+            if config.publishers[id]==r.manifest.publisher_id
+                and ((r.bundled and r.origin=="bundled") or r.origin=="local") and not r.public_key then
+                r.publisher_id,r.public_key,r.origin=r.manifest.publisher_id,config.public_key,config.url
+                r.pinned=nil
+            end
+        end
+    end
+    if json.encode(state)~=json.encode(self.state) then self:_save(state) end
+end
+
 function Manager:_package(id,hash)
     assert(Bundle.id(id) and Catalog.digest(hash),"源包路径无效")
     local raw=assert(Storage.read(self.root.."/packages/"..id.."/"..hash..".json",Bundle.MAX_BYTES),"源包文件不存在")
@@ -165,12 +201,12 @@ function Manager:install(raw,origin,expected,trust_legacy)
     end
     if Bundle.legacy(m.id) and not bootstrap then
         assert(old and old.legacy and old.publisher_id==m.publisher_id,"此源 ID 的历史身份未获授权")
-        assert(expected and repo and repo.public_key and repo.publisher_id==old.publisher_id,"历史源更新需要已绑定的签名订阅")
+        assert(expected and repo and repo.public_key and Catalog.owns(repo,m.id,old.publisher_id),"历史源更新需要已绑定的签名订阅")
     end
     if old then
         if old.manifest.publisher_id then assert(old.manifest.publisher_id==m.publisher_id,"源发布者身份不能在更新时改变") end
         if old.publisher_id then
-            assert(repo and repo.public_key and old.publisher_id==repo.publisher_id and old.public_key==repo.public_key,
+            assert(repo and repo.public_key and Catalog.owns(repo,m.id,old.publisher_id) and old.public_key==repo.public_key,
                 "源的发布者或密钥不符，请显式重新绑定")
         else assert(old.origin==origin,"源已绑定其他来源") end
         if old.current==hash then return true,"此版本已安装" end
@@ -183,12 +219,14 @@ function Manager:install(raw,origin,expected,trust_legacy)
     r.current,r.pending,r.previous=hash,hash,r.active or r.current
     r.origin,r.manifest=origin,m
     r.public_key=repo and repo.public_key or old and old.public_key
-    r.publisher_id=repo and repo.public_key and repo.publisher_id or old and old.publisher_id
+    r.publisher_id=repo and repo.public_key and m.publisher_id or old and old.publisher_id
     if bootstrap then r.legacy=true; r.publisher_id=m.publisher_id end
     state.sources[m.id]=r; state.removed[m.id]=nil
     state.archives=state.archives or {}; state.archives[m.id]=state.archives[m.id] or {}
     state.archives[m.id][hash]={legacy=r.legacy==true,publisher_id=m.publisher_id}
-    self:_save(state); return true,"已准备更新，重启 KOReader 后生效"
+    self:_save(state)
+    require("util.logger").notice("Picayomi: source prepared", m.id, m.version)
+    return true,"已准备更新，重启 KOReader 后生效"
 end
 function Manager:import(path) return self:install(assert(Storage.read(path,Bundle.MAX_BYTES),"无法读取源包")) end
 -- Preview and confirm the same bytes: do not reread a selected path after trust.
@@ -369,6 +407,16 @@ function Manager:addRepository(url)
     state.repositories[url]={url=url,name=url,sources={},auto_install=false}
     return self:_save(state)
 end
+function Manager:restoreDefaultRepository()
+    assert(not next(self.state.repositories),"仅在没有订阅时恢复默认订阅")
+    local config=self.default_repository or require("source.extensions.default_repository")
+    local state=copy(self.state)
+    state.repositories[config.url]={url=config.url,name=config.name,sources={},auto_install=false,
+        public_key=config.public_key,publisher_id=config.publisher_id,catalog_format=3}
+    state.default_subscriptions=state.default_subscriptions or {}
+    state.default_subscriptions[config.url]=true
+    return self:_save(state)
+end
 function Manager:removeRepository(url)
     local state=copy(self.state); state.repositories[url]=nil; return self:_save(state)
 end
@@ -379,12 +427,13 @@ function Manager:_previewRepository(url)
         assert(type(envelope.payload)=="string" and #envelope.payload<=480*1024,"签名目录过大")
         key=envelope.public_key
         require("source.extensions.signature").verify(key,envelope.signature,"index",envelope.payload)
-        data=Catalog.validate(json.decode(envelope.payload)); assert(data.format==2,"签名目录格式无效")
+        data=Catalog.validate(json.decode(envelope.payload)); assert(data.format==2 or data.format==3,"签名目录格式无效")
     else data=Catalog.validate(envelope); assert(data.format==1,"新版目录必须签名") end
     return {data=data,key=key,payload_hash=key and sha(envelope.payload),envelope=envelope}
 end
 function Manager:checkFailure(url,err)
     local state=copy(self.state); local r=state.repositories[url]
+    require("util.logger").warn("Picayomi: subscription refresh failed", tostring(err))
     if r then
         r.last_attempt=self.now(); r.failures=(r.failures or 0)+1; r.error=tostring(err)
         r.next_check=self.now()+({900,3600,21600,86400})[math.min(r.failures,4)]
@@ -424,10 +473,13 @@ function Manager:acceptRepository(url,preview,confirm_identity)
             if source.origin==url and source.public_key==r.public_key then source.public_key=key end
         end
     end
+    r.catalog_format=data.format
     r.public_key,r.publisher_id,r.revision,r.payload_hash=key,data.publisher_id,data.revision,preview.payload_hash
     r.name,r.sources,r.refreshed_at,r.last_success=data.name,data.sources,self.now(),self.now()
     r.failures,r.error,r.next_check=0,nil,self.now()+24*3600
-    return self:_save(state)
+    local saved=self:_save(state)
+    require("util.logger").notice("Picayomi: subscription refreshed", data.name, "revision", data.revision, "entries", #data.sources)
+    return saved
 end
 function Manager:refreshRepository(url)
     assert(self.state.repositories[url],"订阅不存在")
@@ -442,11 +494,11 @@ function Manager:bind(id,url)
     local state=copy(self.state); local r=assert(state.sources[id],"源未安装")
     local repo=assert(state.repositories[url],"订阅不存在")
     assert(repo.public_key and repo.publisher_id,"请先确认签名订阅身份")
-    assert(not r.publisher_id or r.publisher_id==repo.publisher_id,"发布身份不符")
+    assert(not r.publisher_id or Catalog.owns(repo,id,r.publisher_id),"发布身份不符")
     local found=false
     for _,e in ipairs(repo.sources) do if e.id==id then found=true end end
     assert(found,"订阅没有此源")
-    r.publisher_id,r.public_key,r.origin=repo.publisher_id,repo.public_key,url; return self:_save(state)
+    r.publisher_id,r.public_key,r.origin=r.manifest.publisher_id or repo.publisher_id,repo.public_key,url; return self:_save(state)
 end
 function Manager:moveRepository(url,new_url,preview)
     assert(Net.validURL(new_url) and not self.state.repositories[new_url], "新订阅地址无效或已存在")
@@ -480,18 +532,19 @@ function Manager:installFromRepository(url,id,automatic)
     local repo=assert(self.state.repositories[url],"订阅不存在")
     local status=self:candidate(url,id)
     assert(status.code=="update" and status.entry,status.label)
-    if automatic then assert(repo.public_key and repo.auto_install,"未授权自动安装") end
+    if automatic then assert(repo.public_key and self.state.auto_check,"未授权自动更新") end
     local raw=self.fetch(status.entry.url,Bundle.MAX_BYTES)
     assert(self.state.repositories[url] and self.state.repositories[url].public_key==repo.public_key,"订阅已移除或身份改变")
+    if automatic then assert(self.state.auto_check,"自动更新已关闭") end
     local fresh=self:candidate(url,id)
     assert(fresh.code=="update" and fresh.entry and fresh.entry.sha256==status.entry.sha256,
         "更新候选或版本策略已经改变，请重新检查")
     return self:install(raw,url,status.entry)
 end
-function Manager:updateAll(url,automatic)
+function Manager:updateAll(url,automatic,include_new)
     local results={}; local repo=assert(self.state.repositories[url],"订阅不存在"); local seen={}
     for _,entry in ipairs(repo.sources) do
-        if not seen[entry.id] and self.state.sources[entry.id] then
+        if not seen[entry.id] and (self.state.sources[entry.id] or include_new and not automatic and not Bundle.legacy(entry.id)) then
             seen[entry.id]=true
             if self:candidate(url,entry.id).code=="update" then
                 local ok,err=pcall(self.installFromRepository,self,url,entry.id,automatic)

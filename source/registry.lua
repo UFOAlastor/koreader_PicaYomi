@@ -57,7 +57,7 @@ function SourceRegistry:list(include_local)
         self._local_ids = local_sources()
         for id in pairs(self._local_ids) do
             if not registered_sources[id] then
-                result[#result + 1] = { identifier = id, name = id .. "（离线）",
+                result[#result + 1] = { identifier = id, name = id .. "（源已删除）",
                     capabilities = { local_favorites = true }, offline = true }
             end
         end

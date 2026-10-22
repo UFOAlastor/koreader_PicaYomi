@@ -57,6 +57,8 @@ end
 -- 而弹窗自己还留在屏幕上，表现就是"点返回没反应"。(实测踩到)
 --- 参考项目 (点击后显示二维码; 二维码内容就是仓库地址)
 AboutSettings.LINKS = {
+    plugin = "https://github.com/UFOAlastor/koreader_PicaYomi",
+    sources = "https://github.com/UFOAlastor/PicaYomi_MangaSources",
     rakuyomi = "https://github.com/hanatsumi/rakuyomi",
     picacomic = "https://github.com/Pacalini/PicaComic",
     koreader = "https://github.com/koreader/koreader",
@@ -116,9 +118,11 @@ function AboutSettings:showReferenceProjects()
 end
 
 function AboutSettings:show()
+    self._license_taps=0
     local items = {
-        -- 版本号之后预期指向项目仓库, 目前还没定, 先保持只读
-        { text = T(_("版本 %1"), self:getVersion()), enabled = false, select_enabled = false },
+        { text = T(_("版本 %1"), self:getVersion()), callback = function()
+            self:showQr(self.LINKS.plugin, _("PicaYomi GitHub 仓库链接"))
+        end },
         {
             text = _("漫画阅读插件 · 基于 KOReader"),
             callback = function()
@@ -138,9 +142,23 @@ function AboutSettings:show()
                 self:showReferenceProjects()
             end,
         },
-        { text = _("开源许可: MIT"), enabled = false, select_enabled = false },
+        { text = _("开源许可: MIT"), callback = function()
+            local now=os.time()
+            self._license_taps=(self._license_time and now-self._license_time<=3) and self._license_taps+1 or 1
+            self._license_time=now
+            if self._license_taps==5 then
+                self._license_taps=0
+                self:showQr(self.LINKS.sources, _("PicaYomi 漫画源仓库"))
+            end
+        end, _license=true },
         self:createBackButton(),
     }
+    for _,item in ipairs(items) do
+        if item.callback and not item._license then
+            local callback=item.callback
+            item.callback=function(...) self._license_taps=0;return callback(...) end
+        end
+    end
     local menu = self:createMenu(_("关于"), items)
     -- 关于页的条目只是"打开二维码/子页", 点完不能把设置页退掉
     MenuStyle.disableSelectAutoClose(menu)

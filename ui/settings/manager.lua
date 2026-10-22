@@ -136,6 +136,23 @@ function SettingsManager:pushMenu(menu)
     self.current_menu = menu
 end
 
+-- Returning to a route after removing a source/subscription replaces the
+-- existing ancestor instead of adding another copy of it to the back stack.
+function SettingsManager:trimToRoute(route)
+    local index
+    for i, menu in ipairs(self.menu_stack) do
+        if menu._settings_route == route then index = i; break end
+    end
+    if index then
+        self:closeCurrentMenu()
+        for i = #self.menu_stack, index, -1 do
+            UIManager:close(table.remove(self.menu_stack), "ui")
+        end
+    elseif self.current_menu and self.current_menu._settings_route == route then
+        self:closeCurrentMenu()
+    end
+end
+
 function SettingsManager:popMenu()
     if #self.menu_stack > 0 then
         local previous_menu = table.remove(self.menu_stack)
@@ -145,7 +162,14 @@ function SettingsManager:popMenu()
         -- 这里只需要请求一次重绘。
         -- 注意: 不能再 UIManager:show(previous_menu) —— 那会往窗口栈里塞一个
         -- 重复条目, 之后每返回一层就多一层, 越点越乱。
-        UIManager:setDirty(previous_menu, "ui")
+        if previous_menu._extensions_redraw then
+            -- All back paths (button, gesture and close) refresh live source state.
+            local redraw = previous_menu._extensions_redraw
+            self:closeCurrentMenu()
+            redraw()
+        else
+            UIManager:setDirty(previous_menu, "ui")
+        end
         return true
     end
     return false

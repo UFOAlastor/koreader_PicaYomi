@@ -1419,6 +1419,16 @@ function MultiImageDoc:openPage(n)
             getSize=function(_,dc) local z=dc and dc:getZoom() or 1; return sz.w*z,sz.h*z end,
             getUsedBBox=function() return 0.01,0.01,-0.01,-0.01 end}
         page.draw=function(_,dc,target,ox,oy)
+            local started=now_seconds()
+            local function record(reason)
+                local elapsed=(now_seconds()-started)*1000
+                if elapsed>=1000 then
+                    logger.warn("Picayomi: slow page render", "page", n, "format", format,
+                        "width", sz.w, "height", sz.h, "ms", math.floor(elapsed), "result", reason)
+                elseif Diag.enabled then
+                    Diag.mark(string.format("draw p%d %dms (%s)",n,math.floor(elapsed),format))
+                end
+            end
             ox,oy=ox or 0,oy or 0
             local zoom=dc:getZoom()
             local tw,th=target:getWidth(),target:getHeight()
@@ -1456,7 +1466,7 @@ function MultiImageDoc:openPage(n)
                         local left=math.floor(x0/ratio*zoom)
                         local width=math.ceil(x1/ratio*zoom)-left
                         local extra=canonical and (x1-x0)*math.ceil((last-first)*vertical)*(color and 4 or 1) or 0
-                        if width*height*(color and 8 or 2)+extra>decode_budget() then error("memory_budget") end
+                        if bb:getWidth()*bb:getHeight()*(color and 4 or 1)+width*height*(color and 8 or 2)+extra>decode_budget() then error("memory_budget") end
                         if canonical then
                             local cy=math.floor((first-start)*vertical+0.5)
                             local ch=math.floor((last-first)*vertical+0.5)
@@ -1491,6 +1501,7 @@ function MultiImageDoc:openPage(n)
                 return true
             end
             local function failed(reason)
+                record(reason)
                 page.is_placeholder=true
                 logger.warn("Picayomi region decode:",reason)
                 if reason=="corrupt_image" then
@@ -1516,10 +1527,10 @@ function MultiImageDoc:openPage(n)
                 if not region_input then failed(err);return end
             end
             while row<th do
-                -- Leave room for native RGB plus resampling at the same time.
-                -- An oversized first JPEG batch otherwise fills allocator arenas
-                -- and forces every subsequent batch down to a much smaller size.
-                local batch=format=="png" and 64 or (request.direct and color and format=="jpeg" and 128 or 256)
+                -- Each native strip restarts the codec. Start with the visible
+                -- viewport when memory permits; failed budget checks halve it.
+                -- PNG keeps its streaming/canonical 64-row extraction path.
+                local batch=format=="png" and 64 or th
                 local lines=math.min(batch,th-row)
                 local success,reason
                 repeat
@@ -1547,6 +1558,7 @@ function MultiImageDoc:openPage(n)
                 until false
                 if not success then failed(reason);return end
             end
+            record("ok")
         end
         return finish(page,"region")
     end
@@ -1999,6 +2011,7 @@ function StreamDocument:close()
     --   会话已取消 -> 阅读器已关闭 = 放回渲染预算 + Document.close
     -- Diag.mark 自带 flush, 被强杀也不丢; 正常路径上只有 3 次小写入。
     if self.session then
+        logger.notice("Picayomi: reader close", "source", self.session.source and self.session.source.identifier)
         if Diag.enabled then Diag.mark("close: 开始取消会话") end
         self.session:cancel()
         if Diag.enabled then Diag.mark("close: 会话已取消") end
@@ -2230,6 +2243,7 @@ function StreamDocument.registerSession(session)
         end)
     end
 
+    logger.notice("Picayomi: reader open", "source", session.source and session.source.identifier, "pages", session.total)
     -- 诊断: 阅读期间周期采样内存 (真机 OOM 被强杀时, diag.log 里有崩溃前的内存曲线)
     if Diag.enabled then Diag.start(string.format("read %s 第%s话 共%d页",
         tostring(session.title or ""), tostring(session.order), session.total)) end

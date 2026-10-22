@@ -1355,7 +1355,7 @@ function ComicDetail:loadCover()
     end
     -- 离线模式: 只能用已缓存的封面, 不再联网补
     if self.offline then return end
-    if not self.source or not self.source.downloadImage then return end
+    if not self.source then return end
 
     self.cover_loading = true
     CoverCache.ensure(self.source, self.source_id, self.comic, function(path)

@@ -1,10 +1,12 @@
 # 代码来源与许可证状态
 
-PicaYomi 的主许可证尚待维护者确认。本次为私有发布流程预演，仓库包含代码不等于已授予开源许可；正式开放前需要确认主许可证，并逐项补全第三方代码来源及许可证文本。
+本项目当前未提供主许可证文件 `LICENSE`，许可证选型及第三方许可文本仍需补全。本说明记录来源，不代替许可证文本。
 
-- KOReader 为宿主，运行时及原生库由 KOReader 提供，不随本仓库分发。
-- PicaComic、rakuyomi 为交互与设计参考；任何实际复用代码须分别核对授权。
-- 插件 `basexx.lua` 标注基于 [aiq/basexx](https://github.com/aiq/basexx) 的简化实现；正式开放前核对对应版本及许可证文本。
-- 源中的公开协议常量属于平台适配实现，不是维护者账号凭据，不代表平台授权或服务可用性保证。
+| 项目 | 关系与来源 |
+|---|---|
+| [KOReader](https://github.com/koreader/koreader) | 插件宿主及运行时依赖。KOReader 运行时、原生库和完整源码由 KOReader 项目提供 |
+| [PicaComic](https://github.com/Pacalini/PicaComic) | 产品形态与交互参考 |
+| [rakuyomi](https://github.com/hanatsumi/rakuyomi) | KOReader 插件设计参考 |
+| [aiq/basexx](https://github.com/aiq/basexx) | `basexx.lua` 文件头标注的基础实现来源；对应版本及许可文本待补全 |
 
-本说明只记录当前核对状态，不替第三方授予许可。
+第三方项目的代码、商标和内容分别适用其原始权利声明。引用代码应保留对应版权和许可说明。

@@ -28,6 +28,12 @@ local logger = require("util.logger")
 
 local LoadingTask = {}
 
+function LoadingTask.showFailure()
+    UIManager:show(InfoMessage:new{
+        text = require("gettext")("加载失败，请检查网络后重试；若仍失败，请重新打开此页面。"),
+    }, "ui")
+end
+
 function LoadingTask.close(loading)
     -- InfoMessage invokes dismiss_callback on programmatic close too.
     if loading then loading.dismiss_callback = nil end
@@ -65,7 +71,10 @@ function LoadingTask.background(loading, fn, opts)
             on_error = function(err)
                 cleanup()
                 if opts.on_error then opts.on_error(err)
-                else logger.warn("Picayomi: 后台取数失败: " .. tostring(err)) end
+                else
+                    logger.warn("Picayomi: 后台取数失败: " .. tostring(err))
+                    if loading then LoadingTask.showFailure() end
+                end
             end,
         })
     end
@@ -167,6 +176,7 @@ function LoadingTask.run(opts)
             if not ok_cb then
                 logger.warn("Picayomi: LoadingTask on_done 抛异常 (已吞掉, 守卫已复位): "
                     .. tostring(err_cb))
+                LoadingTask.showFailure()
             end
         end
     end

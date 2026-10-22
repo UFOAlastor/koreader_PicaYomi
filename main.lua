@@ -383,7 +383,11 @@ function Picayomi:onResume()
     pcall(function()
         local session = self:getActiveStream()
         local driver = session and session.driver
-        if driver and driver.tick then driver:tick() end
+        if driver and driver.resume then driver:resume()
+        elseif driver and driver.tick then driver:tick() end
+        if session and session.scheduler then
+            require("ui.reader_feedback").queue(session, session.scheduler.current_page, "connectivity")
+        end
     end)
     -- 离线下载用的是同一种"自己重排自己"的驱动; 挂起期间排进 UIManager 的
     -- tick 会被丢掉, 不补这一脚队列就永远停在那里 (进度条不动, 也没有报错)。

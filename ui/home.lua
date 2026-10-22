@@ -702,6 +702,7 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
         if not ok_show then
             logger.warn("Picayomi Home: 建列表异常: " .. tostring(show_err))
             self:returnToListBase()
+            LoadingTask.showFailure()
         end
     end, {
         delay = 0.1,

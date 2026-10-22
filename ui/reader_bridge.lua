@@ -81,6 +81,15 @@ function ReaderBridge:tick()
     self:_schedule(true)
 end
 
+-- Resume may follow a dropped UI task. Reset the scheduling latch before
+-- kicking; a stale _driving=true must not make every later tick a no-op.
+function ReaderBridge:resume()
+    if self._closed then return end
+    if self._task then UIManager:unschedule(self._task); self._task = nil end
+    self._driving = false
+    self:tick()
+end
+
 --- 会话关闭 / 取消时调用 (由 main.lua 的 Picayomi:onCloseWidget 触发)
 function ReaderBridge:close()
     self._closed = true
@@ -146,6 +155,8 @@ function ReaderBridge:_schedule(immediate)
             logger.warn("Picayomi ReaderBridge: 调度步进异常, 已停止本次驱动: "
                 .. tostring(pending))
             self:_allow_standby()
+            require("ui.reader_feedback").queue(session, session.scheduler and session.scheduler.current_page or 1,
+                "display", "页面加载发生异常，请重试或重新打开章节。")
             return
         end
         if pending then

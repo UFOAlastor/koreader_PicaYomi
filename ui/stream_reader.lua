@@ -481,6 +481,10 @@ function StreamSession.new(opts)
             pcall(function() MemoryGuard.instance():relieve() end)
             -- 这一页真的下来了: 清掉它的自动重试计数 (以后再失败仍然是 3 次机会)
             self.retry_attempts[n] = nil
+            if self.retry_pending and self.retry_pending[n] then
+                UIManager:unschedule(self.retry_pending[n]); self.retry_pending[n] = nil
+            end
+            if n == self.scheduler.current_page then require("ui.reader_feedback").clear(self) end
             -- 诊断: 记下每次真实下载的页码与耗时 (缓存命中不计), 便于事后看崩溃前进度。
             -- 括号里是其中**后处理**占的那一段 (源 B 解扰: 解码整图 + 逐带重排 +
             -- 重新编码, 很可能比 HTTP 还贵)。两个数字分开才能决定该修网络还是修解扰。
@@ -505,6 +509,8 @@ function StreamSession.new(opts)
             logger.warn(string.format("Picayomi Stream: 第 %d 页下载失败: %s",
                 n, tostring(err)))
             self:_schedule_retry(n)
+            require("ui.reader_feedback").queue(self, n, "download")
+            self:refresh_failed_page(n)
         end,
     }
 
@@ -660,7 +666,18 @@ function StreamSession:request_page(n)
     -- 入队成功 => 状态立刻变 loading, 占位页显示"加载中…"; 然后开始推调度器。
     if self.scheduler:request(n, Scheduler.P_CURRENT) then
         self:_kick()
+        require("ui.reader_feedback").queue(self, n, "connectivity")
     end
+end
+
+function StreamSession:refresh_failed_page(n)
+    if self.cancelled or n ~= self.scheduler.current_page then return end
+    if self.failure_refresh then UIManager:unschedule(self.failure_refresh) end
+    self.failure_refresh = function()
+        self.failure_refresh = nil
+        if not self.cancelled then refresh_page_if_current(self, n, nil, true) end
+    end
+    UIManager:scheduleIn(0.1, self.failure_refresh)
 end
 
 --- 失败页自动重试的等待时间 (秒)
@@ -694,10 +711,13 @@ function StreamSession:_schedule_retry(n)
     n = tonumber(n)
     if not n or n ~= self.scheduler.current_page then return end
 
+    self.retry_pending = self.retry_pending or {}
+    if self.retry_pending[n] then return end
     self.retry_attempts[n] = (self.retry_attempts[n] or 0) + 1
     if self.retry_attempts[n] > StreamSession.RETRY_MAX then return end
 
-    UIManager:scheduleIn(StreamSession.RETRY_DELAY, function()
+    self.retry_pending[n] = function()
+        self.retry_pending[n] = nil
         if self.cancelled then return end
         -- 定时器触发时再判一次: 这 17 秒里用户可能已经翻走 / 已经换章
         -- 这是定时任务, 任务队列不兜异常; 抛出来 = 阅读中途整个 KOReader 退出,
@@ -710,7 +730,9 @@ function StreamSession:_schedule_retry(n)
         if not ok then
             logger.warn("Picayomi Stream: 失败页自动重试出错 (p" .. tostring(n) .. "): " .. tostring(err))
         end
-    end)
+    end
+    UIManager:scheduleIn(StreamSession.RETRY_DELAY, self.retry_pending[n])
+    return true
 end
 
 --- 第 n 页是否处在失败冷却期
@@ -724,6 +746,9 @@ end
 
 --- 清掉某页的失败冷却 (供"用户主动翻页"这条路径调用 -> 允许重试一次)
 function StreamSession:clear_failure(n)
+    if self.retry_pending and self.retry_pending[n] then
+        UIManager:unschedule(self.retry_pending[n]); self.retry_pending[n] = nil
+    end
     self.scheduler:clear_failure(n)
     if self.memory_blocked and self.memory_blocked[n] then
         self.memory_epoch[n] = (self.memory_epoch[n] or 0) + 1
@@ -980,6 +1005,10 @@ end
 
 function StreamSession:cancel()
     self.cancelled = true
+    require("ui.reader_feedback").clear(self)
+    for _, task in pairs(self.retry_pending or {}) do UIManager:unschedule(task) end
+    self.retry_pending = {}
+    if self.failure_refresh then UIManager:unschedule(self.failure_refresh); self.failure_refresh = nil end
     self.prefetch_queue = {}
     self.scheduler:cancel_all()
     if self.memory_retry then UIManager:unschedule(self.memory_retry); self.memory_retry = nil end
@@ -996,6 +1025,10 @@ end
 -- 清干净, 只是不做阻塞回收 (孤儿进程由 init 收养, 无害)。
 function StreamSession:shutdown()
     self.cancelled = true
+    require("ui.reader_feedback").clear(self)
+    for _, task in pairs(self.retry_pending or {}) do UIManager:unschedule(task) end
+    self.retry_pending = {}
+    if self.failure_refresh then UIManager:unschedule(self.failure_refresh); self.failure_refresh = nil end
     self.prefetch_queue = {}
     self.scheduler:cancel_all(true)
     if self.memory_retry then UIManager:unschedule(self.memory_retry); self.memory_retry = nil end
@@ -1312,6 +1345,11 @@ function MultiImageDoc:openPage(n)
     -- 每个返回点都必须经过它 —— 少一处就会让那一类页面在下载完成时被
     -- 误判成"已经画好了", 于是永远停在占位页。
     local function finish(page, label)
+        if page.is_placeholder and (page.placeholder_state == "too_large" or page.placeholder_state == "processing_failed") then
+            require("ui.reader_feedback").queue(self.session, n, "display", page.placeholder_text)
+        elseif page.is_placeholder and self.session.store.failed_reason and self.session.store.failed_reason[n] then
+            require("ui.reader_feedback").queue(self.session, n, "download")
+        end
         self.session.painted = {
             n = n,
             key = render_key(self.session, n) .. "|"
@@ -1511,9 +1549,12 @@ function MultiImageDoc:openPage(n)
                         self.session.store:mark_failed(n,"图片损坏",os.time())
                         self.session:_schedule_retry(n)
                     end)
+                    require("ui.reader_feedback").queue(self.session, n, "download")
                     placeholder_page(current_page_state(self.session,n)):draw(dc,target)
                 else
-                    placeholder_page("too_large",{reason=reason=="memory_budget" and reason or "decode_failed"}):draw(dc,target)
+                    local placeholder = placeholder_page("too_large",{reason=reason=="memory_budget" and reason or "decode_failed"})
+                    require("ui.reader_feedback").queue(self.session, n, "display", placeholder.placeholder_text)
+                    placeholder:draw(dc,target)
                     if reason=="memory_budget" then
                         local before=decode_budget()
                         self.session:wait_for_memory(n,function() return decode_budget()>before end)

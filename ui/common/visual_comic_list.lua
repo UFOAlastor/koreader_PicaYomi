@@ -985,7 +985,7 @@ function VisualComicList:fetchMore(silent, on_done)
             -- 只是不再自动预取, 免得反复失败把界面拖住。
             logger.warn("Picayomi VisualComicList: 补货异常: " .. tostring(ok))
             self.prefetch_blocked = true
-            if not silent then
+            if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
                     text = T(_("加载失败: %1"), tostring(ok)),
                     timeout = 3,
@@ -1007,7 +1007,7 @@ function VisualComicList:fetchMore(silent, on_done)
             logger.warn("Picayomi VisualComicList: 补货失败: " .. tostring(err))
             -- 不再自动预取 (否则失败会自己循环), 但手动"下页"仍然放行
             self.prefetch_blocked = true
-            if not silent then
+            if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
                     text = T(_("加载失败：%1"), tostring(err or _("未知错误"))),
                     timeout = 3,
@@ -1081,7 +1081,7 @@ function VisualComicList:fetchMore(silent, on_done)
             self.loading_more = false
             self.prefetch_blocked = true
             if self._closed then return end
-            if not silent then
+            if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
                     text = T(_("加载失败：%1"), tostring(err)), timeout = 3,
                 }, "ui")

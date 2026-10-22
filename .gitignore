@@ -1,0 +1,26 @@
+# Local state and build outputs never belong in release source history.
+dist/
+build/
+out/
+cache/
+data/
+picayomi/
+personal/
+*.koplugin/
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+.idea/
+.env
+.env.*
+*.pem
+*.key
+*.credentials
+config.json*
+settings.reader.lua*
+*.log
+*.log.*
+*.sdr/
+.kindle-host
+.kindle_known_hosts

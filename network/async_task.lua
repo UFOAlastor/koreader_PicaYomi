@@ -1,0 +1,159 @@
+-- Cooperative UI tasks. Only HTTP crosses the process boundary; parsing,
+-- source cookies and configuration changes stay in the parent process.
+local Async = {}
+local tasks = setmetatable({}, { __mode = "k" })
+local in_worker = false
+Async.TICK = 0.05
+Async.TIMEOUT = 90
+Async.MAX_RESULT = 8 * 1024 * 1024
+
+function Async.active()
+    local co = coroutine.running()
+    return not in_worker and co and tasks[co] ~= nil
+end
+
+function Async.await(fn)
+    if not Async.active() then return fn() end
+    local ok, value, err = coroutine.yield(fn)
+    if not ok then error(value, 0) end
+    return value, err
+end
+
+function Async.cancelAll(nonblocking)
+    local pending = {}
+    for _, task in pairs(tasks) do pending[#pending + 1] = task end
+    for _, task in ipairs(pending) do
+        task.nonblocking = nonblocking
+        task:cancel()
+    end
+end
+
+function Async.run(fn, opts)
+    opts = opts or {}
+    local UIManager = require("ui/uimanager")
+    local socket = require("socket")
+    local buffer = require("string.buffer")
+    local Fork = opts.subprocess or require("network.subprocess_fork")
+    local task = { done = false }
+    local co
+    local function safe_callback(cb, ...)
+        if not cb then return end
+        local ok, err = pcall(cb, ...)
+        if not ok then require("util.logger").warn("Picayomi async callback: " .. tostring(err)) end
+    end
+    local function release()
+        if task.poll then UIManager:unschedule(task.poll) end
+        if task.session then
+            pcall(function()
+                if task.nonblocking and task.session.terminate then task.session:terminate()
+                else task.session:close() end
+            end)
+            task.session = nil
+        end
+        task.chunks = nil
+    end
+    local function finish()
+        if task.done then return end
+        task.done = true
+        tasks[co] = nil
+        release()
+        -- A cancelled coroutine is still suspended, retaining its source and
+        -- page stack. Drop it even if the owning page keeps the task handle.
+        co = nil
+    end
+    function task:cancel()
+        if self.done then return end
+        finish()
+        safe_callback(opts.on_cancel)
+    end
+    local resume
+    local function fail(err)
+        finish()
+        safe_callback(opts.on_error, tostring(err))
+    end
+    local function start(fetch)
+        -- A failed fork must not silently turn a background operation into
+        -- blocking network I/O on a low-memory device.
+        if not opts.subprocess then
+            local MG = require("util.memory_guard")
+            local allowed = MG.instance():fork_allowed()
+            if not allowed then
+                resume(false, "可用内存不足，请稍后重试")
+                return
+            end
+        end
+        task.chunks, task.bytes = {}, 0
+        task.started = socket.gettime()
+        local session, err = Fork.spawn(function(child)
+            local previous_worker = in_worker
+            in_worker = true
+            local ok, value, reason = pcall(fetch)
+            in_worker = previous_worker
+            if not ok then value = tostring(value) end
+            local encoded = buffer.encode({ ok = ok, value = value, err = reason })
+            if #encoded > Async.MAX_RESULT then
+                child:send({ error = "响应过大，请缩小查询范围" })
+                return
+            end
+            -- One outstanding frame avoids overflowing Fork's 64KB receive
+            -- buffer, including when the UI is busy painting.
+            for offset = 1, #encoded, 48000 do
+                if not child:send({ chunk = encoded:sub(offset, offset + 47999),
+                    last = offset + 48000 > #encoded }) then return end
+                if offset + 48000 <= #encoded and not child:recv() then return end
+            end
+        end)
+        if not session then
+            resume(false, err or "无法启动后台请求")
+            return
+        end
+        task.session = session
+        UIManager:scheduleIn(Async.TICK, task.poll)
+    end
+    task.poll = function()
+        if task.done then return end
+        local ok, err = pcall(function()
+            if opts.is_cancelled and opts.is_cancelled() then task:cancel(); return end
+            local frame = task.session:try_recv()
+            if frame then
+                if frame.error then fail(frame.error); return end
+                assert(type(frame.chunk) == "string", "后台响应格式错误")
+                task.bytes = task.bytes + #frame.chunk
+                assert(task.bytes <= Async.MAX_RESULT, "后台响应过大")
+                task.chunks[#task.chunks + 1] = frame.chunk
+                if frame.last then
+                    local result = buffer.decode(table.concat(task.chunks))
+                    release()
+                    resume(result.ok, result.value, result.err)
+                    return
+                end
+                assert(task.session:send({ ack = true }))
+            elseif not task.session:alive() then
+                fail("后台请求意外退出，请重试")
+                return
+            end
+            if socket.gettime() - task.started >= Async.TIMEOUT then
+                fail("请求超时，请重试")
+                return
+            end
+            UIManager:scheduleIn(Async.TICK, task.poll)
+        end)
+        if not ok then fail(err) end
+    end
+    co = coroutine.create(fn)
+    tasks[co] = task
+    resume = function(...)
+        local ok, yielded = coroutine.resume(co, ...)
+        if task.done then return end
+        if not ok then fail(yielded); return end
+        if coroutine.status(co) == "dead" then finish(); return end
+        if type(yielded) ~= "function" then fail("无效的后台任务"); return end
+        local started, err = pcall(start, yielded)
+        if not started then fail(err) end
+    end
+    if opts.is_cancelled and opts.is_cancelled() then task:cancel()
+    else resume() end
+    return task
+end
+
+return Async

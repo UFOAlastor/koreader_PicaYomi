@@ -8,17 +8,9 @@
 
 以下为 copymanga 未登录状态下的模拟器截图，实际显示会随设备、字体及源站内容变化。
 
-| 主页 | 设置 |
-|---|---|
-| ![copymanga 主页](docs/screenshots/home.png) | ![设置](docs/screenshots/settings.png) |
-
-| 漫画列表 | 分类 |
-|---|---|
-| ![copymanga 漫画列表](docs/screenshots/comic-list.png) | ![copymanga 分类](docs/screenshots/categories.png) |
-
-### 漫画详情
-
-<img src="docs/screenshots/detail.png" alt="copymanga 琉璃龍龍详情页" width="420">
+| 主页 | 设置 | 漫画列表 | 分类 | 漫画详情 |
+|---|---|---|---|---|
+| ![copymanga 主页](docs/screenshots/home.png) | ![设置](docs/screenshots/settings.png) | ![copymanga 漫画列表](docs/screenshots/comic-list.png) | ![copymanga 分类](docs/screenshots/categories.png) | ![copymanga 琉璃龍龍详情页](docs/screenshots/detail.png) |
 
 ## 安装
 
@@ -33,7 +25,7 @@ Kindle 上请复制真实文件夹，不使用符号链接。
 
 ## 安装漫画源
 
-插件附带哔咔、禁漫、绅士漫画三个基础源，并预置 [PicaYomi MangaSources](https://github.com/UFOAlastor/PicaYomi_MangaSources) 的签名订阅。无需输入链接或导入文件。
+插件附带哔咔、禁漫、绅士漫画三个基础源，并预置 [PicaYomi MangaSources](https://github.com/UFOAlastor/PicaYomi_MangaSources) 的签名订阅。无需输入链接或导入文件。删除全部订阅后，订阅管理会显示“恢复默认订阅”，无需重新输入地址。
 
 需要拷贝漫画时，进入 **设置 → 源管理 → 订阅管理 → 订阅：PicaYomi 漫画源 → 更新漫画源（含新源）**。插件获取并验证目录与源包，完成后重启 KOReader。自动更新不会恢复主动卸载的源；手动“更新漫画源（含新源）”可重新安装 copymanga。成功后可点击“立即重启 KOReader”，也可稍后从源管理重启。
 

@@ -12,9 +12,9 @@ function Async.active()
     return not in_worker and co and tasks[co] ~= nil
 end
 
-function Async.await(fn)
+function Async.await(fn, request)
     if not Async.active() then return fn() end
-    local ok, value, err = coroutine.yield(fn)
+    local ok, value, err = coroutine.yield(request and { fetch = fn, request = request } or fn)
     if not ok then error(value, 0) end
     return value, err
 end
@@ -72,6 +72,8 @@ function Async.run(fn, opts)
         safe_callback(opts.on_error, tostring(err))
     end
     local function start(fetch)
+        local request
+        if type(fetch) == "table" then request, fetch = fetch.request, fetch.fetch end
         -- A failed fork must not silently turn a background operation into
         -- blocking network I/O on a low-memory device.
         if not opts.subprocess then
@@ -84,25 +86,21 @@ function Async.run(fn, opts)
         end
         task.chunks, task.bytes = {}, 0
         task.started = socket.gettime()
-        local session, err = Fork.spawn(function(child)
-            local previous_worker = in_worker
-            in_worker = true
-            local ok, value, reason = pcall(fetch)
-            in_worker = previous_worker
-            if not ok then value = tostring(value) end
-            local encoded = buffer.encode({ ok = ok, value = value, err = reason })
-            if #encoded > Async.MAX_RESULT then
-                child:send({ error = "响应过大，请缩小查询范围" })
-                return
-            end
-            -- One outstanding frame avoids overflowing Fork's 64KB receive
-            -- buffer, including when the UI is busy painting.
-            for offset = 1, #encoded, 48000 do
-                if not child:send({ chunk = encoded:sub(offset, offset + 47999),
-                    last = offset + 48000 > #encoded }) then return end
-                if offset + 48000 <= #encoded and not child:recv() then return end
-            end
-        end)
+        local session, err
+        if request and not opts.subprocess and require("ffi").os == "OSX" then
+            session, err = Fork.spawnWorker("request", request)
+        else
+            session, err = Fork.spawn(function(child)
+                require("network.background_worker").reply(child, function()
+                    local previous_worker = in_worker
+                    in_worker = true
+                    local ok, value, reason = pcall(fetch)
+                    in_worker = previous_worker
+                    if not ok then error(value, 0) end
+                    return value, reason
+                end, Async.MAX_RESULT)
+            end)
+        end
         if not session then
             resume(false, err or "无法启动后台请求")
             return
@@ -147,7 +145,10 @@ function Async.run(fn, opts)
         if task.done then return end
         if not ok then fail(yielded); return end
         if coroutine.status(co) == "dead" then finish(); return end
-        if type(yielded) ~= "function" then fail("无效的后台任务"); return end
+        if type(yielded) ~= "function" and not (type(yielded) == "table"
+            and type(yielded.fetch) == "function" and type(yielded.request) == "table") then
+            fail("无效的后台任务"); return
+        end
         local started, err = pcall(start, yielded)
         if not started then fail(err) end
     end

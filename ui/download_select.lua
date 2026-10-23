@@ -311,7 +311,7 @@ function DownloadSelect:startDownload()
     if not ok then
         logger.warn("Picayomi DownloadSelect: 加入队列失败: " .. tostring(queued))
         UIManager:show(InfoMessage:new{
-            text = T(_("加入下载队列失败：%1"), tostring(queued)),
+            text = T(_("加入下载队列失败：%1"), require("ui.common.error_message").describe(queued)),
             timeout = 5,
         }, "ui")
         return false, 0
@@ -353,6 +353,7 @@ function DownloadSelect:showDownloads()
     end)
     if not ok then
         logger.warn("Picayomi DownloadSelect: 打开已下载页失败: " .. tostring(err))
+        require("ui.common.loading_task").showFailure(err)
     end
 end
 

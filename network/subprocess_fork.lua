@@ -58,6 +58,19 @@ local function new_session(fields)
     return setmetatable(fields, Fork)
 end
 
+function Fork.from_fds(read_fd, write_fd, pid)
+    return new_session({ read_fd = read_fd, write_fd = write_fd, pid = pid, child = pid == nil })
+end
+
+-- Named workers have a fresh interpreter on Darwin and retain the established
+-- fork backend on Linux. Injected test factories need only implement spawn().
+function Fork.spawnWorker(kind, options)
+    if ffi.os == "OSX" then return require("network.subprocess_spawn").spawn(kind, options) end
+    return Fork.spawn(function(child)
+        require("network.background_worker").run(child, kind, options)
+    end)
+end
+
 --- 发送一帧 (父/子通用: 都往自己那侧的 write_fd 写)
 --
 -- posix.write 在失败时会**抛错** (EPIPE/EBADF), 所以这里必须 pcall ——

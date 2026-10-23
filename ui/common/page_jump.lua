@@ -67,7 +67,7 @@ function PageJump.show(opts)
                         local ok, err = opts.on_jump(n)
                         if not ok and err then
                             UIManager:show(InfoMessage:new{
-                                text = err,
+                                text = require("ui.common.error_message").describe(err),
                                 timeout = 3,
                             }, "ui")
                         end

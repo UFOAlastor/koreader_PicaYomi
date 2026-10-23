@@ -188,7 +188,7 @@ function History:showHistoryDetail(history)
 
     if not success or not comic_detail then
         UIManager:show(InfoMessage:new{
-            text = T(_("获取漫画信息失败: %1"), error_msg or _("未知错误")),
+            text = T(_("获取漫画信息失败: %1"), require("ui.common.error_message").describe(error_msg)),
         }, "ui")
         return
     end

@@ -1289,7 +1289,7 @@ function ComicDetail:loadChapters(page)
                 self:refresh()
             else
                 UIManager:show(InfoMessage:new{
-                    text = T(_("获取章节列表失败: %1"), err or _("未知错误")),
+                    text = T(_("获取章节列表失败: %1"), require("ui.common.error_message").describe(err)),
                     timeout = 3,
                 }, "ui")
                 if not self.episodes_data then
@@ -1554,7 +1554,7 @@ function ComicDetail:runFavoriteAction()
                     self:syncFavoriteLabel()
                 else
                     UIManager:show(InfoMessage:new{
-                        text = T(_("操作失败: %1"), err or _("未知错误")),
+                        text = T(_("操作失败: %1"), require("ui.common.error_message").describe(err)),
                         timeout = 3,
                     }, "ui")
                 end
@@ -1679,7 +1679,7 @@ function ComicDetail:searchByKeyword(keyword, sort)
         on_done = function(ok, data, err)
             if not ok or not data or type(data.comics) ~= "table" or #data.comics == 0 then
                 UIManager:show(InfoMessage:new{
-                    text = err or T(_("没有找到与【%1】相关的漫画"), keyword),
+                    text = err and require("ui.common.error_message").describe(err) or T(_("没有找到与【%1】相关的漫画"), keyword),
                 }, "ui")
                 return
             end

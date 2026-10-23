@@ -883,7 +883,7 @@ function VisualComicList:loadServerPage(page, notify, display_page)
                 logger.warn("Picayomi List: 取第 " .. tostring(page) .. " 页失败: "
                     .. tostring(err or ok))
                 UIManager:show(InfoMessage:new{
-                    text = T(_("加载第 %1 页失败：%2"), page, tostring(err or _("未知错误"))),
+                    text = T(_("加载第 %1 页失败：%2"), page, require("ui.common.error_message").describe(err)),
                     timeout = 3,
                 }, "ui")
                 if notify then notify(false) end
@@ -987,7 +987,7 @@ function VisualComicList:fetchMore(silent, on_done)
             self.prefetch_blocked = true
             if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
-                    text = T(_("加载失败: %1"), tostring(ok)),
+                    text = T(_("加载失败: %1"), require("ui.common.error_message").describe(ok)),
                     timeout = 3,
                 }, "ui")
             end
@@ -1009,7 +1009,7 @@ function VisualComicList:fetchMore(silent, on_done)
             self.prefetch_blocked = true
             if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
-                    text = T(_("加载失败：%1"), tostring(err or _("未知错误"))),
+                    text = T(_("加载失败：%1"), require("ui.common.error_message").describe(err)),
                     timeout = 3,
                 }, "ui")
             end
@@ -1083,7 +1083,7 @@ function VisualComicList:fetchMore(silent, on_done)
             if self._closed then return end
             if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
-                    text = T(_("加载失败：%1"), tostring(err)), timeout = 3,
+                    text = T(_("加载失败：%1"), require("ui.common.error_message").describe(err)), timeout = 3,
                 }, "ui")
             end
             if on_done then on_done(false) end

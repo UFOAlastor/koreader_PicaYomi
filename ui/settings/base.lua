@@ -111,7 +111,7 @@ end
 function BaseSettingsModule:showError(text)
     logger.err("Settings error:", text)
     UIManager:show(InfoMessage:new{
-        text = _("错误：") .. text,
+        text = _("错误：") .. require("ui.common.error_message").describe(text),
     }, "ui")
 end
 
@@ -167,17 +167,18 @@ function BaseSettingsModule:safeConfigSet(key, value, success_message)
     end
 
     local success, err = pcall(function()
-        self.config:set(key, value)
+        return self.config:set(key, value)
     end)
 
-    if success then
+    if success and err ~= false then
         if success_message then
             self:showInfo(success_message)
         end
         if logger.enabled then logger.info("Config updated:", key) end
         return true
     else
-        self:showError(_("保存设置失败：") .. tostring(err))
+        self:showError(success and _("保存设置失败，请检查存储空间和目录写入权限。")
+            or (_("保存设置失败：") .. tostring(err)))
         return false
     end
 end

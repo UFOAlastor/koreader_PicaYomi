@@ -75,7 +75,7 @@ function Categories:loadCategories()
     else
         -- 显示错误消息
         UIManager:show(InfoMessage:new{
-            text = T(_("获取分类失败: %1"), error_msg or _("未知错误")),
+            text = T(_("获取分类失败: %1"), require("ui.common.error_message").describe(error_msg)),
         }, "ui")
     end
 end
@@ -258,7 +258,7 @@ function Categories:loadCategoryComics(category, page, sort)
                 logger.err("ComicAPI", "获取分类漫画失败: " .. (error_msg or "未知错误"))
                 UIManager:show(InfoMessage:new{
                     text = T(_("获取【%1】分类漫画失败: %2"), category.title,
-                        error_msg or _("网络错误")),
+                        require("ui.common.error_message").describe(error_msg)),
                     timeout = 3,
                 }, "ui")
             end

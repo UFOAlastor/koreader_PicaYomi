@@ -226,7 +226,7 @@ function Favorites:loadRemoteFavorites()
             self:promptLogin()
         else
             UIManager:show(InfoMessage:new{
-                text = T(_("获取收藏漫画失败: %1"), error_msg or _("未知错误")),
+                text = T(_("获取收藏漫画失败: %1"), require("ui.common.error_message").describe(error_msg)),
             }, "ui")
         end
     end

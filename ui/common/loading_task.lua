@@ -28,9 +28,10 @@ local logger = require("util.logger")
 
 local LoadingTask = {}
 
-function LoadingTask.showFailure()
+function LoadingTask.showFailure(err)
     UIManager:show(InfoMessage:new{
-        text = require("gettext")("加载失败，请检查网络后重试；若仍失败，请重新打开此页面。"),
+        text = require("ui.common.error_message").describe(err,
+            require("gettext")("加载失败，请检查网络后重试；若仍失败，请重新打开此页面。")),
     }, "ui")
 end
 
@@ -70,10 +71,15 @@ function LoadingTask.background(loading, fn, opts)
             on_cancel = cancelled,
             on_error = function(err)
                 cleanup()
-                if opts.on_error then opts.on_error(err)
+                if opts.on_error then
+                    local ok, callback_err = pcall(opts.on_error, err)
+                    if not ok then
+                        logger.warn("Picayomi: failure callback failed: " .. tostring(callback_err))
+                        LoadingTask.showFailure()
+                    end
                 else
                     logger.warn("Picayomi: 后台取数失败: " .. tostring(err))
-                    if loading then LoadingTask.showFailure() end
+                    if loading then LoadingTask.showFailure(err) end
                 end
             end,
         })
@@ -152,6 +158,18 @@ function LoadingTask.run(opts)
     -- 不等这一下的话事件循环没机会重绘, 提示等于没显示。
     UIManager:forceRePaint()
 
+    local function notify_done(ok, data, err)
+        if opts.on_done then
+            local ok_cb, err_cb = pcall(opts.on_done, ok, data, err)
+            if not ok_cb then
+                logger.warn("Picayomi: LoadingTask on_done 抛异常 (已吞掉, 守卫已复位): " .. tostring(err_cb))
+                LoadingTask.showFailure()
+            end
+        elseif not ok then
+            LoadingTask.showFailure(err)
+        end
+    end
+
     local function step()
         -- 页面已关闭: 连请求都不该发 (延迟任务是关页面之后照样会被调度的)
         if opts.is_cancelled and opts.is_cancelled() then
@@ -171,14 +189,7 @@ function LoadingTask.run(opts)
         -- 不兜异常, 逃出去 = 整个进程退出。fetch 本身有 LoadingTask.call 兜底, 而它没有 ——
         -- 漏在这里等于"取数很稳, 处理结果时随机闪退"。
         -- 提示已关、守卫已复位, 此刻吞掉异常只会让这次加载"没有结果", 用户可以重试。
-        if opts.on_done then
-            local ok_cb, err_cb = pcall(opts.on_done, ok, data, err)
-            if not ok_cb then
-                logger.warn("Picayomi: LoadingTask on_done 抛异常 (已吞掉, 守卫已复位): "
-                    .. tostring(err_cb))
-                LoadingTask.showFailure()
-            end
-        end
+        notify_done(ok, data, err)
     end
 
     if opts.async then
@@ -190,7 +201,7 @@ function LoadingTask.run(opts)
             end,
             on_error = function(err)
                 if opts.set_busy then opts.set_busy(false) end
-                if opts.on_done then opts.on_done(false, nil, err) end
+                notify_done(false, nil, err)
             end,
         })
     elseif opts.delay and opts.delay > 0 then

@@ -371,7 +371,7 @@ function ComicAPI:getAndOpenComic(comicId, order, epId, detail_menu_to_close, co
         logger.err(string.format("Picayomi: %s: %s", prefix, reason))
         Trapper:reset()
         UIManager:show(InfoMessage:new{
-            text = T(_("%1: %2"), _(prefix), reason),
+            text = T(_("%1: %2"), _(prefix), require("ui.common.error_message").describe(reason)),
             timeout = 3,
         }, "ui")
         return finish(false, reason)

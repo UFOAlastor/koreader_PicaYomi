@@ -23,7 +23,10 @@ end
 function Net.get(url, limit)
     assert(Net.validURL(url), "订阅和源包仅支持无认证信息的 HTTPS 域名地址")
     local Async = require("network.async_task")
-    if Async.active() then return Async.await(function() return Net.get(url, limit) end) end
+    if Async.active() then
+        return Async.await(function() return Net.get(url, limit) end,
+            { kind = "extension_https", url = url, limit = limit })
+    end
     local http, https = require("socket.http"), require("ssl.https")
     assert(not http.PROXY, "扩展更新不支持全局代理")
     local host = url:match("^https://([^/?:#]+)")

@@ -373,14 +373,9 @@ function Home:show(return_callback)
     self:ensureCurrentSource()
     self:refreshFavoritesLabel()
 
-    -- 只有"不登录就用不了"的源才拦截并提示登录 —— 判据是 requires_login,
-    -- 不是 login。源 C 支持登录 (capabilities.login = true) 但免登录也能浏览/
-    -- 阅读, 用 login 当判据会把它整个挡在登录框后面。
-    local need_login = self.source and self.source:hasCapability("requires_login")
-    if self.source and need_login and not self.source:isLoggedIn() then
-        self:showLoginPrompt()
-        return
-    end
+    -- The home menu also owns source switching, settings and offline data.
+    -- Keep it available without an account; online actions recheck access in
+    -- SourceAccess and the SDK when the user selects them.
 
     -- 已经在栈里就只重绘: 重复 show 会堆叠出多个相同菜单, 导致「返回」看起来没反应
     if self:isMenuShown(self.main_menu) then
@@ -665,7 +660,7 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
             close_loading()
             logger.warn("Picayomi Home: 列表取数异常: " .. tostring(ok))
             UIManager:show(InfoMessage:new{
-                text = T(_("获取失败: %1"), tostring(ok)),
+                text = T(_("获取失败: %1"), require("ui.common.error_message").describe(ok)),
                 timeout = 3,
             }, "ui")
             self:returnToListBase()
@@ -677,7 +672,7 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
             local msg = err or data or "获取数据失败"
             if type(msg) ~= "string" then msg = "获取数据失败" end
             UIManager:show(InfoMessage:new{
-                text = T(_("获取失败: %1"), msg),
+                text = T(_("获取失败: %1"), require("ui.common.error_message").describe(msg)),
                 timeout = 3,
             }, "ui")
             self:returnToListBase()
@@ -709,7 +704,7 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
         is_cancelled = function() return self.source ~= source end,
         on_error = function(err)
             UIManager:show(InfoMessage:new{
-                text = T(_("获取失败: %1"), tostring(err)), timeout = 3,
+                text = T(_("获取失败: %1"), require("ui.common.error_message").describe(err)), timeout = 3,
             }, "ui")
         end,
     })

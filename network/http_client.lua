@@ -21,7 +21,9 @@ local HttpClient = {}
 function HttpClient:request(method, url, headers, body, timeout)
     local Async = require("network.async_task")
     if Async.active() then
-        return Async.await(function() return self:request(method, url, headers, body, timeout) end)
+        return Async.await(function() return self:request(method, url, headers, body, timeout) end,
+            { kind = "http", operation = "request", method = method, url = url,
+                headers = headers, body = body, timeout = timeout })
     end
     timeout = timeout or 10
     method = string.upper(method or "GET")
@@ -122,7 +124,9 @@ HttpClient.isTlsError = is_tls_error
 function HttpClient:requestWithRetry(method, url, headers, body, timeout)
     local Async = require("network.async_task")
     if Async.active() then
-        return Async.await(function() return self:requestWithRetry(method, url, headers, body, timeout) end)
+        return Async.await(function() return self:requestWithRetry(method, url, headers, body, timeout) end,
+            { kind = "http", operation = "requestWithRetry", method = method, url = url,
+                headers = headers, body = body, timeout = timeout })
     end
     if url:match("^https://") then
         local last_reason

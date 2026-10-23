@@ -116,11 +116,12 @@ function Sources:show()
     local items = {
         { text = "订阅管理", callback = function() self:repositories() end },
     }
-    if m.state_error then items[#items + 1] = { text = m.state_error, enabled = false } end
-    if m.errors.bundled then items[#items+1]={text="附带包错误："..m.errors.bundled,enabled=false} end
+    local Error=require("ui.common.error_message")
+    if m.state_error then items[#items + 1] = { text = Error.describe(m.state_error), enabled = false } end
+    if m.errors.bundled then items[#items+1]={text="附带包错误："..Error.describe(m.errors.bundled),enabled=false} end
     for id,err in pairs(m.errors) do
         if id~="bundled" and not m.state.sources[id] then
-            items[#items+1]={text=id.." 加载失败："..tostring(err),enabled=false}
+            items[#items+1]={text=id.." 加载失败："..Error.describe(err),enabled=false}
         end
     end
     local ids = {}
@@ -166,7 +167,7 @@ function Sources:source(id)
     local features = {}; for k,label in pairs(names) do if caps[k] then features[#features+1]=label end end; table.sort(features)
     items[#items + 1] = { text = "支持：" .. table.concat(features, "、"), enabled = false }
     if m.errors[id] then
-        items[#items + 1] = { text = "加载失败：" .. m.errors[id], enabled = false }
+        items[#items + 1] = { text = "加载失败：" .. require("ui.common.error_message").describe(m.errors[id]), enabled = false }
         items[#items + 1] = { text = "重试失败版本", callback = function() self:changeSource(function() return m:retry(id) end) end }
     end
     items[#items + 1] = { text = rec.enabled and "禁用" or "启用", callback = function()
@@ -180,7 +181,7 @@ function Sources:source(id)
                     if value ~= "" and field.key:match("base_url$") then
                         assert(require("source.extensions.https").validURL(value), "请输入 HTTPS 网站地址")
                     end
-                    self.config:set(key, value)
+                    assert(self.config:set(key, value)~=false, "保存设置失败")
                     return true
                 end, "源设置已保存")
             end)
@@ -237,7 +238,7 @@ function Sources:repository(url)
     local items = {
         { text = url, enabled = false },
     }
-    if repo.error then items[#items+1]={text="检查失败："..repo.error,enabled=false} end
+    if repo.error then items[#items+1]={text="检查失败："..require("ui.common.error_message").describe(repo.error),enabled=false} end
     items[#items+1]={text="更新漫画源（含新源）",callback=function()
         self:perform(function() return self:updateRepository(url) end)
     end}
@@ -283,7 +284,7 @@ function Sources:updateRepository(url)
         if r.ok then
             lines[#lines+1]="更新成功："..(rec and rec.manifest.name or r.id).." "..(rec and rec.manifest.version or "")
         else
-            lines[#lines+1]="更新失败："..r.id.." — "..tostring(r.error)
+            lines[#lines+1]="更新失败："..r.id.." — "..require("ui.common.error_message").describe(r.error)
         end
     end
     if #results==0 then

@@ -11,7 +11,10 @@
 -- 采样内容: 系统可用内存、主进程与子进程；Linux 定期附加 PSS/私有页。
 
 -- Return before loading samplers, UI or opening files in release builds.
-local enabled = require("util.logger").enabled
+-- A fresh network worker has no screen or UI scheduler. Keep ordinary warning
+-- logs, but never initialize UI-dependent sampling inside that process.
+local worker = package.loaded["network.background_worker"]
+local enabled = require("util.logger").enabled and not (worker and worker.background)
 if not enabled then
     local function noop() end
     return { enabled = false, mark = noop, snapshot = noop, header = noop,

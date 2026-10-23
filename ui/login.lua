@@ -207,7 +207,7 @@ function Login:login(email, password)
         if logger.enabled then logger.info("Login: 登录成功") end
 
         -- 获取用户信息
-        local profile_success, profile = self.auth_api:getProfile()
+        local profile_success, profile, profile_err = LoadingTask.call(nil, function() return self.auth_api:getProfile() end)
 
         if profile_success and profile then
             -- 显示欢迎消息
@@ -218,7 +218,8 @@ function Login:login(email, password)
         else
             -- 显示登录成功但无法获取用户信息的消息
             UIManager:show(InfoMessage:new{
-                text = _("登录成功，但无法获取用户信息"),
+                text = _("登录成功，但无法获取用户信息。")
+                    .. require("ui.common.error_message").describe(profile_err, _("可稍后在账号管理中刷新。")),
                 timeout = 2,
             }, "ui")
         end
@@ -231,12 +232,13 @@ function Login:login(email, password)
             local ok, err = pcall(function() require("ui.home").returnToHome() end)
             if not ok then
                 logger.warn("Login: 登录后回主页失败: " .. tostring(err))
+                require("ui.common.loading_task").showFailure(err)
             end
         end)
     else
         -- 登录失败
         UIManager:show(InfoMessage:new{
-            text = T(_("登录失败: %1"), error_msg or _("未知错误")),
+            text = T(_("登录失败: %1"), require("ui.common.error_message").describe(error_msg)),
             timeout = 3,
         }, "ui")
 
@@ -352,7 +354,7 @@ function Login:fetchUserProfile()
     else
         -- 显示错误消息
         UIManager:show(InfoMessage:new{
-            text = T(_("获取用户信息失败: %1"), error_msg or _("未知错误")),
+            text = T(_("获取用户信息失败: %1"), require("ui.common.error_message").describe(error_msg)),
             timeout = 3,
         }, "ui")
     end
@@ -367,7 +369,13 @@ function Login:confirmLogout()
         ok_text = _("退出登录"),
         ok_callback = function()
             -- 执行退出登录
-            this.auth_api:logout()
+            local ok, result, reason = pcall(this.auth_api.logout, this.auth_api)
+            if not ok or result == false then
+                UIManager:show(InfoMessage:new{
+                    text = _("退出登录失败：") .. require("ui.common.error_message").describe(ok and reason or result),
+                }, "ui")
+                return
+            end
 
             if this.confirm_dialog then
                 UIManager:close(this.confirm_dialog, "ui")
@@ -385,6 +393,7 @@ function Login:confirmLogout()
                 local ok, err = pcall(function() require("ui.home").returnToHome() end)
                 if not ok then
                     logger.warn("Login: 退出登录后回主页失败: " .. tostring(err))
+                    require("ui.common.loading_task").showFailure(err)
                 end
             end)
         end,

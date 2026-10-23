@@ -195,9 +195,14 @@ function Transport:_ensure_session()
     end
 
     local Worker = require("network.reader_worker")
-    local session, err = self.subprocess.spawn(function(s)
-        Worker.loop(s, { async = self.async })
-    end)
+    local session, err
+    if self.subprocess.spawnWorker then
+        session, err = self.subprocess.spawnWorker("reader", { async = self.async })
+    else
+        session, err = self.subprocess.spawn(function(s)
+            Worker.loop(s, { async = self.async })
+        end)
+    end
     if not session then
         self.worker_error = tostring(err or "无法创建下载子进程")
         logger.warn("Picayomi Transport: 起下载子进程失败, 回退到同步下载: "

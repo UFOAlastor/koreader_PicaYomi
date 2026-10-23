@@ -704,7 +704,7 @@ function Picayomi:openHome()
 
             local HomeView = require("ui.home")
             local home = HomeView:new{}
-            -- Home 是容器，必须调用 :show() 才会显示主菜单 / 登录提示；
+            -- Home 是容器，必须调用 :show() 才会显示主菜单；
             -- 直接 UIManager:show(home) 会显示一个空容器 (白屏)。
             home:show()
         end)
@@ -712,7 +712,7 @@ function Picayomi:openHome()
         if not ok then
             logger.err("Picayomi: openHome failed: " .. tostring(err))
             UIManager:show(InfoMessage:new{
-                text = T(_("Picayomi 启动失败: %1"), tostring(err)),
+                text = T(_("Picayomi 启动失败: %1"), require("ui.common.error_message").describe(err)),
                 timeout = 5,
             }, "ui")
         end

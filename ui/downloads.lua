@@ -256,7 +256,7 @@ function Downloads:retryChapters(comic, chapters)
     local queued, err = self:_enqueueRetry(comic, chapters)
     if queued <= 0 then
         UIManager:show(InfoMessage:new{
-            text = T(_("重新下载失败：%1"), tostring(err or "没有可重试的章节")),
+            text = T(_("重新下载失败：%1"), require("ui.common.error_message").describe(err, _("没有可重试的章节"))),
             timeout = 4,
         }, "ui")
         return 0
@@ -288,7 +288,7 @@ function Downloads:retryAllFailed()
     end
     if total <= 0 then
         UIManager:show(InfoMessage:new{
-            text = T(_("没有可重试的章节：%1"), tostring(first_err or "已全部完成")),
+            text = T(_("没有可重试的章节：%1"), require("ui.common.error_message").describe(first_err, _("已全部完成"))),
             timeout = 4,
         }, "ui")
         return 0

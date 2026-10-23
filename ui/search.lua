@@ -334,13 +334,13 @@ function Search:performSearch()
         else
             -- 显示错误消息
             UIManager:show(InfoMessage:new{
-                text = T(_("搜索失败: %1"), error_msg or _("未知错误")),
+                text = T(_("搜索失败: %1"), require("ui.common.error_message").describe(error_msg)),
             }, "ui")
         end
     end, {
         on_error = function(err)
             UIManager:show(InfoMessage:new{
-                text = T(_("搜索失败: %1"), tostring(err)), timeout = 3,
+                text = T(_("搜索失败: %1"), require("ui.common.error_message").describe(err)), timeout = 3,
             }, "ui")
         end,
     })

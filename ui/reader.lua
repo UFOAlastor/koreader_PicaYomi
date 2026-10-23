@@ -964,7 +964,7 @@ function PicaReader:switchToChapter(episode_index)
         close_loading()
         logger.err("PicaReader", "准备章节失败: " .. tostring(err))
         UIManager:show(InfoMessage:new{
-            text = _(err or "加载章节失败"),
+            text = require("ui.common.error_message").describe(err, _("加载章节失败，请重试。")),
             timeout = 3,
         }, "ui")
         return false

@@ -9,7 +9,7 @@ local function failure_reason(session, page)
     if err:find("登录", 1, true) then return _("登录状态已失效或改变，请重新登录后打开章节。") end
     if err:find("timeout", 1, true) or err:find("超时", 1, true) then return _("本页加载超时，请检查网络或稍后重试。") end
     if err:find("图片损坏", 1, true) then return _("图片损坏，需要重新加载。") end
-    return _("本页加载失败，请检查网络或稍后重试。")
+    return require("ui.common.error_message").describe(err, _("本页加载失败，请检查网络或稍后重试。"))
 end
 
 local function visible(session, page)
@@ -53,7 +53,7 @@ function Feedback.queue(session, page, kind, detail)
         end
         if kind == "connectivity" and not offline then return end
         local retrying = session.retry_pending and session.retry_pending[page] ~= nil
-        local reason = kind == "display" and detail
+        local reason = kind == "display" and require("ui.common.error_message").describe(detail, _("图片暂时无法显示，请重试或关闭当前章节后重新打开。"))
             or (offline and _("网络未连接，本页尚未缓存。") or failure_reason(session, page))
         local suffix
         if retrying then

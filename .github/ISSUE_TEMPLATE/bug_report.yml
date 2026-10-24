@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        请先搜索是否已有相同问题。请勿提交密码、Cookie、token、私钥或个人阅读记录；日志和截图请先脱敏。
+        请先搜索是否已有相同问题。中英文反馈均可。请勿提交密码、Cookie、token、私钥或个人阅读记录；日志和截图请先脱敏。
   - type: input
     id: version
     attributes:
@@ -17,7 +17,7 @@ body:
     id: environment
     attributes:
       label: 运行环境
-      description: 设备型号、KOReader 版本；漫画源问题还请填写插件版本。
+      description: 设备型号、KOReader 版本；漫画源问题还请填写源名称和源版本。
     validations:
       required: true
   - type: textarea

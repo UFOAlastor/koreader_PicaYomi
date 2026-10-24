@@ -1,5 +1,7 @@
 # PicaYomi
 
+[English introduction](README.en.md)
+
 面向 Kindle 等设备的 [KOReader](https://github.com/koreader/koreader) 漫画阅读插件。支持多源浏览、搜索、流式阅读、章节下载、收藏和阅读历史，针对墨水屏提供刷新、版式与内存管理设置。
 
 ## 页面预览
@@ -119,6 +121,7 @@ koreader/
 - [诊断日志](docs/DEBUG.md)
 - [低内存图片阅读设计](docs/IMAGE_MEMORY.md)
 - [漫画源 SDK、模板与制作指南](https://github.com/UFOAlastor/PicaYomi_MangaSources)
+- [参与贡献](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/CONTRIBUTING.md) · [安全问题反馈](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/SECURITY.md)
 - [MIT 许可证](LICENSE)与[第三方说明](THIRD_PARTY.md)
 
 感谢 [PicaComic](https://github.com/Pacalini/PicaComic)、[rakuyomi](https://github.com/hanatsumi/rakuyomi) 和 KOReader 提供的设计参考。

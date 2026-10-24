@@ -189,6 +189,12 @@ end
 -- 输入框就已经被释放, 结果列表返回时只负责回主页。
 function Search:leave()
     if self.search_task then self.search_task:cancel(); self.search_task = nil end
+    if self.history_delete_dialog then
+        if WidgetSweep.isInStack(self.history_delete_dialog) then
+            UIManager:close(self.history_delete_dialog, "ui")
+        end
+        self.history_delete_dialog = nil
+    end
     if self.search_dialog then
         local dlg = self.search_dialog
         self.search_dialog = nil
@@ -212,9 +218,14 @@ end
 -- 流程: 先关掉输入框 -> 显示整屏菜单 -> 关菜单时把用户送回输入框。
 -- 选中条目时不能再触发"关菜单"的收尾 (否则栈里会多压一个一模一样的搜索框,
 -- 用户按「返回」要按好几次才退得出去) —— 由 MenuStyle.disableSelectAutoClose 统一拦住。
-function Search:showHistoryMenu()
+function Search:showHistoryMenu(page)
+    local old_menu = self.history_menu
     local items = SearchHistory.list()
     if #items == 0 then
+        if old_menu then
+            self.history_menu = nil
+            if WidgetSweep.isInStack(old_menu) then UIManager:close(old_menu, "ui") end
+        end
         -- 兜底: 「历史」按钮在无历史时是禁用态, 正常走不到这里
         UIManager:show(InfoMessage:new{
             text = _("还没有搜索历史"),
@@ -233,6 +244,7 @@ function Search:showHistoryMenu()
     for _i, keyword in ipairs(items) do
         table.insert(item_table, {
             text = keyword,
+            search_keyword = keyword,
             picayomi_underline = true,
             callback = function()
                 UIManager:close(self.history_menu, "ui")
@@ -276,6 +288,12 @@ function Search:showHistoryMenu()
         -- 整屏菜单必须显式声明 (Menu 类默认 is_popout=true 会画圆角, 四角穿透)
         is_popout = false,
         covers_fullscreen = true,
+        onMenuHold = function(_, item)
+            if item and item.search_keyword then
+                self:confirmRemoveHistoryKeyword(item.search_keyword)
+            end
+            return true
+        end,
         close_callback = function()
             -- 只剩返回键/✕ 会走到这里: 把用户送回搜索框
             self:showSearchDialog()
@@ -291,7 +309,42 @@ function Search:showHistoryMenu()
         self:showSearchDialog()
     end)
 
-    UIManager:show(self.history_menu, "ui")
+    if page and page > 1 then
+        self.history_menu:onGotoPage(math.min(page, self.history_menu.page_num))
+    end
+    WidgetSweep.replace_page(old_menu, self.history_menu)
+end
+
+function Search:confirmRemoveHistoryKeyword(keyword)
+    local menu = self.history_menu
+    if not menu or not WidgetSweep.isInStack(menu) then return end
+    if self.history_delete_dialog and WidgetSweep.isInStack(self.history_delete_dialog) then return end
+    local dialog
+    dialog = ConfirmBox:new{
+        is_picayomi_page = true,
+        text = T(_("确定删除搜索记录【%1】吗？"), keyword),
+        ok_text = _("删除"),
+        cancel_text = _("取消"),
+        cancel_callback = function()
+            if self.history_delete_dialog == dialog then self.history_delete_dialog = nil end
+        end,
+        ok_callback = function()
+            if self.history_delete_dialog ~= dialog or not WidgetSweep.isInStack(dialog) then return end
+            self.history_delete_dialog = nil
+            -- A confirmation owned by an earlier page must not act after navigation.
+            if self.history_menu ~= menu or not WidgetSweep.isInStack(menu) then return end
+            local ok, err = SearchHistory.remove(keyword)
+            if not ok then
+                UIManager:show(InfoMessage:new{
+                    text = T(_("删除失败：%1"), require("ui.common.error_message").describe(err)),
+                }, "ui")
+                return
+            end
+            self:showHistoryMenu(menu.page)
+        end,
+    }
+    self.history_delete_dialog = dialog
+    UIManager:show(dialog, "ui")
 end
 
 function Search:performSearch()

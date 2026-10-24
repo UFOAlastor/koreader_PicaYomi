@@ -1,12 +1,12 @@
 local UIManager = require("ui/uimanager")
-local Menu = require("ui/widget/menu")
+local Menu = require("ui.common.action_style").Menu
 local Screen = require("device").screen
 local InfoMessage = require("ui/widget/infomessage")
-local SpinWidget = require("ui/widget/spinwidget")
+local SpinWidget = require("ui.common.action_style").SpinWidget
 local ToggleSwitch = require("ui/widget/toggleswitch")
-local MultiInputDialog = require("ui/widget/multiinputdialog")
-local ConfirmBox = require("ui/widget/confirmbox")
-local ButtonDialog = require("ui/widget/buttondialog")
+local MultiInputDialog = require("ui.common.action_style").MultiInputDialog
+local ConfirmBox = require("ui.common.action_style").ConfirmBox
+local ButtonDialog = require("ui.common.action_style").ButtonDialog
 local TapGuard = require("ui.common.tap_guard")
 local MenuStyle = require("ui.common.menu_style")
 local MenuSwipe = require("ui.common.menu_swipe")
@@ -129,6 +129,8 @@ function BaseSettingsModule:createSpinWidget(config)
         -- 免得每个调用方各自记得去取 .value。
         callback = config.callback and function(widget)
             config.callback(widget.value)
+            local menu=self.manager and self.manager.current_menu
+            if menu and menu._settings_module==self then menu:updateItems() end
         end,
     }
 end

@@ -1,11 +1,11 @@
 -- ui/common/comment_list.lua
--- 评论列表页 (只读): 浏览评论 / 分页 / 跳页 / 查看某条评论的回复。
+-- 评论列表页 (只读): 浏览预览 / 分页 / 跳页 / 长评论本地全文。
 --
 -- 为什么继承 VisualComicList 而不是另写一个:
 --   评论页要"上页/下页/跳页", 而跳页需要"缓冲区 + 绝对屏号 + 跳到远处时换缓冲区"
 --   这一整套分页核心 —— 它已经完整存在于 visual_comic_list.lua。复制一份正是本次
 --   组件收敛要消灭的东西, 所以这里只覆写"一行长什么样 / 头尾长什么样"。
---   基类为此只加了一个 `items_key` (取数返回里条目数组的字段名)。
+--   基类通过 items_key 指定评论数组字段。
 --
 -- 零图片:
 --   评论行不显示头像, 也**不排任何下载**。头像要逐行联网, 会重演"关了页面还在后台
@@ -16,14 +16,13 @@
 --   不做发表/回复/点赞 (需要登录态与 Kindle 上难用的键盘输入)。
 
 local Blitbuffer = require("ffi/blitbuffer")
-local Button = require("ui/widget/button")
+local Button = require("ui.common.action_style").Button
 local Device = require("device")
 local FixedBox = require("ui/common/fixed_box")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
-local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local Size = require("ui/size")
 local TextBoxWidget = require("ui/widget/textboxwidget")
@@ -111,13 +110,16 @@ function CommentRow:init()
             height_overflow_show_ellipsis = true,
         })
     end
-    table.insert(group, TextBoxWidget:new{
+    local body=TextBoxWidget:new{
         text = body_text,
         face = Theme.face("row"),
         width = text_w,
         height = CONTENT_H,
         height_overflow_show_ellipsis = true,
-    })
+    }
+    table.insert(group,body)
+    self.truncated=body.line_with_ellipsis~=nil
+    if not is_placeholder and not self.truncated then self.on_select=nil end
 
     -- 行高固定 = 上下留白 + 元信息 + 正文。内容再长也不改变行高 (FixedBox),
     -- 于是绘制区 / 落位基准 / 命中区三者严格一致。
@@ -161,14 +163,12 @@ end
 -- ============================================================================
 local CommentList = VisualComicList:extend{
     is_picayomi_page = true,
-    -- 取数返回里条目数组的字段名 (回复页传 "replies")
+    -- 取数返回里条目数组的字段名
     items_key = "comments",
     title = nil,
-    -- 评论所属漫画 id; 回复页也需要 (端点里带 comic_id)
+    -- 评论所属漫画 id
     comic_id = nil,
-    -- 回复页用它渲染顶部的父评论
-    parent_comment = nil,
-    -- 三种状态文案 (回复页会传"回复"版本)
+    -- 加载、空列表、失败三种状态文案
     loading_text = nil,
     empty_text = nil,
     fail_text = nil,
@@ -270,12 +270,12 @@ function CommentList:makeItem(comment, index)
                 end
                 return
             end
-            self:showReplies(c)
+            self:showFullComment(c)
         end,
     }
 end
 
---- 头部: 标题 + (回复页的)父评论 + 页码
+--- 头部: 标题 + 页码
 function CommentList:createHeader()
     local inner_w = self.width - Screen:scaleBySize(16)
     local group = VerticalGroup:new{
@@ -289,24 +289,6 @@ function CommentList:createHeader()
             height_overflow_show_ellipsis = true,
         },
     }
-
-    local parent = self.parent_comment
-    if parent then
-        table.insert(group, TextBoxWidget:new{
-            text = metaOf(parent),
-            face = Theme.face("info"),
-            width = inner_w,
-            height = Screen:scaleBySize(22),
-            height_overflow_show_ellipsis = true,
-        })
-        table.insert(group, TextBoxWidget:new{
-            text = contentOf(parent),
-            face = Theme.face("row"),
-            width = inner_w,
-            height = Screen:scaleBySize(44),
-            height_overflow_show_ellipsis = true,
-        })
-    end
 
     table.insert(group, self.page_text)
     return FrameContainer:new{
@@ -345,6 +327,7 @@ function CommentList:createFooter()
         -- 记住分页按钮: 换页后要同步可用状态 (基类 updatePageButtons 会用)
         if spec.text == _("上页") then self.prev_button = btn end
         if spec.text == _("下页") then self.next_button = btn end
+        if spec.text == _("跳页") then self.jump_button = btn end
         table.insert(group, btn)
     end
 
@@ -358,60 +341,39 @@ function CommentList:createFooter()
     }
 end
 
---- 点一条评论 -> 打开它的回复页 (同款页面, 顶部带父评论)
-function CommentList:showReplies(comment)
-    if not require("ui.common.source_access").check(self.source,"comments") then return end
-    local mode = require("source.capabilities").replies(self.source, comment)
-    if mode == "none" then
-        local viewer = require("ui/widget/textviewer"):new{ title = _("评论正文"), text = contentOf(comment) }
-        UIManager:show(viewer, "ui")
-        return
-    end
-    local comment_id = JN.str(comment and comment._id)
-    local comic_id = self.comic_id
-    local source = self.source
-    if not (comment_id and comment_id ~= "" and comic_id and source
-        and (mode == "embedded" or source.getCommentReplies)) then
-        UIManager:show(InfoMessage:new{
-            text = _("当前源不支持查看回复"),
-            timeout = 3,
-        }, "ui")
-        return
-    end
-
-    self.reply_list = CommentList:new{
-        title = _("评论与回复"),
-        comic_id = comic_id,
-        source = source,
-        source_id = self.source_id,
-        items_key = "replies",
-        parent_comment = comment,
-        loading_text = _("正在加载回复…"),
-        empty_text = _("暂无回复"),
-        fail_text = _("回复加载失败, 点这一行重试"),
-        fetch_page = function(page)
-            -- 有些源随父评论返回全部回复, 直接复用, 不再发无效的回复请求。
-            if mode == "embedded" then
-                return true, {
-                    replies = comment.replies or {},
-                    total = #(comment.replies or {}),
-                    page = 1,
-                    pages = 1,
-                }
-            end
-            return source:getCommentReplies(comic_id, comment_id, page)
-        end,
-        on_back = function()
-            self.reply_list = nil
+--- 长评论只打开本地全文浮层，不请求回复。
+function CommentList:showFullComment(comment)
+    if self._closed or self.comment_viewer or not comment or comment._placeholder then return end
+    local viewer
+    viewer=require("ui/widget/textviewer"):new{
+        title=_("评论全文"),text=contentOf(comment),show_menu=false,
+        width=math.floor(self.width*.9),height=math.floor(self.height*.75),
+        close_callback=function()
+            if self.comment_viewer==viewer then self.comment_viewer=nil end
+            UIManager:setDirty(nil,"full")
         end,
     }
-    UIManager:show(self.reply_list, "ui")
+    self.comment_viewer=viewer
+    UIManager:show(viewer,"ui")
+    UIManager:setDirty(nil,"full")
+end
+
+function CommentList:closeCommentViewer()
+    local viewer=self.comment_viewer
+    self.comment_viewer=nil
+    if viewer then UIManager:close(viewer,"ui") end
+end
+
+function CommentList:onCloseWidget()
+    self:closeCommentViewer()
+    VisualComicList.onCloseWidget(self)
 end
 
 --- 返回: 关掉自己, 再通知调用方
 -- 必须显式带 "ui" 刷新模式 —— mode 为 nil 时 UIManager 会丢弃这次刷新
 -- (见 ComicDetail:goBack 的注释)。
 function CommentList:goBack()
+    self:closeCommentViewer()
     UIManager:close(self, "ui")
     if self.on_back then
         self.on_back(self)

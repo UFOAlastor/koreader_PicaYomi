@@ -2,6 +2,7 @@
 -- 收藏列表的公共处理
 local _ = require("gettext")
 local LocalFavorites = require("util.local_favorites")
+local logger = require("util.logger")
 
 local M = {}
 
@@ -124,6 +125,125 @@ function M.buildAction(opts)
     end
 
     return action
+end
+
+function M.canSyncLocal(source)
+    return source and source.hasCapability and source:hasCapability("favorites")
+        and source.isLoggedIn and source:isLoggedIn()
+        and LocalFavorites.count(source.identifier)>0 or false
+end
+
+-- Fetch the complete remote set before adding anything: some source adapters
+-- implement favorite writes as a toggle, so blindly replaying IDs is unsafe.
+function M.syncLocal(source,context)
+    context=context or {}
+    local stats={uploaded=0,skipped=0,failed=0}
+    local function cancelled() return context.isCancelled and context.isCancelled() end
+    local online,seen_pages={},{}
+    local complete=false
+    for page=1,200 do
+        if cancelled() then return false,stats,"同步已取消" end
+        local ok,data,err=source:getFavorites(page)
+        if not ok then return false,stats,err or "无法读取线上收藏" end
+        if type(data)~="table" or type(data.comics)~="table" then return false,stats,"线上收藏返回值无效" end
+        local ids={}
+        for _,comic in ipairs(data.comics) do
+            if comic._id~=nil then local id=tostring(comic._id);online[id]=true;ids[#ids+1]=id end
+        end
+        local more=data.has_more
+        if more==nil then
+            if not tonumber(data.pages) then return false,stats,"无法确认线上收藏是否完整，未执行同步" end
+            more=page<tonumber(data.pages)
+        end
+        if not more then complete=true;break end
+        table.sort(ids)
+        local key=table.concat(ids,"\0")
+        if seen_pages[key] then return false,stats,"线上收藏续页重复，请重试" end
+        seen_pages[key]=true
+    end
+    if not complete then return false,stats,"线上收藏超过分页限额，未执行同步" end
+    local attempted={}
+    for _,comic in ipairs(LocalFavorites.list(source.identifier)) do
+        if cancelled() then return false,stats,"同步已取消" end
+        local id=tostring(comic._id)
+        if online[id] or attempted[id] then stats.skipped=stats.skipped+1
+        else
+            attempted[id]=true
+            local ok,err=source:addFavorite(id)
+            if ok then online[id]=true;stats.uploaded=stats.uploaded+1
+            else stats.failed=stats.failed+1;stats.error=err end
+        end
+    end
+    return true,stats
+end
+
+function M.promptLocalSync(source)
+    if not M.canSyncLocal(source) then return false end
+    if M.sync_prompt or M.syncing then return false end
+    local UI=require("ui/uimanager")
+    local generation=source.sessionGeneration and source:sessionGeneration()
+    local function same_session()
+        return source:isLoggedIn() and (not generation or source:sessionGeneration()==generation)
+            and require("source.registry"):getCurrent()==source
+    end
+    local Info=require("ui/widget/infomessage")
+    local function full_refresh() UI:setDirty(nil,"full") end
+    local function start_sync()
+        if not same_session() then M.syncing=false;return end
+        if logger.enabled then logger.info("Picayomi FavoritesSync: start",source.identifier,"local",LocalFavorites.count(source.identifier)) end
+        full_refresh()
+        require("ui.common.loading_task").run{
+            message=_("正在同步本地收藏…\n点击取消，本地收藏会保留"),async=true,delay=.1,timeout=120,
+            is_cancelled=function() return not same_session() end,
+            fetch=function() return M.syncLocal(source,{isCancelled=function() return not same_session() end}) end,
+            set_busy=function(value) M.syncing=value end,
+            on_cancel=function()
+                if logger.enabled then logger.info("Picayomi FavoritesSync: cancelled",source.identifier) end
+                full_refresh()
+            end,
+            on_done=function(ok,stats,err)
+                if logger.enabled then logger.info("Picayomi FavoritesSync: result",source.identifier,"ok",ok,"uploaded",stats and stats.uploaded or "unknown","skipped",stats and stats.skipped or "unknown","failed",stats and stats.failed or "unknown") end
+                if not same_session() then return end
+                local text
+                if ok then
+                    text=string.format("同步完成：新增 %d 本，跳过 %d 本，失败 %d 本。\n本地收藏已保留。",stats.uploaded,stats.skipped,stats.failed)
+                    if stats.failed>0 then text=text.."\n可在账号管理中重试同步。" end
+                else text="同步未完成："..require("ui.common.error_message").describe(err).."\n本地收藏已保留，可在账号管理中重试。" end
+                UI:show(Info:new{text=text,timeout=5},"full")
+                full_refresh()
+            end,
+        }
+    end
+    local prompt=require("ui.common.action_style").ConfirmBox:new{
+        is_picayomi_page=true,
+        text=require("ffi/util").template(_("发现当前源有 %1 本本地收藏，是否同步到当前登录账号？\n已在线上收藏的作品会跳过，本地收藏始终保留。"),LocalFavorites.count(source.identifier)),
+        ok_text=_("同步"),cancel_text=_("暂不"),
+        ok_callback=function()
+            if not same_session() then UI:show(Info:new{text=_("账号或漫画源已变化，请重新发起同步。"),timeout=3},"ui");return end
+            if M.syncing then UI:show(Info:new{text=_("正在同步本地收藏，请稍候。"),timeout=2},"ui");return end
+            M.syncing=true
+            -- Native ConfirmBox closes itself after this callback. Start only
+            -- after it has left the stack, so its close cannot repaint over loading.
+            UI:nextTick(function()
+                local ok,err=pcall(start_sync)
+                if not ok then M.syncing=false;require("ui.common.loading_task").showFailure(err) end
+            end)
+        end,
+    }
+    local close=prompt.onCloseWidget
+    prompt.onCloseWidget=function(self)
+        if M.sync_prompt==self then M.sync_prompt=nil end
+        close(self)
+        full_refresh()
+    end
+    M.sync_prompt=prompt
+    if logger.enabled then logger.info("Picayomi FavoritesSync: prompt",source.identifier,"local",LocalFavorites.count(source.identifier)) end
+    UI:show(prompt,"full")
+    full_refresh()
+    UI:nextTick(function()
+        if UI:isWidgetShown(prompt) then full_refresh();UI:forceRePaint() end
+    end)
+    return true
 end
 
 return M

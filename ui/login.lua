@@ -1,15 +1,15 @@
 local CenterContainer = require("ui/widget/container/centercontainer")
 local InfoMessage = require("ui/widget/infomessage")
-local InputDialog = require("ui/widget/inputdialog")
+local InputDialog = require("ui.common.action_style").InputDialog
 local KeyValuePage = require("ui/widget/keyvaluepage")
-local Menu = require("ui/widget/menu")
+local Menu = require("ui.common.action_style").Menu
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local ConfirmBox = require("ui/widget/confirmbox")
-local MultiInputDialog = require("ui/widget/multiinputdialog")
-local ButtonDialog = require("ui/widget/buttondialog")
+local ConfirmBox = require("ui.common.action_style").ConfirmBox
+local MultiInputDialog = require("ui.common.action_style").MultiInputDialog
+local ButtonDialog = require("ui.common.action_style").ButtonDialog
 local WidgetSweep = require("util.widget_sweep")
 local logger = require("util.logger")
 local _ = require("gettext")
@@ -183,6 +183,7 @@ function Login:showCookieLoginForm()
 end
 
 function Login:login(email, password)
+    local login_source=require("source.registry"):getCurrent()
     -- 记录登录输入（不包含密码）
     if logger.enabled then logger.info("Login: 开始登录") end
 
@@ -205,31 +206,41 @@ function Login:login(email, password)
     if success then
         -- 登录成功
         if logger.enabled then logger.info("Login: 登录成功") end
+        -- Credentials are already valid. Refresh labels before the profile
+        -- request or welcome timeout can delay the visible account state.
+        if require("ui.home").refreshShownAccountState() then UIManager:forceRePaint() end
 
         -- 获取用户信息
         local profile_success, profile, profile_err = LoadingTask.call(nil, function() return self.auth_api:getProfile() end)
+        if require("ui.home").refreshShownAccountState() then UIManager:forceRePaint() end
 
+        local welcome
         if profile_success and profile then
             -- 显示欢迎消息
-            UIManager:show(InfoMessage:new{
+            welcome=InfoMessage:new{
                 text = _("登录成功，欢迎 ") .. (profile.name or _("未知用户")),
                 timeout = 2,
-            }, "ui")
+            }
         else
             -- 显示登录成功但无法获取用户信息的消息
-            UIManager:show(InfoMessage:new{
+            welcome=InfoMessage:new{
                 text = _("登录成功，但无法获取用户信息。")
                     .. require("ui.common.error_message").describe(profile_err, _("可稍后在账号管理中刷新。")),
                 timeout = 2,
-            }, "ui")
+            }
         end
+        UIManager:show(welcome,"ui")
 
         -- 打开主界面
         UIManager:scheduleIn(1, function()
             -- 复用已在窗口栈里的主页菜单, 不要再 new 一个 (会堆叠出重复菜单)
             -- 延迟任务: 任务队列不兜异常, 抛出来 = 整个 KOReader 退出 (用户刚点了登录)。
             -- 回主页失败时用户仍停在原页面, 可以手动返回。
-            local ok, err = pcall(function() require("ui.home").returnToHome() end)
+            local ok, err = pcall(function()
+                LoadingTask.close(welcome)
+                require("ui.home").returnToHome()
+                if login_source then require("util.favorites").promptLocalSync(login_source) end
+            end)
             if not ok then
                 logger.warn("Login: 登录后回主页失败: " .. tostring(err))
                 require("ui.common.loading_task").showFailure(err)
@@ -273,6 +284,7 @@ function Login:showUserInfo()
 
     -- 构建用户信息按钮
     local this = self
+    local source=require("source.registry"):getCurrent()
     local old_dialog = self.user_dialog
     self.user_dialog = ButtonDialog:new{
         is_picayomi_page = true, -- 同 showLoginForm: 它是本次会话的第一层插件控件
@@ -296,6 +308,15 @@ function Login:showUserInfo()
                             this.user_dialog = nil
                         end
                         this:confirmLogout()
+                    end,
+                },
+                {
+                    text=_("同步本地收藏"),
+                    enabled=require("util.favorites").canSyncLocal(source),
+                    callback=function()
+                        if this.user_dialog then UIManager:close(this.user_dialog,"ui");this.user_dialog=nil end
+                        require("ui.home").returnToHome()
+                        require("util.favorites").promptLocalSync(source)
                     end,
                 },
             },
@@ -376,6 +397,8 @@ function Login:confirmLogout()
                 }, "ui")
                 return
             end
+
+            if require("ui.home").refreshShownAccountState() then UIManager:forceRePaint() end
 
             if this.confirm_dialog then
                 UIManager:close(this.confirm_dialog, "ui")

@@ -7,7 +7,7 @@ local Device = require("device")
 local Font = require("ui/font")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
-local Menu = require("ui/widget/menu")
+local Menu = require("ui.common.action_style").Menu
 local Notification = require("ui/widget/notification")
 local Screen = Device.screen
 local UIManager = require("ui/uimanager")
@@ -20,9 +20,9 @@ local TextWidget = require("ui/widget/textwidget")
 local Geom = require("ui/geometry")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
-local ButtonDialog = require("ui/widget/buttondialog")
+local ButtonDialog = require("ui.common.action_style").ButtonDialog
 local InputDialog = require("ui/widget/inputdialog")
-local SpinWidget = require("ui/widget/spinwidget")
+local SpinWidget = require("ui.common.action_style").SpinWidget
 local Input = require("device").input
 local VisualComicList = require("ui.common.visual_comic_list")
 local ComicDetail = require("ui.common.comic_detail")
@@ -207,13 +207,15 @@ function Home:createMainMenu()
         })
     end
 
+    self.account_item = nil
     if has("login") then
-        table.insert(item_table, {
+        self.account_item = {
             text = source and source:isLoggedIn() and _("账号管理") or _("登录账号"),
             callback = function()
                 self:showAccount()
             end,
-        })
+        }
+        table.insert(item_table,self.account_item)
     end
 
     table.insert(item_table, {
@@ -292,6 +294,7 @@ function Home:createMainMenu()
         is_popout = false,
         -- 整屏页面: 不再绘制下层 ReaderUI (否则阅读器顶部状态栏的时间会透出来)
         covers_fullscreen = true,
+        _picayomi_home_owner = self,
         close_callback = function()
             -- 选中条目走不到这里 (见下面 disableSelectAutoClose), 剩下的就是返回键:
             -- onCloseAllMenus 先 UIManager:close(self) 再调本回调 (menu.lua:1503-1506)
@@ -326,7 +329,8 @@ end
 function Home.findShownMenu()
     local ok, ui_window = pcall(require, "ui/uimanager")
     if not ok or not ui_window or not ui_window._window_stack then return nil end
-    for _i, entry in ipairs(ui_window._window_stack) do
+    for i=#ui_window._window_stack,1,-1 do
+        local entry=ui_window._window_stack[i]
         local w = entry.widget
         if type(w) == "table" and w.is_picayomi_home_menu then
             return w
@@ -337,13 +341,36 @@ end
 
 --- 登录状态变化后更新收藏入口, 与实际收藏后端保持一致。
 function Home:refreshFavoritesLabel()
-    if not self.favorites_item or not self.main_menu then return end
-    local label = FavoriteActions.backend(self.source) == "online"
-        and _("我的收藏 (线上)") or _("我的收藏 (本地)")
-    if self.favorites_item.text ~= label then
-        self.favorites_item.text = label
-        self.main_menu:updateItems()
+    if not self.main_menu then return false end
+    local changed=false
+    if self.favorites_item then
+        local label = FavoriteActions.backend(self.source) == "online"
+            and _("我的收藏 (线上)") or _("我的收藏 (本地)")
+        if self.favorites_item.text ~= label then
+            self.favorites_item.text=label;changed=true
+        end
     end
+    if self.account_item then
+        local label=self.source and self.source:isLoggedIn() and _("账号管理") or _("登录账号")
+        if self.account_item.text~=label then self.account_item.text=label;changed=true end
+    end
+    if changed then self.main_menu:updateItems() end
+    return changed
+end
+
+-- Refresh the owner of the visible menu, including when another Home object
+-- was created later but never shown. Authentication must not update that copy.
+function Home.refreshShownAccountState()
+    local shown=Home.findShownMenu()
+    if not shown then return false end
+    local owner=shown._picayomi_home_owner
+        or (Home.instance and Home.instance.main_menu==shown and Home.instance)
+    if not owner then return false end
+    Home.instance=owner
+    local source_changed=owner:ensureCurrentSource()
+    local labels_changed=owner:refreshFavoritesLabel()
+    if source_changed or labels_changed then UIManager:setDirty(owner.main_menu,"ui") end
+    return source_changed or labels_changed
 end
 
 --- 回到主页 (供子页面 / 登录页调用)
@@ -352,8 +379,9 @@ function Home.returnToHome()
     local UIManager = require("ui/uimanager")
     local shown = Home.findShownMenu()
     if shown then
+        Home.refreshShownAccountState()
+        shown=Home.findShownMenu() or shown
         require("source.extensions.updater").schedule()
-        if Home.instance then Home.instance:refreshFavoritesLabel() end
         UIManager:setDirty(shown, "ui")
         return true
     end

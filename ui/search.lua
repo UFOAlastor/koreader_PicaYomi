@@ -1,12 +1,12 @@
-local InputDialog = require("ui/widget/inputdialog")
+local InputDialog = require("ui.common.action_style").InputDialog
 local InfoMessage = require("ui/widget/infomessage")
-local Menu = require("ui/widget/menu")
+local Menu = require("ui.common.action_style").Menu
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local ButtonDialog = require("ui/widget/buttondialog")
-local ConfirmBox = require("ui/widget/confirmbox")
+local ButtonDialog = require("ui.common.action_style").ButtonDialog
+local ConfirmBox = require("ui.common.action_style").ConfirmBox
 local _ = require("gettext")
 local T = require("ffi/util").template
 local FavoriteActions = require("util.favorites")
@@ -233,6 +233,7 @@ function Search:showHistoryMenu()
     for _i, keyword in ipairs(items) do
         table.insert(item_table, {
             text = keyword,
+            picayomi_underline = true,
             callback = function()
                 UIManager:close(self.history_menu, "ui")
                 self.history_menu = nil

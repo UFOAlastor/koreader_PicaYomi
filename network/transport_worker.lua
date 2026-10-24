@@ -64,7 +64,7 @@ function Transport.new(opts)
     self.pending = {}          -- 还没交给 worker 的任务
     -- page -> { dest, started }。**可以有多条** —— 子进程侧用非阻塞 socket
     -- 同时推进 (network/download_async), 父进程这边只是记账。
-    -- 默认 1 = 老行为 (封面通道用: 一次只要一张, 多了纯属浪费带宽)。
+    -- 默认 1；封面通道显式开两路，避免单张慢图阻塞后续可见行。
     self.inflight = {}
     self.max_inflight = opts.max_inflight or 1
     -- true = 子进程里用非阻塞 socket 同时推进多个请求 (见 reader_worker 的 async_loop)。

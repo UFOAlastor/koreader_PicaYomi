@@ -29,7 +29,6 @@ end
 -- 记录里带 `source` 字段 (源的 identifier), 读取/删除都只看当前源的记录 ——
 -- 否则各源的 id 命名空间互不相干却混在一张表里, 切源后会在"阅读历史"里看到
 -- 别的源的条目, 甚至把 A 源读过的进度当成 B 源同一 id 的进度。
-local HISTORY_PER_SOURCE_LIMIT = 50
 
 --- 当前源 identifier (历史记录归属用)
 local function currentSourceId()
@@ -48,23 +47,6 @@ local function readAllHistory()
         return (tonumber(a and a.time) or 0) > (tonumber(b and b.time) or 0)
     end)
     return history
-end
-
---- 每个源各留最近 N 条
---
--- 不能用"全局上限": 一个源看得多就会把别的源的记录挤掉 —— 那等于又把两个源
--- 混在一起管理了 (正是这次要修的问题)。
-local function trimPerSource(history, limit)
-    local counts, kept = {}, {}
-    for _i, item in ipairs(history) do
-        local sid = tostring(item.source or "")
-        local n = counts[sid] or 0
-        if n < limit then
-            counts[sid] = n + 1
-            table.insert(kept, item)
-        end
-    end
-    return kept
 end
 
 --- 保存历史记录
@@ -95,6 +77,7 @@ function ComicModel:saveHistory(comic_id, title, episode, source_id, progress)
             item.episode_title = progress.episode_title
         end
         if progress then
+            if type(progress.thumb) == "string" and progress.thumb ~= "" then item.thumb = progress.thumb end
             local p = tonumber(progress.page)
             local total = tonumber(progress.pages)
             if p and p >= 1 then item.page = p end
@@ -126,17 +109,29 @@ function ComicModel:saveHistory(comic_id, title, episode, source_id, progress)
         return (tonumber(a and a.time) or 0) > (tonumber(b and b.time) or 0)
     end)
 
-    -- 保存历史记录 (每个源各自保留最近 N 条)
-    require("util.config"):save("history", trimPerSource(history, HISTORY_PER_SOURCE_LIMIT))
+    -- Reading progress is user data, never evicted as a cache or by list length.
+    return require("util.config"):save("history", history)
+end
 
-    return true
+-- 补齐旧历史的封面地址，不改变阅读时间、顺序或进度，也不复活已删除记录。
+function ComicModel:updateHistoryCover(comic_id, source_id, thumb)
+    if type(thumb) ~= "string" or thumb == "" then return false end
+    local history = as_array(require("util.config"):get("history"))
+    for _, item in ipairs(history) do
+        if item.id == comic_id and item.source == source_id then
+            if item.thumb == thumb then return true end
+            item.thumb = thumb
+            return require("util.config"):save("history", history)
+        end
+    end
+    return false
 end
 
 -- ============================================================================
 -- 单本漫画的阅读版式 (竖屏 / 条漫 / 横屏)
 -- ============================================================================
 -- 为什么**不**放进 history 数组:
---   history 每个源只留 50 条, 且用户可以在「浏览历史」里一键清空。把"这本书怎么读"
+--   用户可以在「浏览历史」里一键清空。把"这本书怎么读"
 --   这种设置挂在会被淘汰/清空的列表上, 表现为"清了历史之后这本书又变回自动" ——
 --   用户没有任何线索。放在 config 的独立小表里: 同样持久化, 但不受列表策略影响。
 --   (数据量: 每条 30 字节左右, 与阅读进度同量级。)

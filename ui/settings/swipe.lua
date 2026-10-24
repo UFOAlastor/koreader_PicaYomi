@@ -37,21 +37,20 @@ local WIDTH_LABELS = {
 }
 
 function SwipeSettings:show()
-    local enabled = self:safeConfigGet(SwipeRules.CONFIG_ENABLED)
-    local side = self:safeConfigGet(SwipeRules.CONFIG_SIDE)
-    local width = self:safeConfigGet(SwipeRules.CONFIG_WIDTH)
-
     local items = {
         {
-            text = T(_("边缘滑动返回：%1"), enabled and _("开启") or _("关闭")),
+            text = _("边缘滑动返回"),
+            mandatory_func = function() return self:safeConfigGet(SwipeRules.CONFIG_ENABLED) and _("开启") or _("关闭") end,
             callback = function() self:chooseEnabled() end,
         },
         {
-            text = T(_("允许的边缘：%1"), SIDE_LABELS[side] or SIDE_LABELS.both),
+            text = _("允许的边缘"),
+            mandatory_func = function() return SIDE_LABELS[self:safeConfigGet(SwipeRules.CONFIG_SIDE)] or SIDE_LABELS.both end,
             callback = function() self:chooseSide() end,
         },
         {
-            text = T(_("边缘宽度：%1"), WIDTH_LABELS[width] or WIDTH_LABELS.normal),
+            text = _("边缘宽度"),
+            mandatory_func = function() return WIDTH_LABELS[self:safeConfigGet(SwipeRules.CONFIG_WIDTH)] or WIDTH_LABELS.normal end,
             callback = function() self:chooseWidth() end,
         },
         self:createBackButton(),

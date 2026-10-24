@@ -58,17 +58,17 @@ local function default_error_notifier(job, msg)
         or "章节"
     pcall(function()
         UIManager:show(InfoMessage:new{
-            text = string.format("「%s」下载失败：%s", tostring(name), tostring(msg)),
+            text = string.format("「%s」下载失败：%s", tostring(name), require("ui.common.error_message").describe(msg)),
             timeout = 5,
         }, "ui")
     end)
 end
 
-local function default_get_images(source, comic_id, order)
+local function default_get_images(source, comic_id, order, context)
     -- 源的契约是 **(ok, data, err)**; pcall 自己还会再包一层状态, 所以必须接 4 个值。
     -- 只接 (ok, result) 会把源的布尔 ok 当成数据 —— 所有真实源都会失败, 而
     -- 测试里的假源直接返回 data, 恰好绕过了这个形态 (真机 源 B 下载报"获取图片失败")。
-    local pok, ok, data, err = pcall(source.getAllChapterImages, source, comic_id, order)
+    local pok, ok, data, err = pcall(source.getAllChapterImages, source, comic_id, order, context)
     if not pok then return nil, tostring(ok) end
     if not ok then return nil, tostring(err or "获取章节图片失败") end
     if type(data) ~= "table" or type(data.images) ~= "table"
@@ -86,6 +86,9 @@ function Queue.new(opts)
     local self = setmetatable({}, Queue)
     self.transport_factory = opts.transport_factory or default_transport
     self.get_images = opts.get_images or default_get_images
+    self.prepare_runner=opts.prepare_runner or function(fn,options)
+        return require("network.async_task").run(fn,options)
+    end
     self.schedule = opts.schedule or default_schedule
     self.retry_limit = opts.retry_limit or RETRY_LIMIT
     self.max_pending = math.max(1, tonumber(opts.max_pending) or MAX_PENDING)
@@ -138,6 +141,12 @@ function Queue:pause(reason)
         self._tick_id = (self._tick_id or 0) + 1
         self.scheduled = false
         local job = self.active
+        local preparing=self:_stop_prepare(job)
+        if preparing then
+            job.phase="paused"
+            OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
+                {state="partial",done=job.done,total=job.total},{force=true})
+        end
         if job and job.transport then
             job.transport:close()
             job.transport = nil
@@ -217,8 +226,9 @@ end
 function Queue:cancel(reason)
     if self.active then
         local job = self.active
+        self:_stop_prepare(job)
         if job.transport then
-            pcall(function() job.transport:cancel_all() end)
+            job.transport:cancel_all()
         end
         OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
             state = "partial",
@@ -267,10 +277,11 @@ function Queue:cancelComic(source_id, comic_id, reason)
     local n = 0
     if self.active and match(self.active) then
         local job = self.active
+        self:_stop_prepare(job)
         if job.transport then
             -- cancel_all 会收掉 worker 子进程; 不做这一步的话, 正在写的这一页
             -- 会在 os.remove 之后落盘
-            pcall(function() job.transport:cancel_all() end)
+            job.transport:cancel_all()
         end
         OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
             state = "partial",
@@ -314,6 +325,7 @@ end
 function Queue:shutdown()
     if self.active then
         local job = self.active
+        self:_stop_prepare(job,true)
         if job.transport and job.transport.terminate then
             pcall(function() job.transport:terminate() end)
         elseif job.transport then
@@ -345,6 +357,18 @@ function Queue:_notify_error(job, msg)
     if self.on_error then pcall(self.on_error, job, msg) end
 end
 
+function Queue:_stop_prepare(job,nonblocking)
+    if not job then return false end
+    local pending=job.prepare_token~=nil
+    job.prepare_token=nil
+    if job.prepare_task then
+        job.prepare_task.nonblocking=nonblocking
+        job.prepare_task:cancel()
+        job.prepare_task=nil
+    end
+    return pending
+end
+
 function Queue:_prepare(job)
     job.phase = "preparing"
     OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
@@ -354,27 +378,44 @@ function Queue:_prepare(job)
         done = 0,
     }, { force = true })
 
-    -- 取图片列表是**同步 HTTP**, 弱网下可能几秒。先弹一条提示并强制刷新,
-    -- 否则用户看到的是"界面卡住/点了没反应" —— 这正是 v0.8.0 真机反馈。
-    local UI, notice
-    pcall(function()
-        UI = require("ui/uimanager")
-        local InfoMessage = require("ui/widget/infomessage")
-        notice = InfoMessage:new{
-            text = string.format("正在获取「%s」的章节信息…",
-                tostring(job.title or job.order)),
-        }
-        UI:show(notice, "ui")
-        UI:forceRePaint()
-    end)
-
-    local pok, images, err = pcall(self.get_images, job.source, job.comic_id, job.order)
-    if notice and UI then pcall(function() UI:close(notice, "ui") end) end
-    if not pok then
-        err = images
-        images = nil
+    local token={}
+    job.prepare_token=token
+    local generation=job.source.sessionGeneration and job.source:sessionGeneration()
+    local function cancelled()
+        return self.active~=job or job.prepare_token~=token or next(self.pauses)~=nil
+            or generation and job.source:sessionGeneration()~=generation
     end
+    local function changed()
+        self.version=self.version+1
+        if self.on_change then pcall(self.on_change,self,job) end
+    end
+    changed()
+    local function finish(images,err)
+        if cancelled() then return end
+        self:_apply_preparation(job,images,err)
+        job.prepare_token=nil;job.prepare_task=nil
+        changed();self:_schedule()
+    end
+    local context={deadline=require("socket").gettime()+60,isCancelled=cancelled}
+    local task=self.prepare_runner(function()
+        finish(self.get_images(job.source,job.comic_id,job.order,context))
+    end,{
+        timeout=60,is_cancelled=cancelled,
+        on_error=function(err) finish(nil,err) end,
+        on_cancel=function()
+            if self.active==job and job.prepare_token==token then
+                job.prepare_token=nil;job.prepare_task=nil;job.phase="failed"
+                OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
+                    {state="partial",error="章节信息请求已取消"},{force=true})
+                changed()
+            end
+        end,
+    })
+    if not task.done and job.prepare_token==token then job.prepare_task=task end
+    return true
+end
 
+function Queue:_apply_preparation(job,images,err)
     if not images then
         job.phase = "failed"
         OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
@@ -515,6 +556,8 @@ function Queue:step()
     end
 
     local job = self.active
+
+    if job.phase=="preparing" then return true end
 
     if job.phase == "paused" then
         -- Rebuild from the manifest, never trust a file whose completion frame

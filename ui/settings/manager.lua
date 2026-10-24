@@ -1,5 +1,5 @@
 local UIManager = require("ui/uimanager")
-local Menu = require("ui/widget/menu")
+local Menu = require("ui.common.action_style").Menu
 local Screen = require("device").screen
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
@@ -64,7 +64,7 @@ function SettingsManager:showMainMenu()
                 end,
             },
             {
-                text = _("缓存管理"),
+                text = _("存储管理"),
                 callback = function()
                     self:navigateTo("cache")
                 end,
@@ -99,6 +99,7 @@ function SettingsManager:showMainMenu()
         -- 整页拆掉 —— 屏幕上看起来就是"点了没反应"。
         -- current_menu 判据: 只有主菜单仍是最上层菜单时才算真的要关闭设置。
         close_callback = function()
+            if main_menu._picayomi_in_select then return end
             if self.current_menu ~= main_menu then return end
             self:close()
         end,
@@ -168,6 +169,7 @@ function SettingsManager:popMenu()
             self:closeCurrentMenu()
             redraw()
         else
+            previous_menu:updateItems()
             UIManager:setDirty(previous_menu, "ui")
         end
         return true
@@ -197,6 +199,7 @@ function SettingsManager:close()
     end
     self.menu_stack = {}
     UIManager:close(self, "ui")
+    require("source.extensions.updater").schedule()
 end
 
 return SettingsManager

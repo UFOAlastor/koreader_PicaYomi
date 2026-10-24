@@ -1441,7 +1441,7 @@ function PicaReader:recordProgress(page, pages, force)
     end
     pcall(function()
         model:saveHistory(comic._id, comic.title or "", episode.order,
-            self.source_id, { page = page, pages = tonumber(pages), episode_title = episode.title })
+            self.source_id, { page = page, pages = tonumber(pages), episode_title = episode.title, thumb = comic.thumb })
     end)
 end
 

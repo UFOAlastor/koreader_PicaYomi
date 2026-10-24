@@ -25,9 +25,8 @@ end
 
 --- 决定这一话的阅读版式 (竖屏 / 条漫 / 横屏)
 --
--- 顺序: 单本设置 > 全局策略 > 自动判定 (第 1 页的像素长宽比)。
--- 自动判定需要第 1 页的真实尺寸, 而尺寸只能从文件头量 —— 所以这里会**同步**
--- 下第 1 页 (它本来就要下: 打开后第一件事就是画它)。量不到就按竖屏, 不猜。
+-- 顺序: 单本设置 > 全局策略 > 中段采样。只量一个样本，避开封面和开头跨页。
+-- 读取现有文件头；首次进入没有缓存时只补该样本，量不到则回落到竖屏。
 --
 -- 为什么不再看源站分类/标签: 有些作品分类写着韓漫、画法却是仿日漫的整页分镜
 -- (实测源 B 339033 的切片 800x1129, 与日漫比例完全一样), 按分类判会把整页翻
@@ -44,14 +43,14 @@ local function resolve_view_mode(source, comic_id, session, context)
     if policy == "always" then return ViewMode.SCROLL end
     if policy == "never" then return ViewMode.PAGE end
 
-    -- 同一本漫画换章沿用已经判定的版式, 不为再次探测而同步下载第一页。
-    -- 新话第一页已在本地时仍按其实际尺寸判断; 单本设置和全局策略始终优先。
+    local sample=ViewMode.samplePage(session.total)
+    -- 同本换章不为采样额外等网络；中段已缓存时重新判断，否则沿用上一话。
     local hint = context and context.view_mode_hint
     if type(hint) == "table" and source and hint.source_id == source.identifier
             and tostring(hint.comic_id) == tostring(comic_id)
             and (hint.mode == ViewMode.PAGE or hint.mode == ViewMode.SCROLL
                 or hint.mode == ViewMode.LANDSCAPE) then
-        local size = session:ensure_size(1)
+        local size = session:ensure_size(sample)
         if size then return ViewMode.resolve(nil, size) end
         if Diag.enabled then open_mark(comic_id, session.order, "沿用上一话版式=" .. hint.mode) end
         return hint.mode
@@ -59,10 +58,12 @@ local function resolve_view_mode(source, comic_id, session, context)
 
     local size
     pcall(function()
-        local path = session:fetch_page(1)
-        if path then size = session:ensure_size(1) end
+        local path = session:fetch_page(sample)
+        if path then size = session:ensure_size(sample) end
     end)
-    return ViewMode.resolve(nil, size)
+    local mode=ViewMode.resolve(nil,size)
+    if Diag.enabled then open_mark(comic_id,session.order,string.format("版式采样 第%d/%d页 %sx%s -> %s",sample,session.total,tostring(size and size.w),tostring(size and size.h),mode)) end
+    return mode
 end
 
 -- 确保源已初始化
@@ -296,6 +297,9 @@ function ComicAPI:prepareComic(comicId, order, context)
     if Diag.enabled then open_mark(comicId, order, "版式=" .. tostring(session.view_mode)) end
 
     StreamReader.registerSession(session)
+    if not (context and context.from_beginning) then
+        require("util.reading_position").restore(stream_path,comicId,order,source.identifier,#images_result.images)
+    end
 
     if logger.enabled then logger.info(string.format("Picayomi: 流式打开 %s 章节 %s (共 %d 页)",
         tostring(comicId), tostring(order), #images_result.images)) end

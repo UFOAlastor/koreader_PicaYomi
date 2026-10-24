@@ -348,7 +348,7 @@ function StreamSession.new(opts)
     -- 在**创建会话时**定一次: 打开文档那一刻 (registerSession -> 文档设置) 要用它,
     -- 阅读器起来后的提示也要用它 —— 两处必须看到同一个结论。
     --
-    -- 判据是**第 1 页的像素长宽比** (与源站分类无关: 有些韩漫是仿日漫的整页分镜),
+    -- 判据是**章节中段页的像素长宽比** (与源站分类无关),
     -- 由 prepareComic 在打开前量好并传进来; 量不到时退回竖屏。
     self.view_mode = opts.view_mode or ViewMode.PAGE
     self.cache_dir = opts.cache_dir
@@ -2116,7 +2116,7 @@ end
 --     高图会被纵向切成多屏。
 --   * 条漫: 按宽度铺满 + 上下连续滚动 (page_scroll = 1 + zoom_mode = pagewidth)。
 --     一话几十上百张切片, 翻页读要翻一百多次, 滚动才是它本来的读法。
---   * 横屏: 画面比屏幕宽一倍以上 (h/w < 设备比 / 2)。整页缩放 + **旋转 90°**,
+--   * 横屏: 中段页宽大于高。整页缩放 + **旋转 90°**,
 --     用户把设备横过来读。旋转是屏幕级的 (Screen:setRotationMode), 所以菜单/
 --     页脚/手势坐标一起转 —— 这正是要的效果。退出阅读时由 ui/reader.lua 还原。
 --

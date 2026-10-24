@@ -22,9 +22,6 @@ local KEEP_FIELDS = {
     "finished", "updated_at", "created_at", "update_time",
 }
 
--- 兜底上限: config.json 是一次性整份读写的, 不能让它无限增长
-local MAX_ITEMS = 500
-
 local function storageKey(source_id)
     return "local_favorites." .. tostring(source_id or "unknown")
 end
@@ -107,7 +104,6 @@ function M.add(source_id, comic)
         entry = trim(comic)
         table.insert(items, 1, entry)            -- 最新收藏排最前
     end
-    while #items > MAX_ITEMS do table.remove(items) end
 
     local ok = Config:set(storageKey(source_id), items)
     if not ok then return false, "写入本地收藏失败" end

@@ -35,6 +35,9 @@ function Async.run(fn, opts)
     local buffer = require("string.buffer")
     local Fork = opts.subprocess or require("network.subprocess_fork")
     local task = { done = false }
+    -- The worker watchdog below is per request. This optional budget spans all
+    -- requests/retries in the continuation, including source fallbacks.
+    local deadline=opts.timeout and socket.gettime()+opts.timeout
     local co
     local function safe_callback(cb, ...)
         if not cb then return end
@@ -112,6 +115,7 @@ function Async.run(fn, opts)
         if task.done then return end
         local ok, err = pcall(function()
             if opts.is_cancelled and opts.is_cancelled() then task:cancel(); return end
+            if deadline and socket.gettime()>=deadline then fail("加载超时，请重试"); return end
             local frame = task.session:try_recv()
             if frame then
                 if frame.error then fail(frame.error); return end
@@ -141,6 +145,7 @@ function Async.run(fn, opts)
     co = coroutine.create(fn)
     tasks[co] = task
     resume = function(...)
+        if deadline and socket.gettime()>=deadline then fail("加载超时，请重试"); return end
         local ok, yielded = coroutine.resume(co, ...)
         if task.done then return end
         if not ok then fail(yielded); return end

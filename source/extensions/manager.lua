@@ -5,6 +5,7 @@ local Net=require("source.extensions.https")
 local Catalog=require("source.extensions.catalog")
 local sha=require("ffi/sha2").sha256
 local Manager={}; Manager.__index=Manager
+Manager.CHECK_INTERVAL=6*3600
 local function copy(v) return json.decode(json.encode(v)) end
 local function version()
     local path=assert(debug.getinfo(1,"S").source:match("^@(.*)/[^/]+$"))
@@ -476,18 +477,21 @@ function Manager:acceptRepository(url,preview,confirm_identity)
     r.catalog_format=data.format
     r.public_key,r.publisher_id,r.revision,r.payload_hash=key,data.publisher_id,data.revision,preview.payload_hash
     r.name,r.sources,r.refreshed_at,r.last_success=data.name,data.sources,self.now(),self.now()
-    r.failures,r.error,r.next_check=0,nil,self.now()+24*3600
+    r.failures,r.error,r.next_check=0,nil,self.now()+Manager.CHECK_INTERVAL
     local saved=self:_save(state)
     require("util.logger").notice("Picayomi: subscription refreshed", data.name, "revision", data.revision, "entries", #data.sources)
     return saved
 end
 function Manager:refreshRepository(url)
     assert(self.state.repositories[url],"订阅不存在")
+    local failures=self.state.repositories[url].failures or 0
     local state=copy(self.state); state.repositories[url].last_attempt=self.now(); self:_save(state)
     local ok,result=pcall(function() return self:acceptRepository(url,self:previewRepository(url)) end)
     if ok then return result end
     local repo=self.state.repositories[url]
-    if repo and repo.error~=tostring(result) then self:checkFailure(url,result) end
+    -- previewRepository already records transport/parse failures. Lua error()
+    -- may prepend a location, so comparing error strings counts one attempt twice.
+    if repo and (repo.failures or 0)==failures then self:checkFailure(url,result) end
     error(result)
 end
 function Manager:bind(id,url)
@@ -574,7 +578,13 @@ function Manager:due(url,force)
         local s=copy(self.state); s.repositories[url].last_attempt=now; s.repositories[url].next_check=now+900
         s.repositories[url].last_success=nil; self:_save(s); return false
     end
-    return now>=(r.next_check or 0)
+    local next_check=r.next_check or 0
+    -- Old installations may still store the former 24-hour success interval.
+    -- Shorten successful checks only; failure backoff remains unchanged.
+    if (r.failures or 0)==0 and r.last_success then
+        next_check=math.min(next_check,r.last_success+Manager.CHECK_INTERVAL)
+    end
+    return now>=next_check
 end
 local instance
 function Manager.instance() if not instance then instance=Manager.new() end; return instance end

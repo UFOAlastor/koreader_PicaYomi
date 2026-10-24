@@ -44,6 +44,7 @@ function Runtime.new(source,manifest,digest,extension_context)
     function handle:init() return true end -- already initialized by the loader
     local orders,legacy_orders,order_keys={},{},{}
     local generation,listeners=0,{}
+    local cache_session = tostring({}) -- Fallback for sources without a stable credential.
     function handle:sessionGeneration() return generation end
     function handle:watchSession(callback)
         local key={};listeners[key]=callback
@@ -51,6 +52,7 @@ function Runtime.new(source,manifest,digest,extension_context)
     end
     local function invalidate_sessions()
         generation=generation+1
+        orders,legacy_orders,order_keys={},{},{}
         local pending={};for _,fn in pairs(listeners) do pending[#pending+1]=fn end
         for _,fn in ipairs(pending) do pcall(fn,generation) end
     end
@@ -208,6 +210,62 @@ function Runtime.new(source,manifest,digest,extension_context)
             return Contract.copy(data,not legacy)
         end)
     end
+    local function remember_directory(manga_id,items)
+        local key=tostring(manga_id)
+        if not orders[key] then order_keys[#order_keys+1]=key end
+        local mapping,old_mapping={},{}
+        for _,ch in ipairs(items) do mapping[tostring(ch.order)]=ch.id;old_mapping[ch.id]=ch.order end
+        orders[key]=mapping; legacy_orders[key]=old_mapping
+        if #order_keys>32 then local oldest=table.remove(order_keys,1);orders[oldest]=nil;legacy_orders[oldest]=nil end
+    end
+    local function chapter_cache_key(manga_id)
+        if caps.requires_login and not logged() then return end
+        local scope="public"
+        if logged() then
+            local credential
+            if not legacy then
+                local ok,data=handle:invoke("getCredential",{})
+                if ok and next(data) then credential=Contract.serialize(data) end
+            elseif source.getToken then
+                local ok,token=pcall(source.getToken,source)
+                if ok and type(token)=="string" and token~="" then credential=token end
+            end
+            scope=credential and require("ffi/sha2").sha256(credential) or cache_session..":"..generation
+        end
+        local settings={}
+        for _,setting in ipairs(manifest.settings or {}) do
+            local getter=extension_context and extension_context.ctx and extension_context.ctx.getSetting
+            local value=setting.default
+            if getter then value=getter(setting.key,setting.default) end
+            settings[setting.key]=value
+        end
+        return Contract.serialize({source=manifest.id,digest=digest,version=manifest.version,
+            manga=tostring(manga_id),scope=scope,settings=require("ffi/sha2").sha256(Contract.serialize(settings))})
+    end
+    local function chapter_view(data)
+        local result={episodes={},page=1,pages=1,total=#data.items}
+        for i,item in ipairs(data.items) do result.episodes[i]=project(item,"chapter") end
+        return result
+    end
+    function handle:peekChapters(manga_id)
+        local readable,key=pcall(chapter_cache_key,manga_id)
+        if not readable or not key then return end
+        local entry=require("util.chapter_cache").read(key,manga_id)
+        if not entry then return end
+        remember_directory(manga_id,entry.data.items)
+        return chapter_view(entry.data),entry.fresh
+    end
+    function handle:refreshChapters(manga_id,context)
+        local key=chapter_cache_key(manga_id)
+        local started=generation
+        local ok,data,err=self:directory(manga_id,context)
+        if not ok then return false,nil,message(err) end
+        if started~=generation or key~=chapter_cache_key(manga_id) then return false,nil,"登录或源设置已改变，请重新打开详情" end
+        -- Cache writes are optional: disk-full/oversized snapshots must not hide
+        -- a valid network directory. A failed refresh never replaces last good data.
+        if key then pcall(require("util.chapter_cache").write,key,manga_id,data) end
+        return true,chapter_view(data)
+    end
     -- Aggregation is bounded and atomic: no partial directory escapes on error.
     function handle:directory(manga_id,context)
         local request,seen,ids,items={}, {},{},{}
@@ -221,13 +279,7 @@ function Runtime.new(source,manifest,digest,extension_context)
                 if #items>Contract.MAX_ITEMS then return false,nil,Contract.error("resource_limit","章节超过限额","getChapters") end
             end
             if not result.has_more then
-                local key=tostring(manga_id)
-                if not orders[key] then order_keys[#order_keys+1]=key end
-                local mapping,old_mapping={},{}
-                for _,ch in ipairs(items) do mapping[tostring(ch.order)]=ch.id;old_mapping[ch.id]=ch.order end
-                orders[key]=mapping
-                legacy_orders[key]=old_mapping
-                if #order_keys>32 then local oldest=table.remove(order_keys,1);orders[oldest]=nil;legacy_orders[oldest]=nil end
+                remember_directory(manga_id,items)
                 return true,{items=items,has_more=false,total=#items}
             end
             local key=Contract.serialize(result.next)
@@ -277,20 +329,24 @@ function Runtime.new(source,manifest,digest,extension_context)
             return ok and data.headers or nil,not ok and message(err) or nil
         end
     end
-    local continuations,continuation_keys,continuation_seen={},{},{}
+    local continuations,continuation_keys,continuation_seen,indexed_pages={},{},{},{}
     local function continuation_state(key)
         if not continuations[key] then
             continuations[key]={};continuation_seen[key]={}
             continuation_keys[#continuation_keys+1]=key
             if #continuation_keys>16 then
                 local oldest=table.remove(continuation_keys,1)
-                continuations[oldest]=nil;continuation_seen[oldest]=nil
+                continuations[oldest]=nil;continuation_seen[oldest]=nil;indexed_pages[oldest]=nil
             end
         end
         return continuations[key]
     end
     local function facade(method,...)
         local args={...}
+        local context
+        if method=="getAllChapterImages" or method=="getChapterImages" then
+            context=args[3];args[3]=nil
+        end
         local canonical=method
         if not legacy then canonical=({getComicDetail="getManga",getAllChapterImages="getPages",getChapterImages="getPages",getComics="getLatest"})[method] or method end
         local page_number=1
@@ -303,7 +359,13 @@ function Runtime.new(source,manifest,digest,extension_context)
             if at==1 then scope.filter=nil end
             paging_key=Contract.serialize(scope)
             continuation_state(paging_key)
+            local indexed=indexed_pages[paging_key]
+            if page_number<1 or page_number%1~=0 then return false,nil,"页码无效" end
             local request=explicit or page_number==1 and {} or continuations[paging_key][page_number]
+            if not explicit and page_number>1 and indexed then
+                if page_number>indexed.pages then return false,nil,"页码超出范围，请重新加载" end
+                request={page=page_number}
+            end
             if not request then return false,nil,"续页已失效，请从首页重新加载" end
             request=Contract.copy(request)
             if args[at+1]~=nil then request.sort=args[at+1] end
@@ -320,7 +382,7 @@ function Runtime.new(source,manifest,digest,extension_context)
         elseif not legacy and canonical=="getPages" then
             local id=orders[tostring(args[1])] and orders[tostring(args[1])][tostring(args[2])]
             if not id then
-                local ok,_,err=handle:directory(args[1])
+                local ok,_,err=handle:directory(args[1],context)
                 if not ok then return false,nil,message(err) end
                 id=orders[tostring(args[1])] and orders[tostring(args[1])][tostring(args[2])]
             end
@@ -328,14 +390,16 @@ function Runtime.new(source,manifest,digest,extension_context)
             args={args[1],id}
         end
         local ok,data,err
-        if paging_key and page_number>200 then return false,nil,"列表请求超过限额，请重新搜索或筛选" end
+        if paging_key and page_number>200 and not indexed_pages[paging_key] then return false,nil,"列表请求超过限额，请重新搜索或筛选" end
         if not legacy and method=="getChapters" then ok,data,err=handle:directory(args[1])
-        else ok,data,err=handle:invoke(canonical,args) end
+        else ok,data,err=handle:invoke(canonical,args,context) end
         if ok and paging_key then
-            if page_number==1 then continuations[paging_key]={};continuation_seen[paging_key]={} end
+            if data.pagination and data.pagination.page~=page_number then return false,nil,"漫画源返回页码不一致" end
+            if page_number==1 then continuations[paging_key]={};continuation_seen[paging_key]={};indexed_pages[paging_key]=nil end
+            indexed_pages[paging_key]=data.pagination
             local state=continuations[paging_key]
             local encoded=data.next and Contract.serialize(data.next)
-            if encoded then
+            if encoded and not data.pagination then
                 local hash=require("ffi/sha2").sha256(encoded)
                 local previous=continuation_seen[paging_key][hash]
                 if previous and previous<page_number then return false,nil,"漫画源续页重复，请重新加载" end
@@ -369,13 +433,17 @@ function Runtime.new(source,manifest,digest,extension_context)
             local result=Contract.copy(data)
             result[key]={}
             for i,item in ipairs(data.items) do result[key][i]=project(item,kind) end
-            -- Exact page metadata is retained solely by the legacy adapter.
+            -- Sources may explicitly declare validated indexed pagination.
             if legacy and kind~="page" then
                 result.page=data.page
                 result.pages=data.pages
             end
             if not legacy and kind~="page" then
                 result.page=page_number
+                if data.pagination then
+                    result.pages=data.pagination.pages
+                    result.page_size=data.pagination.page_size
+                end
                 if method=="getChapters" then result.pages=1 end
             end
             return true,result

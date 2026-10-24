@@ -14,10 +14,10 @@
 --
 --   规则 (与用户约定):
 --     画面比 > 设备比 × 2   -> 条漫 (比屏幕高出一倍以上, 只能连续滚)
---     画面比 < 设备比 ÷ 2   -> 横屏 (比屏幕宽一倍以上, 竖着放会缩成一条)
+--     宽 > 高               -> 横屏 (横向页面按长边阅读)
 --     其余                  -> 竖屏整页
 --
---   注意: 判据只看**第 1 页**。一话里偶尔混入一张长图/跨页不该改整话的读法。
+--   优先取章节中段页，避开开头的封面、跨页或介绍图。
 --
 -- 三种模式的文档设置 (见 ui/stream_reader.lua:applyDefaultDocSettings):
 --   竖屏:  kopt_page_scroll=0, zoom_mode=page
@@ -64,6 +64,11 @@ M.ROTATION_CONFIG = "landscape_rotation"
 M.ROTATION_DEFAULT = 3                     -- 3 = 逆时针 90° (真机正立)
 M.ROTATIONS = { [1] = true, [3] = true }   -- 1 = 顺时针 90°, 3 = 逆时针 90°
 
+function M.samplePage(total)
+    total=math.max(1,math.floor(tonumber(total) or 1))
+    return math.min(total,math.floor(total/2)+1)
+end
+
 --- 当前设置的横屏方向 (非法/缺失一律按默认值)
 function M.landscape_rotation()
     local v = tonumber(config:get(M.ROTATION_CONFIG, M.ROTATION_DEFAULT))
@@ -91,14 +96,14 @@ function M.classify(w, h)
     local device = math.max(sw, sh) / math.min(sw, sh)
     local ratio = h / w
     if ratio > device * 2 then return M.SCROLL end
-    if ratio < device * 0.5 then return M.LANDSCAPE end
+    if w > h then return M.LANDSCAPE end
     return M.PAGE
 end
 
 --- 已经定下来的版式 (不含"按画面自动判定"那一步)
 -- 顺序: 单本设置 > 全局策略; 两者都没有 => nil (交给自动判定)
 --
--- 详情页的「版式」按钮用这个: 那一页量不到第 1 页的尺寸, 显示"自动"才是诚实的
+-- 详情页的「版式」按钮用这个: 那一页量不到中段图片的尺寸, 显示"自动"才是诚实的
 -- (真正读的时候会按画面判), 而不是假装已经是竖屏。
 function M.current(saved)
     if saved == M.PAGE or saved == M.SCROLL or saved == M.LANDSCAPE then
@@ -112,7 +117,7 @@ end
 
 --- 最终版式: 单本设置 > 全局策略 > 自动判定 > 竖屏
 -- @param saved 单本设置 (nil = 没设过)
--- @param size  { w=, h= } 第 1 页的像素尺寸; 未知时传 nil
+-- @param size  { w=, h= } 中段采样页的像素尺寸; 未知时传 nil
 function M.resolve(saved, size)
     local known = M.current(saved)
     if known then return known end

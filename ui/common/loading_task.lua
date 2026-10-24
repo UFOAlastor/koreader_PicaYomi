@@ -67,6 +67,7 @@ function LoadingTask.background(loading, fn, opts)
     handle.start = function()
         if handle.cancelled then return end
         handle.task = require("network.async_task").run(fn, {
+            timeout = opts.timeout,
             is_cancelled = opts.is_cancelled,
             on_cancel = cancelled,
             on_error = function(err)
@@ -194,10 +195,12 @@ function LoadingTask.run(opts)
 
     if opts.async then
         return LoadingTask.background(loading, step, {
+            timeout = opts.timeout,
             delay = opts.delay,
             is_cancelled = opts.is_cancelled,
             on_cancel = function()
                 if opts.set_busy then opts.set_busy(false) end
+                if opts.on_cancel then opts.on_cancel() end
             end,
             on_error = function(err)
                 if opts.set_busy then opts.set_busy(false) end

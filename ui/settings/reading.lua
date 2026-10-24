@@ -23,30 +23,35 @@ function ReadingSettings:show()
     local items = {
         {
             text = _("图片模式"),
+            mandatory_func = function() return self:safeConfigGet("grayscale_images",false) and _("始终黑白") or _("跟随 KOReader") end,
             callback = function() self:setImageMode() end,
         },
         {
             -- 只有源 A 有这两档: 源 B/源 C 给的就是原图, 没有可切的东西。
             -- 写清楚适用范围, 免得在别的源下看起来像"这个设置没用"。
             text = _("图片质量（仅哔咔）"),
+            mandatory_func = function() return self:safeConfigGet("image_quality","original")=="low" and _("缩略图") or _("原图") end,
             callback = function()
                 self:setImageQuality()
             end,
         },
         {
             text = _("提前加载页数"),
+            mandatory_func = function() return T(_("%1 页"),self:safeConfigGet("prefetch_pages",3)) end,
             callback = function()
                 self:setPrefetch()
             end,
         },
         {
             text = _("翻页刷新"),
+            mandatory_func = function() return self:safeConfigGet("refresh_on_page_turn",true) and _("完整刷新") or _("跟随系统") end,
             callback = function()
                 self:setPageRefresh()
             end,
         },
         {
             text = _("条漫滚动阅读"),
+            mandatory_func = function() return ({auto=_("自动"),always=_("总是滚动"),never=_("关闭")})[ViewMode.policy()] end,
             callback = function()
                 self:setWebtoonScroll()
             end,
@@ -54,6 +59,7 @@ function ReadingSettings:show()
         {
             -- 只影响「横屏」版式。放在条漫下面: 两者是同一组"怎么读"的设置。
             text = _("横屏方向"),
+            mandatory_func = function() return ViewMode.landscape_rotation()==1 and _("顺时针 90°") or _("逆时针 90°") end,
             callback = function()
                 self:setLandscapeRotation()
             end,
@@ -132,17 +138,28 @@ end
 --- 翻页刷新
 --
 -- 「完整刷新」= 每翻一页整屏闪一次, 消掉上一页的残影 (漫画是整页换图, 局部刷新
--- 留下的印子比文字页明显)。「跟随系统」= 交给 KOReader 自己的刷新计数, 翻页更快,
--- 但中间几页会带印子 (KOReader 默认每 6 次局部刷新才补一次全刷)。
+-- 留下的印子比文字页明显)。「跟随系统」不追加全刷，保留 KOReader 当前策略，
+-- 它也可能已经设为每页全刷；不能固定承诺更快或有残影。
 --
 -- 实现见 ui/reader.lua 的 PicaReader:forceFullRefresh —— 追加 setDirty(dialog,"full"),
 -- 与 KOReader 排的 "ui"/"partial" 会被 UIManager 合并成一次刷新。
+function ReadingSettings:systemRefreshLabel()
+    local count=UIManager.FULL_REFRESH_COUNT
+    local description
+    if count==1 then description=_("当前每页全刷")
+    elseif type(count)=="number" and count>1 then description=T(_("当前每 %1 次局部刷新后全刷"),count)
+    elseif count==0 then description=_("当前关闭周期全刷")
+    elseif count==-1 then description=_("当前按章节全刷")
+    else description=_("使用 KOReader 设置") end
+    return T(_("跟随系统（%1）"),description)
+end
+
 function ReadingSettings:setPageRefresh()
     local current = self:safeConfigGet("refresh_on_page_turn", true)
     local options = {
-        { text = _("完整刷新（推荐，无残影）"), value = true,
+        { text = _("完整刷新（优先消除残影）"), value = true,
           toast = _("已开启翻页完整刷新") },
-        { text = _("跟随系统（更快，可能留残影）"), value = false,
+        { text = self:systemRefreshLabel(), value = false,
           toast = _("已改为跟随系统刷新") },
     }
     local items = {}

@@ -60,4 +60,22 @@ function ReadingPosition.clear(comic_id, order, source_id)
     return a or b
 end
 
+-- A reading-cache cleanup can remove KOReader's sidecar. Recreate only its
+-- missing page from durable, source-scoped history; an existing sidecar wins.
+function ReadingPosition.restore(path, comic_id, order, source_id, page_count)
+    if not path or lfs.attributes(path,"mode")~="file" then return false end
+    local ok,restored=pcall(function()
+        local item=require("model.comic"):getHistoryItem(comic_id,source_id)
+        if not item or tostring(item.episode)~=tostring(order) then return false end
+        local page=tonumber(item.page)
+        if not page or page<1 or page%1~=0 then return false end
+        local ds=require("docsettings"):open(path)
+        if tonumber(ds:readSetting("last_page")) then return false end
+        ds:saveSetting("last_page",math.min(page,math.max(1,page_count or page)))
+        ds:flush()
+        return true
+    end)
+    return ok and restored or false
+end
+
 return ReadingPosition

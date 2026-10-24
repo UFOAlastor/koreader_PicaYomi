@@ -235,6 +235,7 @@ end
 
 -- 清除数据缓存
 function Cache:clearDataCache()
+    cache_store = {}
     local size_before = self:getDataCacheSize()
 
     -- 删除数据缓存目录下所有文件
@@ -248,7 +249,8 @@ end
 
 -- 清除所有缓存
 function Cache:clearAllCache()
-    local size_before = self:getCacheSize()
+    cache_store = {}
+    local before = self:getSizeBreakdown()
 
     -- 删除缓存目录下所有文件, **但保留 downloads**: 那是用户主动下载的
     -- 离线漫画 (见 util/offline_library.lua), 删掉清单还在, 列表就会指向空目录。
@@ -269,7 +271,10 @@ function Cache:clearAllCache()
     -- 重新初始化缓存目录
     self:init()
 
-    return size_before
+    local after = self:getSizeBreakdown()
+    -- Downloads are persistent content. Their bytes must never be reported as
+    -- cleared, including when an unrelated download is still growing.
+    return math.max(0,(before.total-before.downloads)-(after.total-after.downloads))
 end
 
 -- 清除目录下所有文件和子目录
@@ -416,7 +421,7 @@ function Cache:generateFilename(input)
 end
 
 -- 缓存目录的清理见 network/download_manager.lua:
---   cleanCache        按总量上限清理 (覆盖封面/阅读页/数据/CBZ 五个根)
+--   cleanCache        按容量清理封面/图片/阅读页/数据/临时文件，不含持久下载
 --   trimReadingCache  按话裁剪阅读页 (当前话永不裁剪)
 --   maybeCleanCache   长会话里的总量检查 (靠下载上报的字节数增量触发, 不扫盘)
 --

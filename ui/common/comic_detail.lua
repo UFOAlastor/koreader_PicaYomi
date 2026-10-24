@@ -2,9 +2,10 @@
 -- 统一漫画详情页：封面、元信息、章节列表和阅读入口
 
 local Blitbuffer = require("ffi/blitbuffer")
-local Button = require("ui/widget/button")
-local ButtonDialog = require("ui/widget/buttondialog")
-local ConfirmBox = require("ui/widget/confirmbox")
+local Button = require("ui.common.action_style").Button
+local ButtonDialog = require("ui.common.action_style").ButtonDialog
+local ActionStyle = require("ui.common.action_style")
+local ConfirmBox = require("ui.common.action_style").ConfirmBox
 local Device = require("device")
 local Theme = require("ui.common.theme")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -14,7 +15,7 @@ local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local ImageWidget = require("ui/widget/imagewidget")
 local InfoMessage = require("ui/widget/infomessage")
-local InputDialog = require("ui/widget/inputdialog")
+local InputDialog = require("ui.common.action_style").InputDialog
 local InputContainer = require("ui/widget/container/inputcontainer")
 local ListView = require("ui/widget/listview")
 local LeftContainer = require("ui/widget/container/leftcontainer")
@@ -150,7 +151,7 @@ function CoverPlaceholder:paintTo(bb, x, y)
     local text = TextWidget:new{
         text = self.text or _("封面"),
         face = Theme.face("info"),
-        fgcolor = Blitbuffer.COLOR_DARK_GRAY,
+        fgcolor = Blitbuffer.COLOR_BLACK,
     }
     local size = text:getSize()
     text:paintTo(bb, x + math.floor((self.width - size.w) / 2),
@@ -172,6 +173,10 @@ function DetailRow:init()
     local text_w = self.width - padding * 2
     local text_h = self.height - padding * 2
     local clickable = self.enabled ~= false and self.callback ~= nil
+    if self.action_button then
+        self[1]=ActionStyle.row{width=self.width,height=self.height,text=self.text,
+            enabled=clickable,align=self.action_align,expandable_text=self.expandable_text}
+    else
     -- 样式只按可点击性区分, 不按行号交替; 多格动作与普通行共用同一套尺寸。
     -- 单行文本统一左对齐、垂直居中, 长标签省略, 不因换行改变视觉高度。
     self[1] = FrameContainer:new{
@@ -189,8 +194,8 @@ function DetailRow:init()
                 TextWidget:new{
                     text = self.text or "",
                     face = Theme.face("row"),
-                    bold = clickable,
-                    fgcolor = clickable and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_GRAY_4,
+                    bold = clickable or self.section_header,
+                    fgcolor = Blitbuffer.COLOR_BLACK,
                     max_width = text_w,
                     truncate_with_ellipsis = true,
                     picayomi_expandable_text = clickable and self.expandable_text,
@@ -198,6 +203,7 @@ function DetailRow:init()
             },
         },
     }
+    end
     self.dimen = Geom:new{ x = 0, y = 0, w = self.width, h = self.height }
 
     if clickable and Device:isTouchDevice() then
@@ -273,6 +279,12 @@ function ComicDetail:init()
     SwipeRules.installSlowDragBack(self, function() return self:goBack() end)
     -- 章节数据可能在构造时就由调用方给了 (历史页 / 渲染测试):
     -- 必须**先排序再构建**, 否则首屏会按源的原始(可能是倒序)顺序显示
+    if not self.episodes_data and not self.offline and self.source and self.source.peekChapters
+            and require("ui.common.source_access").check(self.source,nil,true) then
+        local data,fresh=self.source:peekChapters(self.comic._id)
+        self.episodes_data=data
+        self._chapters_stale=data and not fresh
+    end
     if self.episodes_data then
         self:setEpisodesData(self.episodes_data)
     end
@@ -305,6 +317,7 @@ function ComicDetail:init()
     end
 
     UIManager:nextTick(function()
+        if self._closed or self.opening_reader then return end
         -- 这是 init 排下的**延迟任务**: KOReader 的任务队列不兜异常, 抛出来就一路
         -- 冒到 reader.lua, 整个进程退出 —— 用户只是"点进了一部漫画"。
         -- 三件事互相独立, 各自兜底: 取封面失败不该让章节不加载, 取详情补充信息
@@ -317,11 +330,15 @@ function ComicDetail:init()
         end
         guarded("loadCover", function() self:loadCover() end)
         -- 入口已提供章节数据 (如历史页 / 渲染测试) 时不再重复拉取
-        if not self.episodes_data and not self.offline then
+        if (not self.episodes_data or self._chapters_stale) and not self.offline then
             guarded("loadChapters", function() self:loadChapters(1) end)
         end
         if not self.offline then
-            guarded("syncFromSource", function() self:syncFromSource() end)
+            guarded("syncFromSource", function()
+                self._detail_task=LoadingTask.background(nil,function() self:syncFromSource() end,{
+                    is_cancelled=function() return self._closed or self.opening_reader end,
+                })
+            end)
         end
     end)
 end
@@ -636,12 +653,16 @@ function ComicDetail:buildWindow()
             local group = HorizontalGroup:new{}
             local x = 0
             for ci, cell in ipairs(cells) do
-                local w = (ci == n) and (self.width - x) or math.floor(self.width / n)
+                local w = (ci == n) and (self.width - x) or cell.width or math.floor(self.width / n)
                 table.insert(group, DetailRow:new{
                     width = w,
                     height = spec.height or ROW_H,
                     text = cell.text,
                     callback = cell.callback,
+                    enabled = cell.enabled ~= false,
+                    action_button = cell.action_button,
+                    action_align = cell.action_align,
+                    section_header = cell.section_header,
                 })
                 x = x + w
             end
@@ -655,6 +676,8 @@ function ComicDetail:buildWindow()
                 height = spec.height or ROW_H,
                 text = spec.text,
                 callback = spec.callback,
+                action_button = spec.action_button,
+                action_align = spec.action_align,
                 expandable_text = spec.expandable_text,
             })
         end
@@ -700,6 +723,7 @@ end
 
 function ComicDetail:updatePageText()
     if not self.page_text then return end
+    if self.jump_button then self.jump_button:enableDisable(self:loadedScreens()>1) end
     self.page_text:setText(T(_("第 %1/%2 页"),
         self.screen_index or 1, self:loadedScreens()))
 end
@@ -800,18 +824,6 @@ function ComicDetail:createHeader(height)
     }
 end
 
---- 量"一个按钮装下这段文案至少要多宽"
---
--- 用**同参数**的临时 Button 量, 而不是自己按字体算宽度: Button 还要加左右内边距/
--- 边框, 并在文案超宽时走降字号/折行逻辑, 自己算容易与它的实现走偏。
--- 不传 width —— 此时 Button 按文字自然宽度定尺寸 (button.lua: inner_width = widget_size.w)。
-local function buttonWidthForText(text, height)
-    local probe = Button:new{ text = text, height = height }
-    local w = probe:getSize().w
-    probe:free()
-    return w
-end
-
 function ComicDetail:createFooter()
     local button_h = Screen:scaleBySize(40)
     local padding = Screen:scaleBySize(4)
@@ -824,33 +836,19 @@ function ComicDetail:createFooter()
     if logger.enabled then logger.info("Picayomi Detail: 阅读入口 resumable=" .. tostring(resumable)
         .. " resume_order=" .. tostring(resume_order)
         .. " episodes=" .. tostring(self:hasEpisodes())) end
-    -- 按钮宽度按"可用内宽"均分, 让整行铺满:
-    -- 旧写法 `floor(width / n) - 3` 会在右侧留一条**点击死区** —— 那条缝没人消费 tap,
-    -- 就会穿透到下层窗口。可用内宽 = 总宽 - 两侧 padding - 两侧边框。
-    local button_count = resumable and 7 or 6
+    -- 按当前文案分配宽度；收藏状态改变时随页面重建，四字动作共用紧凑留白。
     local inner_w = self.width - (padding + Size.border.thin) * 2
-    local button_w = math.floor(inner_w / button_count)
-
-    -- 收藏按钮的文案不是固定的: syncFavoriteLabel 会按收藏状态在「收藏」(两字) /
-    -- 「取消收藏」(四字) 之间切换, 收藏列表入口还用 pinned_label 写死成后者。
-    -- 两者宽度差近一倍 —— 按当前文案均分宽度时, 一旦显示「取消收藏」就会在按钮里
-    -- **折成两行** (用户报的就是这个)。
-    -- 所以按**最长文案**给收藏按钮留够宽度, 多占的宽度从其余按钮均摊扣掉:
-    -- 总宽不变, 整行仍然铺满, 且文案怎么切都不会再折行。
-    local favorite_w = button_w
-    if self.favorite_action then
-        local other_count = button_count - 1
-        local need = buttonWidthForText(_("取消收藏"), button_h)
-        -- 其余按钮的文案都是两字, 至少要装得下 —— 否则只是把折行从收藏挪给了别人
-        local min_other_w = buttonWidthForText(_("开始"), button_h)
-        favorite_w = math.max(button_w, math.min(need, inner_w - other_count * min_other_w))
-        button_w = math.floor((inner_w - favorite_w) / other_count)
+    local specs={}
+    if resumable then specs[#specs+1]={text=_("继续")} end
+    for _,text in ipairs{_("开始"),_("上页"),_("下页"),_("跳页"),favorite_label,_("返回")} do
+        specs[#specs+1]={text=text}
     end
+    local widths=ActionStyle.footerWidths(inner_w,specs,button_h)
 
     local buttons = {}
     if resumable then
         table.insert(buttons, Button:new{
-            text = _("继续"), width = button_w, height = button_h,
+            text = _("继续"), width = widths[1], height = button_h,
             enabled = self:hasEpisodes(),
             callback = function() self:startReading() end,
         })
@@ -859,15 +857,17 @@ function ComicDetail:createFooter()
     -- 所以这里绝不能接 startReading (那条路会按历史/上次页码恢复), 一律走
     -- startReadingFromBeginning -> context.from_beginning -> 打开前清页码。
     table.insert(buttons, Button:new{
-        text = _("开始"), width = button_w, height = button_h,
+        text = _("开始"), width = widths[resumable and 2 or 1], height = button_h,
         enabled = self:hasEpisodes(),
         callback = function() self:startReadingFromBeginning() end,
     })
-    table.insert(buttons, Button:new{ text = _("上页"), width = button_w, height = button_h, callback = function() self:prevScreen() end })
-    table.insert(buttons, Button:new{ text = _("下页"), width = button_w, height = button_h, callback = function() self:nextScreen() end })
-    table.insert(buttons, Button:new{ text = _("跳页"), width = button_w, height = button_h, callback = function() self:showJumpDialog() end })
-    table.insert(buttons, Button:new{ text = favorite_label, enabled = self.favorite_action ~= nil, width = favorite_w, height = button_h, callback = function() self:runFavoriteAction() end })
-    table.insert(buttons, Button:new{ text = _("返回"), width = button_w, height = button_h, callback = function() self:goBack() end })
+    table.insert(buttons, Button:new{ text = _("上页"), width = widths[#buttons+1], height = button_h, callback = function() self:prevScreen() end })
+    table.insert(buttons, Button:new{ text = _("下页"), width = widths[#buttons+1], height = button_h, callback = function() self:nextScreen() end })
+    self.jump_button=Button:new{ text = _("跳页"), width = widths[#buttons+1], height = button_h,
+        enabled=false,callback = function() self:showJumpDialog() end }
+    table.insert(buttons,self.jump_button)
+    table.insert(buttons, Button:new{ text = favorite_label, enabled = self.favorite_action ~= nil, width = widths[#buttons+1], height = button_h, callback = function() self:runFavoriteAction() end })
+    table.insert(buttons, Button:new{ text = _("返回"), width = widths[#buttons+1], height = button_h, callback = function() self:goBack() end })
 
     return FrameContainer:new{
         padding = padding,
@@ -949,16 +949,22 @@ end
 
 function ComicDetail:buildRowSpecs()
     local specs = {}
+    local action_rows = true
     local function add(text, callback, height)
         table.insert(specs, {
             text = text,
             callback = callback,
             height = height or ROW_H,
+            action_button = callback~=nil and action_rows,
+            action_align = "left",
         })
     end
     --- 一行多个动作 (等分宽度). 每一格都是独立可点区, 不是"整行一个回调".
     -- 两格时同时填 pair/left/right: 渲染测试与老用例按这三个字段读这一行。
     local function add_cells(cells, height)
+        for _,cell in ipairs(cells) do
+            if cell.action_button==nil and cell.callback then cell.action_button=true end
+        end
         local spec = { cells = cells, height = height or ROW_H }
         if #cells == 2 then
             spec.pair, spec.left, spec.right = true, cells[1], cells[2]
@@ -1017,8 +1023,22 @@ function ComicDetail:buildRowSpecs()
         end
     end
 
+    local count=self.episodes_data and (self.episodes_data.total or #(self.episodes_data.episodes or {}))
+    local summary=count and T(_("章节列表 · 共 %1 话"),count) or _("章节加载中…")
+    local progress=self:chapterProgressText()
+    if progress then summary=summary.." · "..progress end
+    if not self.offline then
+        local refresh_width=ActionStyle.compactWidth(_("刷新章节"),ROW_H)
+        add_cells({{text=summary,width=(self.width or Screen:getWidth())-refresh_width,section_header=true},
+            {text=self._chapter_refresh_manual and _("刷新中…") or _("刷新章节"),
+                action_button=true,enabled=not self._chapter_refresh_manual,
+                callback=function() self:loadChapters(1,true) end}})
+        specs[#specs].text=summary
+    else
+        add(summary)
+    end
+
     if not self.episodes_data then
-        add(_("章节加载中…"))
         return specs
     end
 
@@ -1031,7 +1051,6 @@ function ComicDetail:buildRowSpecs()
     -- 这里**不显示**「第 N/M 页」: 那是章节接口的分页, 与页脚的「第 N/M 页」
     -- (屏幕分页) 是两个不同的东西, 并排出现时看起来就是"同一个页码两处不一致"。
     -- 页脚那个是准的, 这里只报章节总数。
-    add(T(_("章节列表 · 共 %1 话"), self.episodes_data.total or #episodes))
 
     if (self.episodes_data.page or 1) > 1 then
         add(_("◀ 上一页章节"), function() self:loadChapters((self.episodes_data.page or 1) - 1) end)
@@ -1046,6 +1065,7 @@ function ComicDetail:buildRowSpecs()
             function() self:showChapterJumpDialog() end)
     end
 
+    action_rows=false
     for idx, episode in ipairs(episodes) do
         local current_episode = episode
         local title = current_episode.title or T(_("第%1话"), current_episode.order or idx)
@@ -1089,7 +1109,7 @@ end
 -- 末=第1章), 于是"第一项"其实是最后一章, 「开始」会从最后一章读起。
 -- 排序后 episodes[1] 就是第 1 章, 列表也按 1→N 展示, 与预期一致。
 -- (续读不受影响: 它是按 order 匹配的, 与排列顺序无关)
-function ComicDetail:setEpisodesData(data)
+local function normalizeEpisodesData(data)
     -- Sorting a view must never alter a source response or another open view.
     if type(data)=="table" then data=require("source.contract").copy(data) end
     -- **边界归一**: 调用方可能直接把一个**裸的章节数组**递进来 (ui/reader.lua 的
@@ -1120,7 +1140,11 @@ function ComicDetail:setEpisodesData(data)
             end)
         end
     end
-    self.episodes_data = data
+    return data
+end
+
+function ComicDetail:setEpisodesData(data)
+    self.episodes_data = normalizeEpisodesData(data)
 end
 
 --- 该漫画"接着读"的目标章节 order; 没有阅读历史则返回 nil
@@ -1139,6 +1163,24 @@ function ComicDetail:getResumeOrder()
         return item.episode or item.last_page
     end
     return nil
+end
+
+function ComicDetail:chapterProgressText()
+    local order=self:getResumeOrder()
+    if order==nil then return end
+    for i,episode in ipairs(self.episodes_data and self.episodes_data.episodes or {}) do
+        if tostring(episode.order)==tostring(order) then
+            local title=episode.title
+            if type(title)=="string" and title~="" then return _("上次看到：")..title end
+            return T(_("上次看到第 %1 话"),i)
+        end
+    end
+    if self.comic_model and self.comic_model.getHistoryItem then
+        local ok,item=pcall(self.comic_model.getHistoryItem,self.comic_model,self.comic._id,self.source_id)
+        if ok and item and type(item.episode_title)=="string" and item.episode_title~="" then
+            return _("上次看到：")..item.episode_title
+        end
+    end
 end
 
 function ComicDetail:findInitialEpisode()
@@ -1217,12 +1259,16 @@ end
 function ComicDetail:openReader(episode, opts)
     if not self.offline and not require("ui.common.source_access").check(self.source) then return end
     self.opening_reader = true
+    self:cancelChapterLoad()
+    if self._detail_task then self._detail_task:cancel() end
     local episodes = self.episodes_data and self.episodes_data.episodes or { episode }
     self.comic_model:saveHistory(self.comic._id, self.comic.title, episode.order, self.source_id,
-        { episode_title = episode.title })
+        { episode_title = episode.title, thumb = self.comic.thumb })
     local outer_return = self.on_return_from_reader or self.on_back
     local self_ = self
     local function return_callback()
+        self_.opening_reader=false
+        self_.resume_episode_order=nil -- Prefer the progress saved during this read.
         -- 读完一话回来: 页脚必须**重算一次**。
         --
         -- 详情页在阅读期间是留在窗口栈里的 (0.7.2 起, 它就是返回目标), 返回时
@@ -1254,7 +1300,10 @@ end
 --   同一个, 章节列表会拿 A 源的 id 去问 B 源。
 --   各入口原先各自塞了一份 `fetch_chapters = api.comic:getComicEpisodes`,
 --   恰好把这个隐患写死了, 现已统一删掉、都走这里。
-function ComicDetail:defaultFetchChapters(comic_id, page)
+function ComicDetail:defaultFetchChapters(comic_id, page, context)
+    if self.source and self.source.refreshChapters then
+        return self.source:refreshChapters(comic_id,context)
+    end
     if self.source and self.source.getChapters then
         return self.source:getChapters(comic_id, page)
     end
@@ -1262,10 +1311,97 @@ function ComicDetail:defaultFetchChapters(comic_id, page)
     return comic_api:getComicEpisodes(comic_id, page)
 end
 
-function ComicDetail:loadChapters(page)
+function ComicDetail:cancelChapterLoad()
+    local task=self._chapter_task
+    self._chapter_task=nil
+    if task and task.cancel then task:cancel() end
+    if self._chapter_unwatch then self._chapter_unwatch();self._chapter_unwatch=nil end
+    self.loading_chapters=false
+    self._chapter_refresh_manual=nil
+end
+
+function ComicDetail:loadChapters(page,force)
+    if self._closed or self.opening_reader then return end
     if not self.offline and not require("ui.common.source_access").check(self.source) then return end
-    if self.loading_chapters then return end
+    if self.loading_chapters then
+        -- A manual tap may join an automatic stale-cache check already in flight.
+        if force and not self._chapter_refresh_manual then
+            self._chapter_refresh_manual=true
+            self:refresh();UIManager:forceRePaint()
+        end
+        return
+    end
+    local source=self.source
+    local cached,fresh
+    if not force and not self.fetch_chapters and source and source.peekChapters then
+        cached,fresh=source:peekChapters(self.comic._id)
+        if cached then
+            if not self.episodes_data then self:setEpisodesData(cached);self:refresh() end
+            if fresh then self._chapters_stale=nil;return end
+        end
+    end
     self.loading_chapters = true
+    self._chapter_refresh_manual=force==true
+    local background=self.episodes_data~=nil
+    if force and background then self:refresh();UIManager:forceRePaint() end
+    local generation=source and source.sessionGeneration and source:sessionGeneration()
+    local started=require("socket").gettime()
+    local timeout=60
+    local function cancelled()
+        return self._closed or self.opening_reader
+            or generation and source:sessionGeneration()~=generation
+    end
+    local function complete(ok,episodes_data,err)
+        if logger.enabled then logger.dbg("Picayomi chapters: source",self.source_id or "unknown","ok",ok,"elapsed",math.floor(require("socket").gettime()-started)) end
+        local manual=self._chapter_refresh_manual
+        self._chapter_refresh_manual=nil
+        self.loading_chapters=false
+        if self._chapter_unwatch then self._chapter_unwatch();self._chapter_unwatch=nil end
+        if cancelled() then return end
+        if ok and episodes_data then
+            episodes_data=normalizeEpisodesData(episodes_data)
+            local changed=true
+            if source and source.peekChapters and self.episodes_data then
+                local diff=require("util.chapter_cache").diff(
+                    {items=self.episodes_data.episodes or {}},{items=episodes_data.episodes or {}})
+                changed=diff.different
+            end
+            self._chapters_stale=nil
+            if changed then self.episodes_data=episodes_data end
+            if changed or manual then self:refresh() end
+            if manual then
+                local total=episodes_data.total or #(episodes_data.episodes or {})
+                UIManager:show(InfoMessage:new{
+                    text=changed and T(_("章节已更新，共 %1 话"),total)
+                        or T(_("章节已是最新，共 %1 话"),total),timeout=2,
+                },"ui")
+            end
+        else
+            if manual and self.episodes_data then self:refresh() end
+            UIManager:show(InfoMessage:new{
+                text=T(manual and _("刷新章节失败: %1") or _("获取章节列表失败: %1"),require("ui.common.error_message").describe(err))
+                    ..(background and _("\n已保留原有章节，可点击“刷新章节”重试。") or ""),timeout=3,
+            },"ui")
+            if not self.episodes_data then
+                self:setEpisodesData({episodes={},page=1,pages=1,total=0});self:refresh()
+            end
+        end
+    end
+    local function fetch()
+        local context={deadline=started+timeout,isCancelled=cancelled}
+        local fn=self.fetch_chapters or function(id,target_page) return self:defaultFetchChapters(id,target_page,context) end
+        return fn(self.comic._id,page or 1)
+    end
+    if source and source.watchSession then
+        self._chapter_unwatch=source:watchSession(function() self:cancelChapterLoad() end)
+    end
+    local function on_cancel()
+        local manual=self._chapter_refresh_manual
+        self._chapter_refresh_manual=nil
+        self.loading_chapters=false
+        if self._chapter_unwatch then self._chapter_unwatch();self._chapter_unwatch=nil end
+        if manual and background and not self._closed and not self.opening_reader then self:refresh() end
+    end
     -- LoadingTask 负责"显示提示 → 延迟一拍 → 取数 → 关提示", 并且**取数抛异常时也关**。
     -- 抛异常时若走不到 close(loading), 后果有两重:
     --   1. "加载漫画章节..." 永久盖在屏幕上;
@@ -1273,31 +1409,24 @@ function ComicDetail:loadChapters(page)
     --      `if self.loading_chapters then return end` —— 之后每次进详情页都直接返回,
     --      章节列表永远出不来 (用户看到的就是"点了没反应")。
     -- 所以复位交给 set_busy: 它在取数之后**无条件**执行, 不依赖任何分支。
-    LoadingTask.run{
-        message = _("加载漫画章节..."),
+    if background then
+        self._chapter_task=LoadingTask.background(nil,function() complete(fetch()) end,{
+            delay=0.1,is_cancelled=cancelled,timeout=timeout,
+            on_cancel=on_cancel,
+            on_error=function(err) complete(false,nil,err) end,
+        })
+        return
+    end
+    self._chapter_task=LoadingTask.run{
+        message = _("加载漫画章节…\n点击取消，最多等待 60 秒"),
         delay = 0.1,
-        fetch = function()
-            local fetch = self.fetch_chapters or function(comic_id, target_page)
-                return self:defaultFetchChapters(comic_id, target_page)
-            end
-            return fetch(self.comic._id, page or 1)
-        end,
+        async = true,
+        timeout = timeout,
+        is_cancelled = cancelled,
+        fetch = fetch,
         set_busy = function(v) self.loading_chapters = v end,
-        on_done = function(ok, episodes_data, err)
-            if ok and episodes_data then
-                self:setEpisodesData(episodes_data)
-                self:refresh()
-            else
-                UIManager:show(InfoMessage:new{
-                    text = T(_("获取章节列表失败: %1"), require("ui.common.error_message").describe(err)),
-                    timeout = 3,
-                }, "ui")
-                if not self.episodes_data then
-                    self:setEpisodesData({ episodes = {}, page = 1, pages = 1, total = 0 })
-                end
-                self:refresh()
-            end
-        end,
+        on_cancel = on_cancel,
+        on_done = complete,
     }
 end
 
@@ -1498,7 +1627,7 @@ function ComicDetail:syncFromSource()
 
     local ok, detail = source:getComicDetail(c._id)
     if not ok or type(detail) ~= "table" then return end
-    if self.closing_by_back then return end            -- 页面已经关了就别动
+    if self._closed or self.closing_by_back or self.opening_reader then return end
 
     local changed = self:mergeDetail(detail)
 
@@ -1871,6 +2000,8 @@ end
 function ComicDetail:onCloseWidget()
     -- 先落标记: 之后的异步封面回调据此放弃刷新死控件 (见 loadCover)
     self._closed = true
+    self:cancelChapterLoad()
+    if self._detail_task then self._detail_task:cancel() end
     -- 本页被任何路径关掉 (返回 / 清扫 / 换章) 时, 放大层与简介全文不能留下
     self:closeCoverZoom()
     self:closeTitleViewer()

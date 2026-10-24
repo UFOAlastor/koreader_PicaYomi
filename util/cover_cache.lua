@@ -14,7 +14,7 @@
 --     * 真正的 HTTP + DNS + 源侧后处理都在**子进程**里;
 --     * 主线程每 TICK 只做一次 ioctl + read (收帧) 和一次 write (派活), 不阻塞。
 --
--- 通道是**共享**的: 整进程一个, 因为封面之间没有优先级差异, 串行最省带宽与内存
+-- 通道是共享的：整进程一个图片 worker，最多两路下载，减少单张慢图的阻塞。
 -- 阅读时暂停，退出阅读后恢复；平时空闲五秒后关闭，避免每张封面重新 fork。
 
 local logger = require("util.logger")
@@ -23,6 +23,7 @@ local UIManager = require("ui/uimanager")
 local Cache = require("util.cache")
 local DownloadManager = require("network.download_manager")
 local TransportWorker = require("network.transport_worker")
+local Diag = require("util.diag")
 
 local CoverCache = {}
 
@@ -33,7 +34,7 @@ local TICK = 0.05
 
 -- 单张封面的下载超时 (秒)。
 --
--- 比阅读页 (20s) 短: 封面是缩略图, 而且整个通道串行 —— 一张卡住会拖住后面所有封面。
+-- 比阅读页 (20s) 短：封面是缩略图，两路下载也不让失效图片长时间占住通道。
 -- 现在超时期间界面照常响应, 所以这里取的是"别让一张破图占着通道太久"。
 local COVER_TIMEOUT = 8
 
@@ -51,7 +52,7 @@ local pauses = {}
 local function new_transport(source)
     return TransportWorker.new{source=source,fix_extension=function(path)
         return DownloadManager.fixImageExtension(path)
-    end,timeout=COVER_TIMEOUT,tag="cover"}
+    end,timeout=COVER_TIMEOUT,tag="cover",max_inflight=2,async=true}
 end
 
 local function safeName(value)
@@ -193,6 +194,11 @@ function pump(ch)
         local job = ch.jobs[item.page]
         ch.jobs[item.page] = nil
         if job then
+            if Diag.enabled then
+                Diag.mark(string.format("cover source=%s ok=%s elapsed=%.2fs bytes=%d",
+                    tostring(ch.source and ch.source.identifier or "unknown"),tostring(item.ok),
+                    tonumber(item.elapsed) or 0,tonumber(item.size) or 0))
+            end
             if item.ok then
                 pcall(job.finish, item.path)
             else

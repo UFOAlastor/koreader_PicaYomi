@@ -8,7 +8,7 @@
 -- 交互: 点一行切换勾选; 「全选本页」批量切换; 「开始下载」把勾选的章节
 -- 交给 util/download_queue。已下载的章节显示 ✓ 且不可重复勾选。
 local Device = require("device")
-local Menu = require("ui/widget/menu")
+local Menu = require("ui.common.action_style").Menu
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
@@ -128,6 +128,9 @@ function DownloadSelect:buildItemTable()
     table.insert(items, {
         text = T(_("▶ 开始下载（已选 %1 话）"), self:selectedCount()),
         bold = true,
+        picayomi_primary = true,
+        enabled = self:selectedCount()>0,
+        select_enabled = self:selectedCount()>0,
         callback = function() self:startDownload() end,
     })
     table.insert(items, {
@@ -165,6 +168,7 @@ function DownloadSelect:buildItemTable()
         local text = T(_("%1 %2"), mark, self:chapterLabel(ep))
         table.insert(items, {
             text = text,
+            picayomi_list_item = true,
             -- 缩进: 章节是"列表项", 与上面的操作行拉开层级 (与目录树同一套机制)
             indent = indent,
             -- 已勾选的加粗: 一屏里十几行, 靠字重比靠 [已选] 两个字更快扫到

@@ -333,7 +333,7 @@ function DownloadManager:trimReadingCache(keep_chapters, protect_comic_id, prote
     return removed
 end
 
---- 按总量上限清理整个缓存 (封面/阅读页/数据/CBZ 统一统计)
+--- 按总量上限清理可再生缓存，下载内容不参与统计或淘汰
 --
 -- **淘汰顺序 (分层)**: 临时文件 / 封面 (1) -> 阅读页 (2) -> 数据 (3), 同层内
 -- 最旧的先删。这是用户约定的策略: 缓存满时优先清**历史最早**的图片, 因为

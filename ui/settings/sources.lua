@@ -1,6 +1,6 @@
 local Base = require("ui.settings.base")
 local UIManager = require("ui/uimanager")
-local InputDialog = require("ui/widget/inputdialog")
+local InputDialog = require("ui.common.action_style").InputDialog
 local Manager = require("source.extensions.manager")
 local Sources = Base:new{ name = "source_settings" }
 
@@ -34,7 +34,7 @@ function Sources:reload(redraw)
     redraw()
 end
 
-function Sources:perform(fn, message)
+function Sources:perform(fn, message, fallback_redraw)
     require("source.extensions.updater").cancel()
     if self.task and not self.task.done then return end
     local owner = self.manager and self.manager.current_menu
@@ -49,7 +49,7 @@ function Sources:perform(fn, message)
         assert(result, reason or "操作失败")
         Loading.close(hint)
         if not self.manager or self.manager.current_menu == owner then
-            local redraw = self.next_view or (owner and owner._extensions_redraw)
+            local redraw = self.next_view or (owner and owner._extensions_redraw) or fallback_redraw
             self.next_view = nil
             -- Refreshing the menu must not cancel the completed operation.
             self.task = nil
@@ -73,6 +73,7 @@ function Sources:changeSource(fn)
 end
 
 function Sources:offerRestart(message)
+    require("source.extensions.updater").acknowledgePending()
     local text=message or "源变更将在重启 KOReader 后生效"
     if not require("device"):canRestart() then return self:showInfo(text) end
     UIManager:show(self:createConfirmBox{
@@ -113,8 +114,19 @@ end
 
 function Sources:show()
     local m = Manager.instance()
+    local count=0
+    for _ in pairs(m.state.repositories) do count=count+1 end
     local items = {
-        { text = "订阅管理", callback = function() self:repositories() end },
+        { text = "更新漫画源（全部订阅）", callback = function() self:updateSubscriptions() end },
+        { text = "管理订阅", mandatory=tostring(count).." 个", callback = function() self:repositories() end },
+        { text = "自动检查更新", mandatory_func=function() return m.state.auto_check and "开启" or "关闭" end,
+            callback = function()
+                self:perform(function()
+                    local ok=m:setPolicy(nil,"auto_check",not m.state.auto_check)
+                    if m.state.auto_check then require("source.extensions.updater").schedule() end
+                    return ok
+                end,"检查策略已保存")
+            end },
     }
     local Error=require("ui.common.error_message")
     if m.state_error then items[#items + 1] = { text = Error.describe(m.state_error), enabled = false } end
@@ -204,9 +216,7 @@ end
 
 function Sources:repositories()
     local m = Manager.instance()
-    local items = { { text = "自动检查更新：" .. (m.state.auto_check and "开启" or "关闭"), callback = function()
-        self:perform(function() return m:setPolicy(nil, "auto_check", not m.state.auto_check) end, "检查策略已保存")
-    end }, { text = "添加订阅", callback = function()
+    local items = { { text = "添加订阅", callback = function()
         self:input("HTTPS 订阅地址", "", function(url)
             self:perform(function()
                 m:addRepository(url)
@@ -279,32 +289,65 @@ function Sources:updateRepository(url)
     m:acceptRepository(url,preview,not repo.public_key and true or nil)
     local results=m:updateAll(url,false,true)
     local lines={}
+    local stats={updated=0,failed=0,skipped=0}
+    local attempted={}
     for _,r in ipairs(results) do
+        attempted[r.id]=true
         local rec=m.state.sources[r.id]
         if r.ok then
+            stats.updated=stats.updated+1
             lines[#lines+1]="更新成功："..(rec and rec.manifest.name or r.id).." "..(rec and rec.manifest.version or "")
         else
+            stats.failed=stats.failed+1
             lines[#lines+1]="更新失败："..r.id.." — "..require("ui.common.error_message").describe(r.error)
         end
     end
-    if #results==0 then
-        local seen={}
-        for _,entry in ipairs(m.state.repositories[url].sources or {}) do
-            if not seen[entry.id] then
-                seen[entry.id]=true
-                local status=m:candidate(url,entry.id)
-                if status.code~="latest" then
-                    lines[#lines+1]=(entry.name or entry.id).."："..status.label
-                end
+    local seen={}
+    for _,entry in ipairs(m.state.repositories[url].sources or {}) do
+        if not seen[entry.id] and not attempted[entry.id] then
+            seen[entry.id]=true
+            local status=m:candidate(url,entry.id)
+            if status.code~="latest" then
+                stats.skipped=stats.skipped+1
+                lines[#lines+1]=(entry.name or entry.id).."："..status.label
             end
         end
-        return true,#lines>0 and ("本次未安装或更新漫画源\n"..table.concat(lines,"\n")) or "漫画源已是最新，无需更新"
     end
-    local restart=false
-    for _,r in ipairs(results) do
-        if r.ok then restart=true;lines[#lines+1]="成功更新的漫画源将在重启 KOReader 后生效"; break end
+    if #results==0 then
+        return true,#lines>0 and ("本次未安装或更新漫画源\n"..table.concat(lines,"\n")) or "漫画源已是最新，无需更新",false,stats
     end
-    return true,table.concat(lines,"\n"),restart
+    return true,table.concat(lines,"\n"),stats.updated>0,stats
+end
+
+function Sources:updateSubscriptions(redraw)
+    self:perform(function() return self:updateRepositories() end,nil,redraw)
+end
+
+function Sources:updateRepositories()
+    local m=Manager.instance()
+    local urls={}
+    for url in pairs(m.state.repositories) do urls[#urls+1]=url end
+    table.sort(urls)
+    if #urls==0 then return true,"还没有订阅，请到源管理中添加订阅" end
+    local updated,failed,skipped,repo_failed=0,0,0,0
+    local lines={}
+    for _,url in ipairs(urls) do
+        local name=m.state.repositories[url].name or "订阅"
+        local ok,result,message,_,stats=pcall(self.updateRepository,self,url)
+        if ok and result then
+            updated=updated+stats.updated;failed=failed+stats.failed;skipped=skipped+stats.skipped
+            lines[#lines+1]=name.."："..message
+        else
+            repo_failed=repo_failed+1
+            lines[#lines+1]=name.."：检查失败 — "..require("ui.common.error_message").describe(ok and message or result)
+        end
+    end
+    local summary="已检查 "..#urls.." 个订阅，更新 "..updated.." 个源"
+    if failed>0 then summary=summary.."，更新失败 "..failed.." 个源" end
+    if skipped>0 then summary=summary.."，跳过 "..skipped.." 个源" end
+    if repo_failed>0 then summary=summary.."，检查失败 "..repo_failed.." 个订阅" end
+    if updated>0 then summary=summary.."\n成功更新的漫画源将在重启 KOReader 后生效" end
+    return true,summary.."\n\n"..table.concat(lines,"\n"),updated>0
 end
 
 return Sources

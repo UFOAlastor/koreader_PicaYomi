@@ -12,8 +12,8 @@ local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
-local ButtonDialog = require("ui/widget/buttondialog")
-local ConfirmBox = require("ui/widget/confirmbox")
+local ButtonDialog = require("ui.common.action_style").ButtonDialog
+local ConfirmBox = require("ui.common.action_style").ConfirmBox
 local Screen = Device.screen
 local _ = require("gettext")
 local T = require("ffi/util").template
@@ -98,6 +98,8 @@ function Downloads:show(return_callback)
         if e.download_state == "downloading" then downloading = downloading + 1 end
         retryable = retryable + #OfflineLibrary.failedChapters(e.source_id, e._id)
     end
+    self._retry_available = retryable > 0
+    self._downloading_count = downloading
 
     -- 标题直接写清"有几章在下", 用户一眼知道这里是下载中的列表
     local list_title = downloading > 0
@@ -156,7 +158,14 @@ function Downloads:syncProgress()
     if not self.list or self.list._closed then return false, {} end
     local fresh = OfflineLibrary.list()
     local map = {}
-    for _i, e in ipairs(fresh) do map[key_of(e)] = e end
+    local retryable, downloading = false, 0
+    for _i, e in ipairs(fresh) do
+        map[key_of(e)] = e
+        if e.download_state == "downloading" then downloading = downloading + 1 end
+        if #OfflineLibrary.failedChapters(e.source_id, e._id) > 0 then retryable = true end
+    end
+    local controls_changed = retryable ~= self._retry_available
+        or downloading ~= self._downloading_count
 
     local changed = false
     local changed_ids = {}
@@ -165,11 +174,13 @@ function Downloads:syncProgress()
         if e then
             local pct = e.download_progress or 0
             if e.download_state ~= comic.download_state
+                or e.download_preparing ~= comic.download_preparing
                 or math.abs(pct - (comic.download_progress or 0)) >= 0.005 then
                 changed = true
                 changed_ids[comic._id] = true
             end
             comic.download_state = e.download_state
+            comic.download_preparing = e.download_preparing
             comic.download_progress = pct
             comic.download_done = e.download_done
             comic.download_total = e.download_total
@@ -178,8 +189,8 @@ function Downloads:syncProgress()
     end
     -- 新增/删除的条目: 整页重来 (数量变化很少发生, 值得一次重建)
     local count_changed = (#fresh ~= #self.list.buffer)
-    if count_changed then changed = true end
-    return changed, changed_ids, count_changed
+    if count_changed or controls_changed then changed = true end
+    return changed, changed_ids, count_changed or controls_changed
 end
 
 --- 本页当前是否是最上层 (详情页/对话框盖在上面时不要刷它)
@@ -192,17 +203,17 @@ end
 function Downloads:refreshList(list, force)
     list = list or self.list
     if not list or list._closed then return end
-    local changed, changed_ids, count_changed = self:syncProgress()
-    if not force and not changed then return end
     -- 被详情页/对话框盖住时不要 setDirty: 刷新一个不在顶层的控件会作用到
-    -- 当前画面上 (e-ink 上就是闪一块/花屏)。回到本页时 timer 会补一次。
+    -- 当前画面上。也不要提前消耗变化，回到本页时 timer 会补一次。
     if not self:isTop() then return end
-    if count_changed then
-        -- 条目数变了 (下载中新加入/删除): 必须重建整页 —— 只刷已有行的话
-        -- 新条目不会出现, 页脚(重试失败)也可能与当前状态不一致。
+    local changed, changed_ids, page_changed = self:syncProgress()
+    if not force and not changed then return end
+    if page_changed then
+        -- 条目、标题计数或重试入口变化时重建；普通进度仍只刷新对应行。
         self:reloadPage()
         return
     end
+    if force then list:renderWindow(false);return end
     -- 只刷新**变化了的**可见行: 下载中每 1.5 秒整屏重绘在电子墨水屏上
     -- 就是持续闪动; 没变化的行也不该重建控件。
     list:refreshVisible(changed_ids)
@@ -214,6 +225,11 @@ function Downloads:startTimer()
     UIManager:scheduleIn(self.refresh_interval, function()
         self._timer = false
         if self._closed or not self.list or self.list._closed then return end
+        if not self:isTop() then
+            -- 下载可能在弹窗/详情背后结束，返回列表后仍须补上最终状态。
+            self:startTimer()
+            return
+        end
         local q = self.queue or DownloadQueue.instance()
         local active = q and q:is_active()
         if active then
@@ -305,9 +321,12 @@ end
 --- 整页重来 (条目数变化/页脚需要重建时)
 function Downloads:reloadPage()
     local cb = self.return_callback
+    local screen = self.list and self.list.screen_index or 1
     self._closed = false
     -- 不在这里关旧列表: show 内部会先建新列表再关旧的 (见其注释)
-    self:show(cb)
+    if self:show(cb) and self.list and screen > 1 then
+        self.list:jumpToScreen(math.min(screen,self.list:loadedScreens()))
+    end
 end
 
 --- 重试后整屏重画一次
@@ -318,8 +337,7 @@ end
 function Downloads:repaintAfterRetry()
     if not self.list or self.list._closed then return end
     if not self:isTop() then return end
-    self:syncProgress()          -- 先把新的 downloading 状态抄进 buffer
-    self.list:renderWindow(false)
+    self:refreshList(nil,true)
 end
 
 --- 打开一部已下载漫画的详情
@@ -521,14 +539,16 @@ function Downloads:deleteDownload(entry)
         end)
         if not ok then
             logger.warn("Picayomi Downloads: 取消下载任务失败: " .. tostring(err))
+            UIManager:show(InfoMessage:new{text=_("停止下载失败，未删除文件，请重试。"),timeout=3},"ui")
+            return false
         end
     end
 
     -- 2) 删图片 + 清单
-    local ok = OfflineLibrary.remove(sid, cid)
+    local ok,remove_error = OfflineLibrary.remove(sid, cid)
     if not ok then
         UIManager:show(InfoMessage:new{
-            text = T(_("删除失败：《%1》不在已下载清单里"), entry.title or cid),
+            text = T(_("删除未能完成：%1"),require("ui.common.error_message").describe(remove_error,_("该漫画不在下载清单中。"))),
             timeout = 3,
         }, "ui")
         return false

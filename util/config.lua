@@ -28,8 +28,8 @@ end
 -- 内存缓存
 --
 -- 原来每次 get 都 io.open + read("*all") + json.decode 整个 config.json。
--- 这个文件是"单体"的 —— 除了设置项, 还装着 history(每源≤50) 与
--- local_favorites(每源≤500), 可以到几百 KB。而 get 的调用密度极高:
+-- 这个文件是"单体"的 —— 除了设置项, 还装着持久化 history 与
+-- local_favorites, 可以到几百 KB。而 get 的调用密度极高:
 --   · 翻页路径每页 ≥2 次 (stream_reader.lua prefetch_count)
 --   · 每下载一张图 1 次 (source/picacg/headers.lua)
 --   · 每次 源 B 元数据请求 1 读 + 1 写 (source/jm/api.lua rememberDomain)
@@ -94,15 +94,23 @@ local function saveConfig(config)
         return false
     end
 
-    local f = io.open(CONFIG_FILE, "w")
+    -- Preserve the last complete settings/history file on write/close failure.
+    local temporary = CONFIG_FILE .. ".tmp"
+    local f = io.open(temporary, "w")
     if not f then
         logger.err("Picayomi Config: 无法打开配置文件进行写入")
         invalidateConfig()
         return false
     end
 
-    f:write(encoded)
-    f:close()
+    local written = f:write(encoded)
+    local closed = f:close()
+    if not written or not closed or not os.rename(temporary, CONFIG_FILE) then
+        os.remove(temporary)
+        logger.err("Picayomi Config: 保存失败，保留原有数据")
+        invalidateConfig()
+        return false
+    end
 
     -- 直接刷新缓存而不是靠 mtime: 同一秒内连写两次时 mtime 可能不变,
     -- 那样下一次 get 会读到旧内容。

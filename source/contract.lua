@@ -293,6 +293,21 @@ function C.list(value,kind,legacy,opts)
         out.has_more=value.has_more; out.next=C.context(value.next); out.total=value.total
         if out.has_more and (not out.next or not next(out.next)) then invalid("list.next","续页数据缺失") end
         if not out.has_more and out.next~=nil then invalid("list.next","结束列表不能携带续页数据") end
+        if value.pagination~=nil then
+            local p=value.pagination
+            if kind~="manga" or type(p)~="table" or p.mode~="page" then invalid("list.pagination","页码分页声明无效") end
+            for _,key in ipairs({"page","pages","page_size"}) do
+                local n=p[key]
+                local limit=key=="page_size" and C.MAX_ITEMS or 1000000
+                if type(n)~="number" or n<1 or n%1~=0 or n>limit then invalid("list.pagination."..key,"分页范围无效") end
+            end
+            if p.page>p.pages or #out.items>p.page_size or out.has_more~=(p.page<p.pages)
+                or out.has_more and out.next.page~=p.page+1 then invalid("list.pagination","分页声明与结果不一致") end
+            for key in pairs(out.next or {}) do
+                if key~="page" then invalid("list.pagination","页码分页不能依赖额外游标") end
+            end
+            out.pagination={mode="page",page=p.page,pages=p.pages,page_size=p.page_size}
+        end
     end
     if out.total~=nil and (type(out.total)~="number" or out.total<0 or out.total%1~=0) then invalid("list.total","列表总数无效") end
     return out

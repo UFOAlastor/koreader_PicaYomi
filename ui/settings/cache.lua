@@ -30,10 +30,13 @@ function CacheSettings:show()
     -- images 桶已排除 covers (见 getSizeBreakdown), 不用再扣
     local image_size = sizes.images or 0
     local data_size = sizes.data or 0
+    local download_size = sizes.downloads or 0
+    local temp_size = sizes.temp or 0
+    local other_size = sizes.others or 0
 
     local items = {
         {
-            text = T(_("当前缓存大小: %1 MB"), to_mb(total)),
+            text = T(_("占用的存储空间: %1 MB"), to_mb(total)),
             enabled = false,
             select_enabled = false,
         },
@@ -48,10 +51,22 @@ function CacheSettings:show()
             select_enabled = false,
         },
         {
-            text = T(_("最大缓存容量: %1 MB"), self:safeConfigGet("max_cache_size", 500)),
+            text = T(_("临时: %1 MB · 其他: %2 MB"), to_mb(temp_size), to_mb(other_size)),
+            enabled = false, select_enabled = false,
+        },
+        {
+            text = T(_("已下载: %1 MB（清缓存时保留）"), to_mb(download_size)),
+            enabled = false, select_enabled = false,
+        },
+        {
+            text = _("最大缓存容量（不含已下载）"),
+            mandatory_func = function() return T(_("%1 MB"),self:safeConfigGet("max_cache_size",500)) end,
             callback = function()
                 self:setMaxCacheSize()
             end,
+        },
+        {
+            text=_("仅自动清理缓存；下载内容需手动删除"),enabled=false,select_enabled=false,
         },
         {
             text = _("清除封面/阅读缓存"),
@@ -65,10 +80,14 @@ function CacheSettings:show()
                 self:clearAllCache()
             end,
         },
+        {
+            text=_("清空所有已下载"),
+            callback=function() self:clearDownloads() end,
+        },
         self:createBackButton(),
     }
 
-    local menu = self:createMenu(_("缓存管理"), items)
+    local menu = self:createMenu(_("存储管理"), items)
     self:showMenu(menu)
 end
 
@@ -118,7 +137,7 @@ end
 
 function CacheSettings:clearAllCache()
     local confirm_box = self:createConfirmBox{
-        text = _("确定要清除所有缓存吗？这将包括图片和漫画信息缓存。"),
+        text = _("确定要清除所有缓存吗？将清除图片和章节目录等漫画信息缓存。阅读历史、进度、收藏、账号和已下载内容会保留。"),
         ok_callback = function()
             local success, cleared = pcall(function()
                 return self.cache:clearAllCache()
@@ -136,6 +155,25 @@ function CacheSettings:clearAllCache()
     }
 
     UIManager:show(confirm_box, "ui")
+end
+
+function CacheSettings:clearDownloads()
+    UIManager:show(self:createConfirmBox{
+        text=_("确定清空所有已下载吗？\n所有漫画源的下载文件和未完成下载都会删除，无法恢复。阅读历史、进度、收藏和账号会保留。"),
+        ok_text=_("清空"),cancel_text=_("取消"),
+        ok_callback=function()
+            local Loading=require("ui.common.loading_task")
+            local notice=require("ui/widget/infomessage"):new{text=_("正在停止任务并清空所有已下载…")}
+            UIManager:show(notice,"ui");UIManager:forceRePaint()
+            local ok,result,err=Loading.call(notice,function()
+                require("util.download_queue").instance():cancel("清空所有已下载")
+                return true,require("util.offline_library").clearAll()
+            end)
+            if not ok then self:showError(err);return end
+            self:showInfo(T(_("已清空 %1 部下载，释放 %2 MB"),result.comics,to_mb(result.bytes)))
+            self:refresh()
+        end,
+    },"ui")
 end
 
 return CacheSettings

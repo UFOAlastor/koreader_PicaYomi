@@ -2,6 +2,7 @@
 -- owns buttons; the remaining pages keep lightweight layout descriptions.
 local Blitbuffer = require("ffi/blitbuffer")
 local Button = require("ui/widget/button")
+local ActionStyle = require("ui.common.action_style")
 local Device = require("device")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
@@ -120,7 +121,7 @@ function Cloud:renderPage()
                 -- Button.height is the label height, excluding padding/border.
                 height = self.row_height - 2 * (padding_v + Size.border.thin),
                 padding_h = self.label_padding, padding_v = padding_v,
-                bordersize = Size.border.thin, radius = math.floor(self.row_height / 2),
+                bordersize = Size.border.thin, radius = ActionStyle.RADIUS,
                 text_font_size = Theme.face("row").orig_size, text_font_bold = false,
                 avoid_text_truncation = false, show_parent = self,
                 callback = function() if self.on_select then self.on_select(item.category) end end,
@@ -136,6 +137,7 @@ function Cloud:renderPage()
     self.page_text:setText(T(_("%1 个分类 · 第 %2/%3 页"), #self.categories, self.page, self.page_num))
     self.prev_button:enableDisable(self.page > 1)
     self.next_button:enableDisable(self.page < self.page_num)
+    self.jump_button:enableDisable(self.page_num>1)
 end
 
 function Cloud:goToPage(page)

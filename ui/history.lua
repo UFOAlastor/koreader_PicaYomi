@@ -19,6 +19,7 @@ local logger = require("util.logger")
 local ComicDetail = require("ui.common.comic_detail")
 local VisualComicList = require("ui.common.visual_comic_list")
 local WidgetSweep = require("util.widget_sweep")
+local Diag = require("util.diag")
 
 local History = WidgetContainer:extend{
     name = "picayomi_history",
@@ -104,6 +105,7 @@ function History.formatTime(item)
 end
 
 function History:showHistoryList()
+    local source, source_id = self.source, self.source_id
     -- 刷新 (清空 / 删除后重新加载) 时旧列表要收掉: 否则会在栈里叠出两份长得
     -- 一模一样的列表, 之后按「返回」只弹掉上面一份, 屏幕看着毫无变化 ——
     -- 用户看到的就是"点了没反应" (与主页/详情页踩过的是同一个坑)。
@@ -120,13 +122,14 @@ function History:showHistoryList()
         return
     end
 
-    -- 历史记录没有封面/作者字段, 映射成列表可显示的漫画条目
+    -- 封面地址属于持久元数据，图片仍走可清理的封面缓存。
     local comics = {}
     for _idx, item in ipairs(self.history_list) do
         local time_str = self.formatTime(item)
         table.insert(comics, {
             _id = item.id,
             title = item.title,
+            thumb = item.thumb,
             author_text = time_str,
             categories_text = History.progressText(item),
             _history = item,
@@ -143,6 +146,24 @@ function History:showHistoryList()
     self.history_menu = VisualComicList:new{
         title = title,
         comics = comics,
+        source = self.source,
+        source_id = self.source_id,
+        -- 旧记录没有地址时，只为当前可见行异步补详情；不开整段历史扫描。
+        resolve_cover = function(comic)
+            if not source or type(source.getComicDetail) ~= "function"
+                    or not require("ui.common.source_access").check(source, nil, true) then return nil, "failed" end
+            local started = Diag.enabled and require("socket").gettime()
+            local ok, detail = source:getComicDetail(comic._id)
+            if Diag.enabled then
+                Diag.mark(string.format("history cover metadata source=%s ok=%s elapsed=%.2fs",
+                    tostring(source_id),tostring(ok),require("socket").gettime()-started))
+            end
+            if not ok or type(detail) ~= "table" then return nil, "failed" end
+            local thumb = ok and type(detail) == "table" and detail.thumb
+            if type(thumb) ~= "string" or thumb == "" then return nil, "missing" end
+            self.comic_model:updateHistoryCover(comic._id, source_id, thumb)
+            return thumb
+        end,
         -- 历史记录全部在本地, 没有可补的下一页
         has_more = false,
         on_select = function(comic)

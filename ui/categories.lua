@@ -2,7 +2,7 @@ local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local ButtonDialog = require("ui/widget/buttondialog")
+local ButtonDialog = require("ui.common.action_style").ButtonDialog
 local _ = require("gettext")
 local T = require("ffi/util").template
 local FavoriteActions = require("util.favorites")
@@ -161,7 +161,7 @@ end
 
 -- 处理分类长按
 function Categories:onCategoryHold(category)
-    local ButtonDialog = require("ui/widget/buttondialog")
+    local ButtonDialog = require("ui.common.action_style").ButtonDialog
 
     local buttons = {
         {

@@ -1,5 +1,5 @@
 local BaseSettingsModule = require("ui.settings.base")
-local ButtonDialog = require("ui/widget/buttondialog")
+local ButtonDialog = require("ui.common.action_style").ButtonDialog
 local QrInfo = require("ui.common.qr_info")
 local MenuStyle = require("ui.common.menu_style")
 local UIManager = require("ui/uimanager")
@@ -146,7 +146,7 @@ function AboutSettings:show()
             local now=os.time()
             self._license_taps=(self._license_time and now-self._license_time<=3) and self._license_taps+1 or 1
             self._license_time=now
-            if self._license_taps==5 then
+            if self._license_taps==3 then
                 self._license_taps=0
                 self:showQr(self.LINKS.sources, _("PicaYomi 漫画源仓库"))
             end

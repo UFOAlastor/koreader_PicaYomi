@@ -159,8 +159,9 @@ function M.save(force)
         logger.warn("Picayomi OfflineLibrary: 无法写入 " .. tmp)
         return false
     end
-    f:write(text)
-    f:close()
+    local written=f:write(text)
+    local closed=f:close()
+    if not written or not closed then os.remove(tmp);return false end
     -- 同目录 rename 在 POSIX 上是原子替换, 不需要先删旧文件 ——
     -- 先删会留下"清单暂时不存在"的窗口 (此刻崩溃就丢光历史)。
     local ok = os.rename(tmp, M.DATA_FILE)
@@ -583,6 +584,9 @@ function M.list(source_id)
                 comic._id = tostring(cid)
                 comic.source_id = tostring(sid)
                 comic.download_state = state
+                for _,chapter in pairs(entry.chapters or {}) do
+                    if chapter.state=="preparing" then comic.download_preparing=true;break end
+                end
                 comic.download_progress = M.progress(entry)
                 comic.download_done = done
                 comic.download_total = total
@@ -626,18 +630,51 @@ function M.remove(source_id, comic_id)
             end
             lfs.rmdir(M.comicDir(source_id, comic_id))
         end)
+        if lfs.attributes(M.comicDir(source_id,comic_id),"mode")=="directory" then
+            return false,"部分下载文件未能删除，请重试"
+        end
         local data = M.load()
         local sid = tostring(source_id or "unknown")
         if data.comics[sid] then data.comics[sid][tostring(comic_id)] = nil end
-        M.save(true)
+        if not M.save(true) then
+            data.comics[sid]=data.comics[sid] or {};data.comics[sid][tostring(comic_id)]=entry
+            return false,"下载文件已删除，但清单保存失败，请重试"
+        end
         return true
     end
     return false
 end
 
---- 重启后把"上次没下完"的状态归为 partial (调用方: main.lua 启动时)
---
--- 不归零进度: 已经落盘的页还在, 用户点"继续下载"可以接着下。
+-- Caller must stop the download queue before purging its persistent files.
+function M.clearAll()
+    local data=M.load()
+    assert(not M.load_error,"下载清单损坏，无法清空")
+    local count,bytes=0,0
+    for _,bucket in pairs(data.comics or {}) do for _ in pairs(bucket) do count=count+1 end end
+    local function clear(path)
+        local attr=(lfs.symlinkattributes or lfs.attributes)(path)
+        if not attr then return end
+        if attr.mode=="directory" then
+            for name in lfs.dir(path) do
+                if name~="." and name~=".." then clear(path.."/"..name) end
+            end
+            assert(lfs.rmdir(path),"部分下载目录未能删除，请重试")
+        else
+            assert(os.remove(path),"部分下载文件未能删除，请重试")
+            if attr.mode=="file" then bytes=bytes+(attr.size or 0) end
+        end
+    end
+    if lfs.attributes(Cache.DOWNLOAD_CACHE_DIR,"mode")=="directory" then
+        for name in lfs.dir(Cache.DOWNLOAD_CACHE_DIR) do
+            if name~="." and name~=".." then clear(Cache.DOWNLOAD_CACHE_DIR.."/"..name) end
+        end
+    end
+    data.comics={}
+    assert(M.save(true),"下载文件已删除，但清单保存失败，请重试")
+    return {comics=count,bytes=bytes}
+end
+
+--- 重启后把上次未完成的状态归为 partial，不归零已经落盘的页数。
 function M.markInterrupted()
     local data = M.load()
     local changed = false

@@ -2,7 +2,7 @@
 -- 带封面缩略图的单列漫画列表，面向 Kindle/KOReader 优化
 
 local Blitbuffer = require("ffi/blitbuffer")
-local Button = require("ui/widget/button")
+local Button = require("ui.common.action_style").Button
 local Device = require("device")
 local Theme = require("ui.common.theme")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -14,7 +14,7 @@ local ImageWidget = require("ui/widget/imagewidget")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local ListView = require("ui/widget/listview")
-local Menu = require("ui/widget/menu")
+local Menu = require("ui.common.action_style").Menu
 local PageJump = require("ui/common/page_jump")
 local ProgressWidget = require("ui/widget/progresswidget")
 local Size = require("ui/size")
@@ -75,7 +75,7 @@ function CoverPlaceholder:paintTo(bb, x, y)
     local text = TextWidget:new{
         text = self.text or _("封面"),
         face = Theme.face("info"),
-        fgcolor = Blitbuffer.COLOR_DARK_GRAY,
+        fgcolor = Blitbuffer.COLOR_BLACK,
     }
     local size = text:getSize()
     text:paintTo(bb, x + math.floor((self.width - size.w) / 2),
@@ -157,7 +157,8 @@ function ComicListItem:coverWidget()
     return CoverPlaceholder:new{
         width = self.cover_w,
         height = self.cover_h,
-        text = self.comic and self.comic.thumb and self.comic.thumb ~= "" and _("加载中") or _("无封面"),
+        text = self.cover_error or ((self.comic and self.comic.thumb and self.comic.thumb ~= ""
+            or self.list_ui and self.list_ui.resolve_cover) and _("加载中") or _("无封面")),
     }
 end
 
@@ -242,6 +243,10 @@ function ComicListItem:buildContent()
 
     --- 第三行 (下载中 = 进度条, 否则统计文本)。宽度随文字列宽度变化。
     local function makeThird(w)
+        if comic.download_preparing then
+            return TextBoxWidget:new{text=_("正在获取章节信息…"),face=Theme.face("info"),
+                width=w,height=Screen:scaleBySize(30),height_overflow_show_ellipsis=true}
+        end
         if downloading then
             local pct = math.max(0, math.min(1, tonumber(comic.download_progress) or 0))
             local bar_w = math.max(Screen:scaleBySize(80), math.floor(w * 0.5))
@@ -393,8 +398,10 @@ function ComicListItem:loadCover(delay, on_done)
         CoverCache.ensure(self.source, self.source_id, comic, function(path)
             self.cover_loading = false
             -- 页面已关闭: 不必再重建控件 (省下这份无用功), 但 on_done 仍要回调
-            if path and not (self.list_ui and self.list_ui._closed) then
-                self.cover_loaded = true
+            if (path or self.list_ui and self.list_ui.resolve_cover)
+                    and not (self.list_ui and self.list_ui._closed) then
+                self.cover_loaded = path ~= nil
+                self.cover_error = not path and _("加载失败") or nil
                 -- 重建/刷新抛异常不能让 on_done 丢掉: on_done 是推进封面队列的唯一
                 -- 动力 (pumpCoverQueue 的 next_one 负责复位 cover_busy 并排下一拍)。
                 -- CoverCache 对回调有 pcall, 异常不会闪退, 但 on_done 没被调用的话,
@@ -787,6 +794,7 @@ function VisualComicList:updatePageButtons()
         or self.has_more == true
     if self.prev_button then self.prev_button:enableDisable(can_prev) end
     if self.next_button then self.next_button:enableDisable(can_next) end
+    if self.jump_button then self.jump_button:enableDisable(self:totalScreens()~=1) end
 end
 
 --- 下一屏 (到底时自动向服务器补货)
@@ -911,7 +919,7 @@ function VisualComicList:loadServerPage(page, notify, display_page)
             self.buffer = comics
             self.server_page_start = page
             self.server_page = tonumber(data.page) or page
-            self.server_page_size = #comics
+            self.server_page_size = tonumber(data.page_size) or #comics
             if tonumber(data.pages) then self.total_pages = tonumber(data.pages) end
             if tonumber(data.total) then self.total_count = tonumber(data.total) end
             self.buffer_first_item = (page - 1) * self.server_page_size + 1
@@ -1049,7 +1057,7 @@ function VisualComicList:fetchMore(silent, on_done)
         -- string", 而且这段跑在 scheduleIn 的任务里, 未捕获错误会直接把 KOReader
         -- 整个退掉 (真机表现: 点返回后突然闪退, 因为补货任务正好在那一拍跑)。
         self.server_page = tonumber(data.page) or page
-        if appended > 0 then self.server_page_size = appended end
+        if appended > 0 then self.server_page_size = tonumber(data.page_size) or appended end
         -- 顺带记录服务端给的总条数 (总屏数靠它来推算并自洽校验)
         if tonumber(data.total) then self.total_count = tonumber(data.total) end
         -- 服务器给了总页数时, 到末尾就停
@@ -1148,24 +1156,23 @@ function VisualComicList:createFooter()
     end
     table.insert(specs, { text = _("返回"), callback = function() self:goBack() end })
 
-    -- 按钮宽度按"可用内宽"均分, 让整行铺满:
-    -- 旧写法 `floor(width / n) - 3` 会在右侧留一条**点击死区** —— 那条缝没人消费 tap,
-    -- 就会穿透到下层窗口。可用内宽 = 总宽 - 两侧 padding - 两侧边框。
+    -- 长文案留出左右空隙，与详情页共用宽度规则；短按钮分享剩余空间。
     local padding = Screen:scaleBySize(4)
     local inner_w = self.width - (padding + Size.border.thin) * 2
-    local button_w = math.floor(inner_w / #specs)
+    local widths = require("ui.common.action_style").footerWidths(inner_w,specs,button_h)
     local group = HorizontalGroup:new{}
-    for _idx, spec in ipairs(specs) do
+    for idx, spec in ipairs(specs) do
         local btn = Button:new{
             text = spec.text,
             enabled = spec.enabled ~= false,
-            width = button_w,
+            width = widths[idx],
             height = button_h,
             callback = spec.callback,
         }
         -- 记住分页按钮, 换页后需要同步它们的可用状态
         if spec.text == _("上页") then self.prev_button = btn end
         if spec.text == _("下页") then self.next_button = btn end
+        if spec.text == _("跳页") then self.jump_button = btn end
         table.insert(group, btn)
     end
 
@@ -1212,13 +1219,14 @@ function VisualComicList:totalScreens()
         -- 已经到底: 最后一屏的绝对编号就是总数
         return self:lastLoadedScreen(), true, self:credibleTotalItems()
     end
+    local items = self:credibleTotalItems()
+    if items then
+        -- API v3 gives an exact item count without requiring server page counts.
+        return math.max(self:lastLoadedScreen(),math.ceil(items/self:perScreen())),false,items
+    end
     local pages = tonumber(self.total_pages)
     local page_size = tonumber(self.server_page_size)
-    if not (pages and pages > 0 and page_size and page_size > 0) then
-        return nil, false
-    end
-
-    local items = self:credibleTotalItems()
+    if not (pages and pages > 0 and page_size and page_size > 0) then return nil,false end
     -- 服务器**给了**总条数却与总页数对不上 -> 两个数字至少有一个是封顶的哨兵值
     -- (源 B: pages=9999 + total=10000), 页数也就不可信了, 宁可不显示。
     -- 只在"压根没给总条数"时才单信页数 (源 C: 只有分页器里的最大页码)。
@@ -1251,7 +1259,7 @@ function VisualComicList:updatePageText()
         self.page_text:setText(T(_("第 %1/%2 页"), cur, total))
     else
         -- 服务端没给出可信总量: 只如实说已加载了多少条, 不编总屏数
-        self.page_text:setText(T(_("第 %1 页 · 已加载 %2 项"), cur, loaded))
+        self.page_text:setText(T(_("第 %1 页 · 总页数未知 · 已加载 %2 项"), cur, loaded))
     end
 end
 
@@ -1393,18 +1401,17 @@ function VisualComicList:showJumpDialog()
     }
 end
 
---- 准备当前屏(以及下一屏)的封面下载
---
--- **串行队列**: 一次只推进一张, 上一张下完再排下一张。
--- 为什么还要串行 (下载本身已经不在主线程了, 见 util/cover_cache.lua):
---   1. 一屏 4~6 张 + 预取一屏, 一次性全发出去就是十几个并发请求砸向同一个 CDN;
---   2. 每张补上封面都会刷新**那一行**, 集中到同一轮会让电子墨水屏连着闪好几次 ——
---      摊开到各自的一拍里, 观感上是"逐行浮现"。
+--- 当前屏优先，最多两项在途，避免一张慢封面阻塞整屏。
+-- 图片仍共用一个异步 worker；不一次性提交整页预取。
 function VisualComicList:scheduleVisibleCovers()
     -- 页面已关闭: 别再排新的下载 (见 onCloseWidget 注释)
     if self._closed then return end
 
+    self._cover_generation = (self._cover_generation or 0) + 1
+    for _, task in pairs(self._cover_metadata_tasks or {}) do task:cancel() end
+    self._cover_metadata_tasks = {}
     self.cover_queue = {}
+    self._cover_active = 0
     self.cover_busy = false
 
     local per = self:perScreen()
@@ -1429,21 +1436,35 @@ function VisualComicList:scheduleVisibleCovers()
     self:pumpCoverQueue()
 end
 
---- 串行消费封面队列
+--- 队列最多两项在途；完成后再派发下一项，关闭后不继续补货。
 function VisualComicList:pumpCoverQueue()
-    if self._closed then return end
-    if self.cover_busy then return end
-    local entry = table.remove(self.cover_queue or {}, 1)
-    if not entry then return end
-
+    if self._closed or self.cover_busy then return end
     self.cover_busy = true
+    self._cover_active = self._cover_active or 0
+    self._cover_metadata_tasks = self._cover_metadata_tasks or {}
+    while not self._closed and self._cover_active < 2 do
+        local entry = table.remove(self.cover_queue or {}, 1)
+        if not entry then break end
+        self._cover_active = self._cover_active + 1
+        local ok, err = pcall(self.dispatchCover, self, entry, self._cover_generation)
+        if not ok then
+            self._cover_active = math.max(0, self._cover_active - 1)
+            logger.warn("Picayomi VisualComicList: 封面任务启动失败: " .. tostring(err))
+        end
+    end
+    self.cover_busy = false
+end
+
+function VisualComicList:dispatchCover(entry, generation)
+    local function stale() return self._closed or self._cover_generation ~= generation end
     -- 只复位一次: 下面既有"正常回调推进", 也有"派发时抛异常的兜底推进",
     -- 回调已经跑过 next_one 之后才抛的话, 兜底不能再推第二次 (会排出两条并行链)。
     local advanced = false
     local function next_one()
-        if advanced then return end
+        if advanced or stale() then return end
         advanced = true
-        self.cover_busy = false
+        self._cover_active = math.max(0, self._cover_active - 1)
+        self._cover_metadata_tasks[entry] = nil
         -- 留一小段空闲, 让点击/翻页能被处理
         UIManager:scheduleIn(0.05, function() self:pumpCoverQueue() end)
     end
@@ -1452,32 +1473,56 @@ function VisualComicList:pumpCoverQueue()
     -- 这是延迟任务, KOReader 的任务队列不兜异常 —— 逃出去就是整个进程退出; 而且
     -- cover_busy 已置 true, 抛出时若走不到 next_one, 这一屏的封面会永久停摆。
     -- 所以整个派发包进 pcall, 出错就当这一张失败, 继续下一张。
-    local ok_dispatch, err_dispatch = pcall(function()
-        if entry.item then
-            -- 当前屏: 下完要重建该行内容
-            entry.item:loadCover(0, function(path)
-                -- 该行可能已随窗口翻页被换掉, 但 loadCover 内部有 cover_loaded 守卫, 安全
-                next_one()
-            end)
-        else
-            -- 下一屏: 只预热磁盘缓存, 不碰控件
-            local comic = entry.comic
-            local existing = CoverCache.find(self.source_id, comic._id)
-            if existing then
-                next_one()
-            else
-                CoverCache.ensure(self.source, self.source_id, comic, function()
+    local function dispatch()
+        if stale() then return end
+        local ok_dispatch, err_dispatch = pcall(function()
+            if entry.item then
+                -- 当前屏: 下完要重建该行内容
+                entry.item:loadCover(0, function(path)
+                    -- 该行可能已随窗口翻页被换掉, 但 loadCover 内部有 cover_loaded 守卫, 安全
                     next_one()
                 end)
+            else
+                -- 下一屏: 只预热磁盘缓存, 不碰控件
+                local comic = entry.comic
+                local existing = CoverCache.find(self.source_id, comic._id)
+                if existing then
+                    next_one()
+                else
+                    CoverCache.ensure(self.source, self.source_id, comic, function()
+                        next_one()
+                    end)
+                end
             end
+        end)
+        if not ok_dispatch then
+            logger.warn("Picayomi VisualComicList: 取封面派发失败 (已跳过这一张): "
+                .. tostring(err_dispatch))
+            -- loadCover 在抛异常前可能已把 cover_loading 置 true, 不复位的话这一行以后都拒绝重试
+            if entry.item then entry.item.cover_loading = false end
+            next_one()
         end
-    end)
-    if not ok_dispatch then
-        logger.warn("Picayomi VisualComicList: 取封面派发失败 (已跳过这一张): "
-            .. tostring(err_dispatch))
-        -- loadCover 在抛异常前可能已把 cover_loading 置 true, 不复位的话这一行以后都拒绝重试
-        if entry.item then entry.item.cover_loading = false end
-        next_one()
+    end
+    local comic = entry.item and entry.item.comic
+    if comic and self.resolve_cover and (not comic.thumb or comic.thumb == "")
+            and not CoverCache.find(self.source_id, comic._id) then
+        local function failed(reason)
+            if stale() then return end
+            entry.item.cover_error = reason == "missing" and _("无封面") or _("加载失败")
+            pcall(function() entry.item:buildContent(); entry.item:refreshRow() end)
+            next_one()
+        end
+        self._cover_metadata_tasks[entry] = LoadingTask.background(nil, function()
+            local thumb, reason = self.resolve_cover(comic)
+            if stale() then return end
+            if type(thumb) == "string" and thumb ~= "" then
+                comic.thumb = thumb
+                entry.item.cover_error = nil
+                dispatch()
+            else failed(reason) end
+        end, {delay=0.05,timeout=20,is_cancelled=stale,on_error=function() failed() end})
+    else
+        dispatch()
     end
 end
 
@@ -1544,6 +1589,8 @@ end
 -- 实测: 关掉列表后继续泵事件循环, 仍会发生 6 次封面下载。
 function VisualComicList:onCloseWidget()
     self._closed = true
+    for _, task in pairs(self._cover_metadata_tasks or {}) do task:cancel() end
+    self._cover_metadata_tasks = {}
     if self.fetch_task then self.fetch_task:cancel(); self.fetch_task = nil end
     self.cover_queue = {}
     -- 置为 busy 让在途的那条 pump 链就此停住 (pumpCoverQueue 会直接 return)

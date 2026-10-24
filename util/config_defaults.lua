@@ -28,7 +28,7 @@ ConfigDefaults.defaults = {
     refresh_on_page_turn = true,
     -- 阅读版式 (全局策略): ui/common/view_mode.lua 读取 (ui/stream_reader.lua 据此
     -- 写文档的 kopt_page_scroll / zoom_mode / kopt_rotation_mode)。
-    --   auto   按第 1 页画面的像素长宽比判断 (与源站分类/页数无关)
+    --   auto   按章节中段页的像素长宽比判断
     --   always 一律条漫 (上下滚动)   never 一律竖屏整页
     -- 单本漫画可在详情页「版式」按钮单独指定, 存 comic_view_modes, 优先级更高。
     webtoon_scroll = "auto",

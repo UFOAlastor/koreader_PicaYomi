@@ -241,6 +241,7 @@ local ComicDetail = InputContainer:extend{
     on_back = nil,
     on_return_from_reader = nil,
     resume_episode_order = nil,
+    navigation = nil,
     -- 离线模式 (从「已下载」进入): 不再向源要章节/评论/收藏状态, 也不下载封面。
     -- 只读清单里已完整下载的章节。
     offline = false,
@@ -258,6 +259,7 @@ function ComicDetail:init()
         self.source:init()
     end
     self.source_id = self.source_id or (self.source and self.source.identifier) or "unknown"
+    self.auto_continue = self.navigation and self.navigation.continue_reading == true
     self.offline = self.offline or (self.source and self.source._offline) or false
     self.comic = normalizeComic(self.comic or {})
     -- 本地收藏 (未登录兜底): 状态在本地就有, 先填上 —— 否则按钮会先显示"收藏",
@@ -328,6 +330,8 @@ function ComicDetail:init()
                 logger.warn("Picayomi ComicDetail: 首拍任务 " .. label .. " 失败: " .. tostring(err))
             end
         end
+        guarded("continueReading", function() self:tryAutoContinue() end)
+        if self.opening_reader then return end
         guarded("loadCover", function() self:loadCover() end)
         -- 入口已提供章节数据 (如历史页 / 渲染测试) 时不再重复拉取
         if (not self.episodes_data or self._chapters_stale) and not self.offline then
@@ -341,6 +345,27 @@ function ComicDetail:init()
             end)
         end
     end)
+end
+
+-- 列表快捷入口先保留真实详情页作为返回目标, 只消费一次续读意图。
+function ComicDetail:tryAutoContinue()
+    if not self.auto_continue or not self.episodes_data then return end
+    self.auto_continue = nil
+    local stack = UIManager._window_stack or {}
+    if self._closed or self.opening_reader or not stack[#stack] or stack[#stack].widget ~= self then return end
+    if self.navigation and self.navigation.source_id ~= self.source_id then return end
+    local ok, history = pcall(self.comic_model.getHistoryItem, self.comic_model, self.comic._id, self.source_id)
+    local order = ok and history and (history.episode or history.last_page)
+    for _, episode in ipairs(self.episodes_data.episodes or {}) do
+        if order ~= nil and tostring(episode.order) == tostring(order) then
+            self.resume_episode_order = order
+            self:startReading()
+            return
+        end
+    end
+    UIManager:show(InfoMessage:new{
+        text = _("上次阅读的章节暂不可用，请在详情页选择章节。"), timeout = 3,
+    }, "ui")
 end
 
 --- 兜底消费 tap (见 init 里的说明)
@@ -1257,6 +1282,7 @@ end
 --        为这一话记住的页码 (见 util/reading_position.lua); false/nil = 「继续」/点章节行,
 --        按 KOReader 记住的进度恢复。
 function ComicDetail:openReader(episode, opts)
+    self.auto_continue = nil
     if not self.offline and not require("ui.common.source_access").check(self.source) then return end
     self.opening_reader = true
     self:cancelChapterLoad()
@@ -1337,7 +1363,7 @@ function ComicDetail:loadChapters(page,force)
         cached,fresh=source:peekChapters(self.comic._id)
         if cached then
             if not self.episodes_data then self:setEpisodesData(cached);self:refresh() end
-            if fresh then self._chapters_stale=nil;return end
+            if fresh then self._chapters_stale=nil;self:tryAutoContinue();return end
         end
     end
     self.loading_chapters = true
@@ -1376,7 +1402,9 @@ function ComicDetail:loadChapters(page,force)
                         or T(_("章节已是最新，共 %1 话"),total),timeout=2,
                 },"ui")
             end
+            self:tryAutoContinue()
         else
+            self.auto_continue = nil
             if manual and self.episodes_data then self:refresh() end
             UIManager:show(InfoMessage:new{
                 text=T(manual and _("刷新章节失败: %1") or _("获取章节列表失败: %1"),require("ui.common.error_message").describe(err))
@@ -1396,6 +1424,7 @@ function ComicDetail:loadChapters(page,force)
         self._chapter_unwatch=source:watchSession(function() self:cancelChapterLoad() end)
     end
     local function on_cancel()
+        self.auto_continue = nil
         local manual=self._chapter_refresh_manual
         self._chapter_refresh_manual=nil
         self.loading_chapters=false
@@ -1850,7 +1879,10 @@ function ComicDetail:showRelatedResults(keyword, data)
             page.related_sort = value
             page:searchByKeyword(keyword, value)
         end,
-        on_select = function(comic) page:openRelatedDetail(comic) end,
+        source = source,
+        source_id = self.source_id,
+        comic_model = model,
+        on_select = function(comic, navigation) page:openRelatedDetail(comic, navigation) end,
         on_back = function(list)
             if list then UIManager:close(list, "ui") end
             page.related_menu = nil
@@ -1867,11 +1899,12 @@ end
 -- 于是「标签检索 -> 结果列表 -> 某本 -> 阅读 -> 返回」直接掉回主页, 检索结果整条
 -- 路径都没了 (真机 2026-10-18 反馈 3 / 6)。这一页关掉时结果列表还在栈里,
 -- 所以两个回调都不需要重建任何东西, 只要把引用清掉。
-function ComicDetail:openRelatedDetail(comic)
+function ComicDetail:openRelatedDetail(comic, navigation)
     if not comic then return end
     local parent = self
     local FavoriteActions = require("util.favorites")
     self.related_detail = ComicDetail:new{
+        navigation = navigation,
         comic = comic,
         source = self.source,
         source_id = self.source_id,
@@ -1970,6 +2003,8 @@ function ComicDetail:goBack()
     -- 结果就是控件已关闭、点击也能穿透到下层列表, 但屏幕完全不更新。
     -- KOReader 文档也建议: 覆盖在文件管理器之上的全屏控件, onCloseWidget 用 "ui"。
     UIManager:close(self, "ui")
+    local list = self.navigation and self.navigation.origin_list
+    if list and not list._closed then list:refreshVisible({[self.comic._id] = true}) end
     if self.on_back then self.on_back() end
     return true
 end
@@ -2000,6 +2035,7 @@ end
 function ComicDetail:onCloseWidget()
     -- 先落标记: 之后的异步封面回调据此放弃刷新死控件 (见 loadCover)
     self._closed = true
+    self.auto_continue = nil
     self:cancelChapterLoad()
     if self._detail_task then self._detail_task:cancel() end
     -- 本页被任何路径关掉 (返回 / 清扫 / 换章) 时, 放大层与简介全文不能留下

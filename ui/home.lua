@@ -793,8 +793,8 @@ function Home:_showComicList(title, data, page, sort_spec, fetch_page)
         sort = sort_spec and sort_spec.sort or nil,
         on_sort_change = sort_spec and sort_spec.on_change or nil,
         processor = function(raw) return self.comic_model:processComicData(raw) end,
-        on_select = function(comic)
-            self:showComicDetail(comic)
+        on_select = function(comic, navigation)
+            self:showComicDetail(comic, nil, navigation)
         end,
         on_back = function(list)
             if list then UIManager:close(list, "ui") end
@@ -820,11 +820,12 @@ end
 -- @param episodes_data 可选。已知的章节数据 { episodes = {...}, page =, pages =, total = }。
 --        给了就不再发章节请求 (ComicDetail:init 的短路, 见其 :258 的注释) ——
 --        "关阅读器回详情页"那条路会把它从阅读上下文里带过来。
-function Home:showComicDetail(comic, episodes_data)
+function Home:showComicDetail(comic, episodes_data, navigation)
     if not SourceAccess.check(self.source) then return end
     if logger.enabled then logger.info("Picayomi Home: 显示漫画详情: " .. comic.title) end
 
     self.detail_menu = ComicDetail:new{
+        navigation = navigation,
         comic = comic,
         source = self.source,
         source_id = self.source and self.source.identifier or "picacg",

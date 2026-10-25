@@ -166,8 +166,8 @@ function History:showHistoryList()
         end,
         -- 历史记录全部在本地, 没有可补的下一页
         has_more = false,
-        on_select = function(comic)
-            self:showHistoryDetail(comic._history or { id = comic._id, title = comic.title })
+        on_select = function(comic, navigation)
+            self:showHistoryDetail(comic._history or { id = comic._id, title = comic.title }, navigation)
         end,
         -- 删除是**列表**的操作 (只对"这条记录"有意义), 所以放在长按里,
         -- 不塞进详情页 —— 详情页该显示的是漫画本身的信息。
@@ -194,7 +194,7 @@ function History:showHistoryList()
     WidgetSweep.replace_page(old_list, self.history_menu)
 end
 
-function History:showHistoryDetail(history)
+function History:showHistoryDetail(history, navigation)
     local loading = InfoMessage:new{
         text = _("加载漫画信息..."),
     }
@@ -219,6 +219,7 @@ function History:showHistoryDetail(history)
     local source_id = self.source_id or (source and source.identifier) or "picacg"
     local detail
     detail = ComicDetail:new{
+        navigation = navigation,
         comic = comic_detail,
         source = source,
         source_id = source_id,

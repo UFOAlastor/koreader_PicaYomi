@@ -120,7 +120,7 @@ function Downloads:show(return_callback)
             return true, { comics = {}, page = page, pages = 1, total = #comics }
         end,
         processor = function(item) return item end,
-        on_select = function(comic) self:openComic(comic) end,
+        on_select = function(comic, navigation) self:openComic(comic, navigation) end,
         on_back = function(list)
             if list then UIManager:close(list, "ui") end
             self.list = nil
@@ -343,7 +343,7 @@ end
 --- 打开一部已下载漫画的详情
 -- 只把**已完整下载**的章节放进 episodes_data: 离线状态下点没下完的章节
 -- 只会走到网络请求, 然后失败 —— 那不如不显示。
-function Downloads:openComic(comic)
+function Downloads:openComic(comic, navigation)
     local sid = comic.source_id or "unknown"
     local chapters = OfflineLibrary.completedChapters(sid, comic._id)
     local failed = OfflineLibrary.failedChapters(sid, comic._id)
@@ -419,6 +419,7 @@ function Downloads:openComic(comic)
     end
 
     UIManager:show(ComicDetail:new{
+        navigation = navigation,
         comic = comic,
         source = source,
         source_id = sid,
@@ -470,6 +471,7 @@ function Downloads:showDeleteMenu()
     end
 
     self.delete_menu = VisualComicList:new{
+        allow_continue = false,
         title = T(_("删除下载（%1 部）"), #comics),
         comics = comics,
         server_page = 1,

@@ -152,9 +152,9 @@ function Favorites:loadLocalFavorites(source)
         total_count = #raw,
         fetch_page = local_page,
         processor = function(item) return self.comic_model:processComicData(item) end,
-        on_select = function(comic)
+        on_select = function(comic, navigation)
             if logger.enabled then logger.info("Picayomi", "选择了本地收藏: " .. tostring(comic.title)) end
-            self:showComicDetail(comic)
+            self:showComicDetail(comic, navigation)
         end,
         on_back = function(list)
             if list then UIManager:close(list, "ui") end
@@ -260,9 +260,9 @@ function Favorites:showFavoritesList(favorites_data)
         total_count = favorites_data.total,
         fetch_page = function(page) return self.comic_api:getFavorites(page) end,
         processor = function(raw) return self.comic_model:processComicData(raw) end,
-        on_select = function(comic)
+        on_select = function(comic, navigation)
             if logger.enabled then logger.info("Picayomi", "选择了收藏漫画: " .. comic.title) end
-            self:showComicDetail(comic)
+            self:showComicDetail(comic, navigation)
         end,
         on_back = function(list)
             if list then UIManager:close(list, "ui") end
@@ -277,7 +277,7 @@ function Favorites:showFavoritesList(favorites_data)
     WidgetSweep.replace_page(old_list, self.favorites_menu)
 end
 
-function Favorites:showComicDetail(comic)
+function Favorites:showComicDetail(comic, navigation)
     -- 收藏页里的条目按定义就是"已收藏"。
     -- 明确写进对象: 阅读时它会作为 session.context.comic 传下去, 返回详情页
     -- (main.lua 的 returnToPicayomi) 会用同一个对象按 isFavourite 推导按钮文案;
@@ -290,8 +290,9 @@ function Favorites:showComicDetail(comic)
     -- 以前这里 close + 置 nil, 返回时只能重新 loadFavorites(): 一次网络请求 + 一个
     -- 全新的 VisualComicList (screen_index = 1) —— 用户报的"进详情再返回, 列表又从
     -- 第一页开始"。与 ui/home.lua / ui/history.lua 的做法一致。
-    local source = self:currentSource()
+    local source = navigation and navigation.source or self:currentSource()
     self.detail_menu = ComicDetail:new{
+        navigation = navigation,
         comic = comic,
         source = source,
         source_id = source and source.identifier or "picacg",

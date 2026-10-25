@@ -452,8 +452,8 @@ function Search:showSearchResults()
             self.current_page = 1
             self:performSearch()
         end,
-        on_select = function(comic)
-            self:showComicDetail(comic)
+        on_select = function(comic, navigation)
+            self:showComicDetail(comic, navigation)
         end,
         on_back = function(list)
             if list then UIManager:close(list, "ui") end
@@ -468,7 +468,7 @@ function Search:showSearchResults()
     WidgetSweep.replace_page(old_list, self.result_menu)
 end
 
-function Search:showComicDetail(comic)
+function Search:showComicDetail(comic, navigation)
     if logger.enabled then logger.info("Picayomi", "显示漫画详情: " .. comic.title) end
     self.navigating_to_detail = true
 
@@ -478,8 +478,9 @@ function Search:showComicDetail(comic)
     -- "进详情再返回, 列表又从第一页开始"。与 ui/home.lua / ui/history.lua 一致。
     -- (结果列表压在搜索输入框之上, 输入框在搜索发起时已关闭, 见 showSearchDialog 的
     --  调用点 —— 所以这里露出来的就是结果列表本身。)
-    local source = require("source.registry"):getCurrent()
+    local source = navigation and navigation.source or require("source.registry"):getCurrent()
     self.detail_menu = ComicDetail:new{
+        navigation = navigation,
         comic = comic,
         source = source,
         source_id = source and source.identifier or "picacg",

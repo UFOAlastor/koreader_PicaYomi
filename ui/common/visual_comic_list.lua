@@ -55,6 +55,7 @@ local COVER_LOOKAHEAD = 1
 local CoverCache = require("util.cover_cache")
 local ComicStats = require("ui.common.comic_stats")
 local ComicMetadata = require("ui.common.comic_metadata")
+local ComicModel = require("model.comic")
 local logger = require("util.logger")
 
 local CoverPlaceholder = Widget:extend{
@@ -142,6 +143,16 @@ function ComicListItem:itemSourceId()
     return comic.source_id or self.source_id
 end
 
+function ComicListItem:readingHistory()
+    local list = self.list_ui
+    local sid = self:itemSourceId()
+    if not list or list.allow_continue == false or not self.on_select
+        or not self.comic._id or type(sid) ~= "string" or sid == "" or sid == "unknown" or sid == "*" then return end
+    local model = list.comic_model or ComicModel
+    local ok, history = pcall(model.getHistoryItem, model, self.comic._id, sid)
+    if ok and type(history) == "table" then return history end
+end
+
 function ComicListItem:coverWidget()
     local comic_id = self.comic and self.comic._id
     local path = comic_id and CoverCache.find(self:itemSourceId(), comic_id)
@@ -184,6 +195,8 @@ function ComicListItem:buildContent()
     local gap = Screen:scaleBySize(10)
     local text_w = self.width - self.cover_w - gap - padding * 2
     local title = comic.title or _("未知标题")
+    local resumable = self:readingHistory() ~= nil
+    self.resume_button = nil
     local author = comic.author_text or comic.author or _("未知作者")
     local categories = comic.categories_text
     if (not categories or categories == "") and type(comic.categories) == "table" then
@@ -284,16 +297,32 @@ function ComicListItem:buildContent()
     --- 文字列 (标题 / 第二行 / 统计行)
     -- 高度与宽度**无关** (每行都声明了固定高度, 超出部分省略号), 所以量一次即可。
     local function makeTextColumn(w)
+        local button_w = resumable and math.min(math.floor(w * 0.48), Screen:scaleBySize(112)) or 0
+        local title_widget = TextBoxWidget:new{
+            text = title,
+            face = Theme.face("list_title"),
+            bold = true,
+            width = w - (resumable and button_w + Screen:scaleBySize(4) or 0),
+            height = Screen:scaleBySize(48),
+            height_overflow_show_ellipsis = true,
+        }
+        local title_row = title_widget
+        if resumable then
+            self.resume_button = Button:new{
+                text = _("继续阅读"), width = button_w,
+                height = Screen:scaleBySize(32), padding = 0,
+                text_font_size = 18,
+                callback = function() self:onContinueReading() end,
+                hold_callback = function() end, -- 不把按钮长按传给历史条目的删除操作。
+            }
+            title_row = HorizontalGroup:new{
+                align = "top", title_widget,
+                HorizontalSpan:new{width = Screen:scaleBySize(4)}, self.resume_button,
+            }
+        end
         return VerticalGroup:new{
             align = "left",
-            TextBoxWidget:new{
-                text = title,
-                face = Theme.face("list_title"),
-                bold = true,
-                width = w,
-                height = Screen:scaleBySize(48),
-                height_overflow_show_ellipsis = true,
-            },
+            title_row,
             VerticalSpan:new{ width = Screen:scaleBySize(2) },
             TextBoxWidget:new{
                 text = second_line,
@@ -343,14 +372,32 @@ function ComicListItem:buildContent()
     self[1] = self.content
 end
 
-function ComicListItem:onTapSelect()
+function ComicListItem:select(continue_reading)
+    if self.list_ui and self.list_ui._closed then return true end
+    if continue_reading and not self:readingHistory() then
+        self:buildContent(); self:refreshRow()
+        return true
+    end
     -- The list remains below the detail page. Stop speculative metadata work
     -- before navigating so it cannot rebuild a hidden list or compete for RAM.
     if self.list_ui and self.list_ui.fetch_task then self.list_ui.fetch_task:cancel() end
     if self.on_select then
-        self.on_select(self.comic)
+        self.on_select(self.comic, {
+            continue_reading = continue_reading == true,
+            origin_list = self.list_ui,
+            source_id = self:itemSourceId(),
+            source = self.source and self.source.identifier == self:itemSourceId() and self.source or nil,
+        })
     end
     return true
+end
+
+function ComicListItem:onTapSelect()
+    return self:select(false)
+end
+
+function ComicListItem:onContinueReading()
+    return self:select(true)
 end
 
 function ComicListItem:onHoldSelect()
@@ -486,6 +533,9 @@ local VisualComicList = InputContainer:extend{
     -- 这样分页核心 (loadServerPage / fetchMore) 不用为每种列表各写一份。
     items_key = "comics",
     on_select = nil,
+    -- 选择/删除等操作列表可关闭续读; 普通漫画列表统一启用。
+    allow_continue = true,
+    comic_model = ComicModel,
     -- function(comic) 长按某一条 (可选)。不传则条目没有长按手势。
     on_hold = nil,
     on_back = nil,

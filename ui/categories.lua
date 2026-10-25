@@ -320,9 +320,9 @@ function Categories:showComicList(comics_data)
             self:loadCategoryComics(self.current_category, 1, value)
         end,
         processor = function(raw) return self.comic_model:processComicData(raw) end,
-        on_select = function(comic)
+        on_select = function(comic, navigation)
             if logger.enabled then logger.info("ComicAPI", "选择了漫画: " .. comic.title) end
-            self:showComicDetail(comic)
+            self:showComicDetail(comic, navigation)
         end,
         on_back = function(list)
             if logger.enabled then logger.info("ComicAPI", "返回分类列表") end
@@ -342,7 +342,7 @@ function Categories:showComicList(comics_data)
     WidgetSweep.replace_page(old_list, self.comic_list_menu)
 end
 
-function Categories:showComicDetail(comic)
+function Categories:showComicDetail(comic, navigation)
     if logger.enabled then logger.info("Picayomi", "显示漫画详情: " .. comic.title) end
     self.navigating_to_detail = true
 
@@ -354,8 +354,9 @@ function Categories:showComicDetail(comic)
     -- (`screen_index = 1`), 于是用户报的"进详情再返回, 列表又从第一页开始"。
     -- 详情页 `covers_fullscreen = true`, 所以盖着的时候下层列表不会被画出来。
     -- 与 ui/home.lua / ui/history.lua 的做法一致 (那两页本来就是对的)。
-    local source = require("source.registry"):getCurrent()
+    local source = navigation and navigation.source or require("source.registry"):getCurrent()
     self.detail_menu = ComicDetail:new{
+        navigation = navigation,
         comic = comic,
         source = source,
         source_id = source and source.identifier or "picacg",

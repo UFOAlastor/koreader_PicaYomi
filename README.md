@@ -98,7 +98,7 @@ koreader/
 
 ## 更新与卸载
 
-开发主线中尚未正式发布的改动见[更新记录](CHANGELOG.md)。正式安装包以 Releases 附件为准。
+当前开发主线版本为 **1.0.2（尚未发布 Release）**，改动见[更新记录](CHANGELOG.md)。最新正式 Release 仍为 1.0.1，正式安装包以 Releases 附件为准。
 
 更新插件时退出 KOReader，用新版 `picayomi.koplugin` 替换旧插件目录，再启动 KOReader。设置、账号、收藏、历史和下载保存在 KOReader 数据目录中；替换插件时保留该数据目录，重要数据建议先备份。
 

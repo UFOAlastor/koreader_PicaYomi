@@ -34,6 +34,7 @@ function TapGuard.install(widget, range)
     if not widget or not Device:isTouchDevice() then return widget end
     -- 弹出式菜单: 保留它自己的"点外面关闭"行为
     if widget.is_popout then return widget end
+    require("ui.common.host_menu").attach(widget)
 
     widget.ges_events = widget.ges_events or {}
     widget.ges_events.TapConsume = {

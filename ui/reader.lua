@@ -789,20 +789,9 @@ end
 
 -- 添加到主菜单
 function PicaReader:addToMainMenu(menu_items)
-    -- 文案跟随当前源, 不要写死"源 A"
-    local source_name
-    local ok, SourceRegistry = pcall(require, "source.registry")
-    if ok and SourceRegistry then
-        local s = SourceRegistry:getCurrent()
-        if s and s.name then source_name = s.name end
-    end
-    menu_items.go_back_to_picayomi = {
-        text = T(_("返回 %1"), source_name or "Picayomi"),
-        sorting_hint = "main",
-        callback = function()
-            self:onReturn()
-        end
-    }
+    -- Exit reading through Tools -> 返回 Picayomi; no duplicate source-named
+    -- return entry in the Main tab, including when a menu table is reused.
+    menu_items.go_back_to_picayomi = nil
 
     -- 新增：添加章节导航菜单
     if self.current_comic and self.episodes_list then

@@ -586,6 +586,10 @@ function Picayomi:addToMainMenu(menu_items)
     -- 本插件在「工具」页里注册的所有项, 按期望的显示顺序收集起来
     -- (最后统一排位 —— 见下面的 promoteInToolsMenu)
     local ordered_ids = {}
+    -- Clear dynamic entries before rebuilding a reused menu for another book.
+    for _i, id in ipairs({"picayomi", "picayomi_return", "picayomi_prev_episode", "picayomi_next_episode", "picayomi_save_image"}) do
+        menu_items[id] = nil
+    end
 
     -- 正在阅读 PicaYomi 漫画时, 补上"看完怎么回去"的入口。
     -- addToMainMenu 每次打开菜单都会被调用, 因此这里可以按状态动态添加。
@@ -614,7 +618,9 @@ function Picayomi:addToMainMenu(menu_items)
             text = _("返回 Picayomi"),
             sorting_hint = "tools",
             callback = function()
-                self:returnToPicayomi()
+                -- Same exit-reading path as the footer/edge action: preserve
+                -- the detail/list and run its return callback to refresh state.
+                require("ui.reader"):onReturn()
             end,
         }
         ordered_ids[#ordered_ids + 1] = "picayomi_return"
@@ -637,7 +643,6 @@ function Picayomi:addToMainMenu(menu_items)
                         self:openEpisodeAt(idx + 1)
                     end,
                 }
-                ordered_ids[#ordered_ids + 1] = "picayomi_next_episode"
             end
             if idx and idx > 1 then
                 menu_items.picayomi_prev_episode = {
@@ -649,6 +654,19 @@ function Picayomi:addToMainMenu(menu_items)
                 }
                 ordered_ids[#ordered_ids + 1] = "picayomi_prev_episode"
             end
+            if menu_items.picayomi_next_episode then
+                ordered_ids[#ordered_ids + 1] = "picayomi_next_episode"
+            end
+        end
+
+        local ComicImage = require("ui.comic_image")
+        if ComicImage.available(self.ui) then
+            menu_items.picayomi_save_image = {
+                text = _("保存当前页原图"),
+                sorting_hint = "tools",
+                callback = function() ComicImage.chooseAndSave(self.ui) end,
+            }
+            ordered_ids[#ordered_ids + 1] = "picayomi_save_image"
         end
     end
 

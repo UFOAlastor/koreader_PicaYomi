@@ -14,7 +14,7 @@
 --   2) 单屏菜单翻不动, 用户看到的是"左右滑完全没反应"。
 -- 所以这里统一接管: 有下一页就翻页, 到边界就停住 —— 永不循环, 也不退出。
 --
--- 南滑 (关闭) / 斜滑 (全刷) 仍交回 Menu 自己处理。
+-- 竖划不关闭页面; 顶部下拉由 host_menu 接入宿主菜单。斜划仍可全刷。
 
 local Device = require("device")
 local SwipeRules = require("ui.common.swipe_rules")
@@ -27,6 +27,7 @@ local M = {}
 -- @return menu
 function M.attach(menu, on_back)
     if not menu or not Device:isTouchDevice() then return menu end
+    require("ui.common.host_menu").attach(menu)
 
     local native = menu.onSwipe
     menu.onSwipe = function(self, arg, ges)
@@ -52,6 +53,9 @@ function M.attach(menu, on_back)
             return true
         end
 
+        -- Native Menu treats south as Close, which exits the plugin on Home.
+        -- A top pull is intercepted before this handler; body swipes stay here.
+        if not self.is_popout and (direction == "south" or direction == "north") then return true end
         if native then return native(self, arg, ges) end
         return true
     end

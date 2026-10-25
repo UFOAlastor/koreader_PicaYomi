@@ -310,7 +310,7 @@ function Home:createMainMenu()
     -- 全屏菜单的缝隙也要吃掉落空的 tap: 菜单项之间有缝隙, 缝隙里的 tap 没人消费
     -- 就会继续往下层窗口传 (见 tap_guard 的注释)。
     TapGuard.install(self.main_menu)
-    -- 主页**不绑定滑动退出** —— 只保留"左滑翻页"。
+    -- 顶部下滑打开 KOReader 菜单; 其他滑动不退出主页。
     --
     -- 真机反馈 (2026-10-18): 主页右滑/边缘滑直接退出 Picayomi 回到 KOReader,
     -- 稍微滑一下就掉出插件, 代价太大且不好回来。退出是**破坏性**动作, 只能走

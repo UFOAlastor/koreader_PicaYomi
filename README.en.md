@@ -27,6 +27,8 @@ Select a source on the home page and sign in if the source requires it. Open a t
 
 Sources are managed under 设置 → 源管理 (Settings → Source management). The default subscription is already configured. Automatic source update checks are disabled by default; when enabled, downloading an update still requires confirmation. Source changes take effect after restarting KOReader.
 
+Version **1.0.2** adds resume buttons on manga lists, original-page image export with a folder picker, and access to KOReader's native menu by pulling down from the top of PicaYomi pages. While reading, “返回 Picayomi” returns to manga details; outside the reader, “退出 Picayomi” returns to KOReader's file browser. Enable panel zoom in KOReader's reading menu and long-press a manga image to open the full-page image viewer, then pinch to zoom. See the [Chinese changelog](CHANGELOG.md) for details and remaining device-testing limits.
+
 To update the plugin, exit KOReader, replace the plugin folder with the new release, and restart. Keep the KOReader data directory to preserve accounts, settings, favorites, history, and downloads; back up important data first.
 
 ## Help and contribution

@@ -336,6 +336,8 @@ StreamSession.__index = StreamSession
 -- @param opts.path        用于注册到 KOReader 的占位文件路径
 function StreamSession.new(opts)
     local self = setmetatable({}, StreamSession)
+    -- Explicit content type: future text/novel sessions must not inherit image actions.
+    self.content_type = opts.content_type
     self.source = opts.source
     self.comic_id = opts.comic_id
     self.order = opts.order
@@ -1931,6 +1933,45 @@ function StreamDocument:getNativePageDimensions(pageno)
     end
     local dims = placeholder_dims()
     return Geom:new{ w = dims.w, h = dims.h }
+end
+
+function StreamDocument:isComic()
+    return self.session and not self.session.cancelled and self.session.content_type == "comic"
+end
+
+-- Resolve the original local image, independently of screen zoom, rotation and
+-- grayscale. Reading a placeholder must never export that placeholder as art.
+function StreamDocument:getPageImageInfo(pageno)
+    if not self:isComic() then return nil, "当前不是漫画阅读" end
+    if type(pageno) ~= "number" or pageno % 1 ~= 0 or pageno < 1 or pageno > self.session.total then
+        return nil, "无法确定当前漫画页"
+    end
+    local path = self.session:local_page(pageno)
+    if not path then return nil, "本页图片尚未下载完成，请加载完成后重试" end
+    local processing, url, err = render_post_for(self.session, pageno)
+    if err then return nil, err end
+    local size = self.session:ensure_size(pageno)
+    if not size then return nil, "无法读取原图尺寸" end
+    return { path = path, width = size.w, height = size.h, format = size.fmt,
+        processing = processing, url = url }
+end
+
+-- KOReader calls this unconditionally when Panel Zoom is enabled. Our image
+-- provider has no PDF/K2pdfopt panel detector: fall back to the complete page,
+-- which the native ImageViewer can zoom and pan, rather than call a missing API.
+function StreamDocument:getPanelFromPage(pageno, pos)
+    if not self:isComic() or not self.session:local_page(pageno) then return nil end
+    local size = self.session:ensure_size(pageno)
+    if not size then return nil end
+    return { x = 0, y = 0, w = size.w, h = size.h }
+end
+
+function StreamDocument:drawPagePart(pageno, rect, rotation)
+    local ok, image, rotate = pcall(Document.drawPagePart, self, pageno, rect, rotation)
+    if ok then return image, rotate end
+    logger.warn("Picayomi: 无法打开局部图片视图: " .. tostring(image))
+    require("ui.reader_feedback").queue(self.session, pageno, "display", "图片暂时无法放大，请稍后重试。")
+    return nil
 end
 
 --- HintPage 只是"提前缓存下一页"的提示, **不是用户翻页信号**

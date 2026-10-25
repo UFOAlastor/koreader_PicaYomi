@@ -277,6 +277,7 @@ function ComicAPI:prepareComic(comicId, order, context)
     local stream_path = DownloadManager.getStreamPath(comicId, order, source.identifier)
 
     local session = StreamReader.Session.new{
+        content_type = "comic",
         source = source,
         comic_id = comicId,
         order = order,

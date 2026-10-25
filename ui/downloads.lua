@@ -471,7 +471,6 @@ function Downloads:showDeleteMenu()
     end
 
     self.delete_menu = VisualComicList:new{
-        allow_continue = false,
         title = T(_("删除下载（%1 部）"), #comics),
         comics = comics,
         server_page = 1,
@@ -486,7 +485,13 @@ function Downloads:showDeleteMenu()
         end,
         processor = function(item) return item end,
         -- 点一部 -> 确认框 (不直接删)
-        on_select = function(comic) self:pickForDelete(comic) end,
+        on_select = function(comic, navigation)
+            if navigation and navigation.continue_reading then
+                self:openComic(comic, navigation)
+            else
+                self:pickForDelete(comic)
+            end
+        end,
         on_back = function() self:closeDeleteMenu() end,
         extra_buttons = {
             { text = _("返回"), callback = function() self:closeDeleteMenu() end },

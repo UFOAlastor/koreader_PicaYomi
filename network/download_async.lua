@@ -24,6 +24,7 @@ local logger = require("util.logger")
 local Parser = require("network/http_parse")
 local HttpClient = require("network.http_client")
 local Redact = require("util.log_redact")
+local Pool = require("network.http_conn")
 
 local Async = {}
 Async.__index = Async
@@ -86,6 +87,20 @@ local function abort(self, job, err)
     end
     job.state = "failed"
     job.err = err or "下载失败"
+end
+
+-- GET 在失效的复用连接上尚未写入图片时可安全重发一次。
+-- 建连中断也可换新 DNS 再试, 沿用原 t0, 不扩大超时/跳转预算。
+local function disconnected(self, job, err)
+    if not job.reconnected and job.written == 0 and (not job.sock or job.reused)
+        and Pool.isTransientDisconnect(err) then
+        if job.sock then self.pool:release(job.key, job.sock, false) end
+        job.sock, job.parser = nil, nil
+        job.reconnected = true
+        job.state = "connect"
+        return
+    end
+    return abort(self, job, err)
 end
 
 local function begin(job)
@@ -170,9 +185,10 @@ end
 -- 推到下一轮只是白等一个调度周期。
 local function advance(self, job)
     if job.state == "connect" then
-        local sock, key, _reused, err = self.pool:acquire(job.url)
-        if not sock then return abort(self, job, err) end
-        job.sock, job.key = sock, key
+        local sock, key, reused, err = self.pool:acquire(job.url)
+        if not sock then return disconnected(self, job, err) end
+        job.sock, job.key, job.reused = sock, key, reused
+        if self.wall_time() - job.t0 > (job.timeout or 20) then return abort(self, job, "下载超时") end
         -- 连接阶段是阻塞的 (DNS/TCP/TLS): 复用命中时这一段几乎为零,
         -- 只有每话第一次 (或换 host) 会付一次握手 —— 那点时间无法避开。
         sock:settimeout(0)
@@ -197,7 +213,7 @@ local function advance(self, job)
         elseif err == "wantwrite" or err == "timeout" then
             return                      -- 下一轮再试
         else
-            return abort(self, job, "发送请求失败: " .. tostring(err))
+            return disconnected(self, job, "发送请求失败: " .. tostring(err))
         end
     end
 
@@ -214,11 +230,14 @@ local function advance(self, job)
                 if err == "wantread" or err == "timeout" then
                     return                  -- 让出, 去推进别的任务
                 elseif err == "closed" then
+                    if job.parser.state == "status" then
+                        return disconnected(self, job, "读取状态行失败: closed")
+                    end
                     local dok, derr = job.parser:eof()
                     if dok then return complete(self, job) end
                     return abort(self, job, derr)
                 else
-                    return abort(self, job, "读取响应失败: " .. tostring(err))
+                    return disconnected(self, job, "读取响应失败: " .. tostring(err))
                 end
             end
         end
@@ -237,6 +256,7 @@ function Async:add(job)
         return true
     end
     job.t0 = self.wall_time()
+    job.reconnected = nil
     job.state = "connect"
     self.jobs[#self.jobs + 1] = job
     return true

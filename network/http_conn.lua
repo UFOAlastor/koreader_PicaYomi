@@ -29,6 +29,8 @@ Pool.__index = Pool
 
 Pool.DEFAULT_TIMEOUT = 20
 Pool.READ_CHUNK = 16384
+Pool.IDLE_TTL = 60
+Pool.DNS_TTL = 60
 
 --- 解析 URL -> scheme, host, port, path
 -- 只处理 http/https; 其它协议返回 nil。
@@ -51,6 +53,7 @@ end
 --- @param opts.connect    可注入的连接工厂 (测试用): function(pool, host, port, tls) -> sock|nil, err
 --- @param opts.healthy    可注入的健康检查 (测试替身没有真 fd)
 --- @param opts.on_connect 新建连接成功时的回调 (诊断: 复用率)
+--- @param opts.wall_time 墙钟 (测试注入; 空闲连接与 DNS 缓存到期)
 function Pool.new(opts)
     opts = opts or {}
     local self = setmetatable({}, Pool)
@@ -58,11 +61,13 @@ function Pool.new(opts)
     self.connector = opts.connect
     self.healthy_fn = opts.healthy
     self.on_connect = opts.on_connect
+    self.wall_time = opts.wall_time or socket.gettime or os.time
     -- key -> { { sock =, busy = }, ... }
     -- 每个 host 可能有多条连接 (并发下载时一个任务占一条)。HTTP/1.1 一条连接
     -- 同一时刻只能跑一个请求, 所以"并行"= 同一 host 开两条连接。
     self.conns = {}
-    self.dns = {}        -- host -> ip (一次阅读会话内复用; 连接失败时作废)
+    self.dns = {}        -- host -> ip; 有界缓存, 不能跨休眠一直钉在旧 CDN 节点
+    self.dns_time = {}
     return self
 end
 
@@ -72,10 +77,12 @@ end
 
 local function resolve(self, host)
     local ip = self.dns[host]
-    if ip then return ip end
+    if ip and self.dns_time[host] and self.wall_time() - self.dns_time[host] < Pool.DNS_TTL then return ip end
+    self.dns[host], self.dns_time[host] = nil, nil
     local ok, res = pcall(socket.dns.toip, host)
     if not ok or type(res) ~= "string" then return nil end
     self.dns[host] = res
+    self.dns_time[host] = self.wall_time()
     return res
 end
 
@@ -89,7 +96,7 @@ function Pool._connect(self, host, port, tls)
     local ok, err = tcp:connect(target, port)
     if not ok and ip then
         -- 缓存的 IP 可能已经失效 (CDN 换节点): 丢掉缓存, 用域名再试一次
-        self.dns[host] = nil
+        self.dns[host], self.dns_time[host] = nil, nil
         pcall(function() tcp:close() end)
         tcp = socket.tcp()
         tcp:settimeout(self.timeout)
@@ -144,9 +151,22 @@ end
 function Pool:_open(host, port, tls)
     local factory = self.connector or Pool._connect
     local sock, err = factory(self, host, port, tls)
+    -- TCP 能连通而 TLS 被关闭/重置时, 旧代码永远保留同一个 IP。
+    -- 下一次尝试必须重新解析, 证书/协议错误仍原样返回。
+    if not sock then self.dns[host], self.dns_time[host] = nil, nil end
     -- 诊断钩子挂在"新建成功"这一层: 换 connector (测试替身) 也照样能数复用率
     if sock and self.on_connect then pcall(self.on_connect, host) end
     return sock, err
+end
+
+-- 仅识别传输中断; TLS 告警、证书、协议、超时等错误不在此自动重试。
+function Pool.isTransientDisconnect(err)
+    local reason = tostring(err):lower()
+    reason = reason:match("^tls 握手失败: (.+)$")
+        or reason:match("^发送请求失败: (.+)$")
+        or reason:match("^读取响应失败: (.+)$")
+        or reason:match("^读取状态行失败: (.+)$") or reason
+    return reason == "closed" or reason == "connection reset by peer" or reason == "broken pipe"
 end
 
 ----------------------------------------------------------------------------
@@ -239,7 +259,8 @@ function Pool:acquire(url)
     -- 顺手清掉对端已经关掉的空闲连接 (否则下次还会拿到它)
     for i = #list, 1, -1 do
         local slot = list[i]
-        if not slot.busy and not self:_healthy(slot.sock) then
+        if not slot.busy and (self.wall_time() - (slot.idle_since or 0) >= Pool.IDLE_TTL
+            or not self:_healthy(slot.sock)) then
             pcall(function() slot.sock:close() end)
             table.remove(list, i)
         end
@@ -268,6 +289,7 @@ function Pool:release(key, sock, keep)
             if slot.sock == sock then
                 if keep then
                     slot.busy = false
+                    slot.idle_since = self.wall_time()
                 else
                     pcall(function() slot.sock:close() end)
                     table.remove(list, i)
@@ -303,26 +325,29 @@ function Pool:get(url, headers, sink)
     -- "已写字节就不重发" 的闸 —— 见 written 的说明)。
     for attempt = 1, 2 do
         local sock, akey, reused, terr = self:acquire(url)
-        if not sock then return nil, terr end
-        key = akey
-
-        local sock_timeout_ok = pcall(function() sock:settimeout(self.timeout) end)
-        if not sock_timeout_ok then
-            self:release(key, sock, false)
-            return nil, "设置超时失败"
-        end
-
-        local resp, err = self:_exchange(sock, host, port, path, headers, counted_sink)
-        if not resp then
-            self:release(key, sock, false)
-            if reused and attempt == 1 and written == 0 then
-                if logger.enabled then logger.dbg("Picayomi HTTP: 复用的连接已失效 (" .. tostring(err) .. "), 重连一次") end
-            else
-                return nil, err
-            end
+        if not sock then
+            if attempt == 2 or not Pool.isTransientDisconnect(terr) then return nil, terr end
         else
-            self:release(key, sock, resp.parser:keep_alive())
-            return { status_code = resp.status_code, headers = resp.headers }
+            key = akey
+
+            local sock_timeout_ok = pcall(function() sock:settimeout(self.timeout) end)
+            if not sock_timeout_ok then
+                self:release(key, sock, false)
+                return nil, "设置超时失败"
+            end
+
+            local resp, err = self:_exchange(sock, host, port, path, headers, counted_sink)
+            if not resp then
+                self:release(key, sock, false)
+                if reused and attempt == 1 and written == 0 then
+                    if logger.enabled then logger.dbg("Picayomi HTTP: 复用的连接已失效 (" .. tostring(err) .. "), 重连一次") end
+                else
+                    return nil, err
+                end
+            else
+                self:release(key, sock, resp.parser:keep_alive())
+                return { status_code = resp.status_code, headers = resp.headers }
+            end
         end
     end
     return nil, "连接不可用"
@@ -337,6 +362,7 @@ function Pool:close()
         self.conns[key] = nil
     end
     self.dns = {}
+    self.dns_time = {}
 end
 
 return Pool

@@ -6,6 +6,8 @@ A manga reader plugin for [KOReader](https://github.com/koreader/koreader), desi
 
 **The plugin interface currently supports Chinese only.** This page is an introduction; the [Chinese README](README.md) contains the full user guide. Compatibility with devices other than Kindle needs testing.
 
+**Sources: [PicaYomi MangaSources](https://github.com/UFOAlastor/PicaYomi_MangaSources)** · [Default subscription](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_MangaSources/main/packages/index.json)
+
 ## Preview
 
 | Home | Settings | Manga list | Categories | Details |

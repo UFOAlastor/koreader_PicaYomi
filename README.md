@@ -4,6 +4,8 @@
 
 面向 Kindle 等设备的 [KOReader](https://github.com/koreader/koreader) 漫画阅读插件。支持多源浏览、搜索、流式阅读、章节下载、收藏和阅读历史，针对墨水屏提供刷新、版式与内存管理设置。
 
+**漫画源仓库：[PicaYomi MangaSources](https://github.com/UFOAlastor/PicaYomi_MangaSources)** · [默认订阅地址](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_MangaSources/main/packages/index.json)
+
 ## 页面预览
 
 以下为页面预览。
@@ -33,6 +35,8 @@ koreader/
 > Kindle 通过 USB 连接电脑后，打开设备盘中的 `koreader/plugins/` 即可。下载 Release 中的插件 ZIP 附件；GitHub 自动生成的 “Source code” 压缩包是源码归档。
 
 ## 漫画源管理
+
+可用源、源版本和安装说明见独立的[漫画源仓库](https://github.com/UFOAlastor/PicaYomi_MangaSources)。
 
 在 **设置 → 源管理** 中管理漫画源与订阅。插件预置默认订阅，无需手动输入地址。
 

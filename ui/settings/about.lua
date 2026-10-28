@@ -58,7 +58,7 @@ end
 --- 参考项目 (点击后显示二维码; 二维码内容就是仓库地址)
 AboutSettings.LINKS = {
     plugin = "https://github.com/UFOAlastor/koreader_PicaYomi",
-    sources = "https://github.com/UFOAlastor/PicaYomi_MangaSources",
+    sources = "https://github.com/UFOAlastor/PicaYomi_Sources",
     rakuyomi = "https://github.com/hanatsumi/rakuyomi",
     picacomic = "https://github.com/Pacalini/PicaComic",
     koreader = "https://github.com/koreader/koreader",

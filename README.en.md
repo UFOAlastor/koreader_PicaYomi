@@ -6,7 +6,7 @@ A manga and novel reader plugin for [KOReader](https://github.com/koreader/korea
 
 **The plugin interface currently supports Chinese only.** This page is an introduction; the [Chinese README](README.md) contains the full user guide. Compatibility with devices other than Kindle needs testing.
 
-**Sources: [PicaYomi MangaSources](https://github.com/UFOAlastor/PicaYomi_MangaSources)** · [Default subscription](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_MangaSources/main/packages/index.json)
+**Sources: [PicaYomi Sources](https://github.com/UFOAlastor/PicaYomi_Sources)** · [Default subscription](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_Sources/main/packages/index.json)
 
 ## Preview
 
@@ -29,7 +29,7 @@ Select a source on the home page and sign in if the source requires it. Open a t
 
 Sources are managed under 设置 → 源管理 (Settings → Source management). The default subscription is already configured. Automatic source update checks are disabled by default; when enabled, downloading an update still requires confirmation. Source changes take effect after restarting KOReader.
 
-Version **1.1.7** adds illustrated novel reading, chapter navigation, typography settings, resume, offline downloads, and configurable chapter preloading. Install **Wenku8 1.0.0** and **BiliNovel 1.0.0** from Settings → Source Management → Update Sources (all subscriptions), then restart KOReader. Wenku8 browsing requires a personal account; BiliNovel search may be blocked by site verification and its online bookshelf is unavailable. Local favorites remain available. See the [Chinese changelog](CHANGELOG.md).
+Version **1.1.8** updates the source repository and default subscription to **PicaYomi Sources**. Remove any old subscription after upgrading; keep the new default, or use Restore Default Subscription if none remain. Novel sources remain at 1.0.0. The 1.1 series adds illustrated novel reading, chapter navigation, typography settings, resume, offline downloads, and configurable chapter preloading. Install **Wenku8 1.0.0** and **BiliNovel 1.0.0** from Settings → Source Management → Update Sources (all subscriptions), then restart KOReader. Wenku8 browsing requires a personal account; BiliNovel search may be blocked by site verification and its online bookshelf is unavailable. Local favorites remain available. See the [Chinese changelog](CHANGELOG.md).
 
 To update the plugin, exit KOReader, replace the plugin folder with the new release, and restart. Keep the KOReader data directory to preserve accounts, settings, favorites, history, and downloads; back up important data first.
 
@@ -38,7 +38,7 @@ To update the plugin, exit KOReader, replace the plugin folder with the new rele
 - [Report a bug or request a feature](https://github.com/UFOAlastor/koreader_PicaYomi/issues): include plugin/source versions, KOReader version, device model, and steps to reproduce. Reports in Chinese or English are welcome.
 - [Contributing](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/CONTRIBUTING.md) · [Security policy](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/SECURITY.md)
 - [Diagnostic logging (Chinese)](docs/DEBUG.md): release builds disable debug logging by default. Remove credentials, session data, and personal reading information before sharing logs or screenshots.
-- [Source SDK and authoring guides (Chinese)](https://github.com/UFOAlastor/PicaYomi_MangaSources)
+- [Source SDK and authoring guides (Chinese)](https://github.com/UFOAlastor/PicaYomi_Sources)
 
 ## License and disclaimer
 

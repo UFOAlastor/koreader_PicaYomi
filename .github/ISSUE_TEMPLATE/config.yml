@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: 漫画源问题
-    url: https://github.com/UFOAlastor/PicaYomi_MangaSources/issues
+    url: https://github.com/UFOAlastor/PicaYomi_Sources/issues
     about: 特定源的接口、解析和登录问题请到漫画源仓库反馈。

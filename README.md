@@ -4,7 +4,7 @@
 
 面向 Kindle 等设备的 [KOReader](https://github.com/koreader/koreader) 漫画与小说阅读插件。支持多源浏览、搜索、流式阅读、章节下载、收藏和阅读历史，针对墨水屏提供刷新、版式与内存管理设置。
 
-**漫画源仓库：[PicaYomi MangaSources](https://github.com/UFOAlastor/PicaYomi_MangaSources)** · [默认订阅地址](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_MangaSources/main/packages/index.json)
+**漫画源仓库：[PicaYomi Sources](https://github.com/UFOAlastor/PicaYomi_Sources)** · [默认订阅地址](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_Sources/main/packages/index.json)
 
 ## 页面预览
 
@@ -36,9 +36,9 @@ koreader/
 
 ## 漫画与小说源管理
 
-可用源、源版本和安装说明见独立的[漫画源仓库](https://github.com/UFOAlastor/PicaYomi_MangaSources)。
+可用源、源版本和安装说明见独立的[漫画源仓库](https://github.com/UFOAlastor/PicaYomi_Sources)。
 
-在 **设置 → 源管理** 中管理漫画源与订阅。插件预置默认订阅，无需手动输入地址。
+在 **设置 → 源管理** 中管理漫画源与订阅。插件预置默认订阅，无需手动输入地址。仓库已更名为 PicaYomi Sources；从旧版升级后，移除源管理中的旧订阅，保留新订阅；没有订阅时点击“恢复默认订阅”，再执行“更新源（全部订阅）”。
 
 自动检查更新默认关闭。开启后，在已联网且首页空闲时检查已安装的漫画源；**发现更新先询问，点击“下载更新”才下载**，完成后提供 **“立即重启 KOReader”／“稍后”**。没有更新不提示，选择稍后在本次运行中不重复询问；检查或下载失败会说明原因。
 
@@ -48,7 +48,7 @@ koreader/
 
 ## 小说阅读
 
-升级到 **1.1.7** 后，进入 **设置 → 源管理 → 更新源（全部订阅）**，安装 **轻小说文库 1.0.0** 或 **哔哩轻小说 1.0.0**，再正常重启 KOReader。小说源需要单独安装；默认附带的三个漫画源保持不变。
+升级到 **1.1.8** 后，进入 **设置 → 源管理 → 更新源（全部订阅）**，安装 **轻小说文库 1.0.0** 或 **哔哩轻小说 1.0.0**，再正常重启 KOReader。小说源需要单独安装；默认附带的三个漫画源保持不变。
 
 首页按漫画、小说分组切源。小说支持按题材浏览、查看详情和目录、图文阅读、直接切章、收藏、续读及离线下载。字体和排版在阅读页使用 KOReader 设置；可设置提前加载后续 0～5 章，默认 1 章。长目录及章节加载会显示阶段与等待时间，可取消；退出阅读时显示返回提示。
 
@@ -115,7 +115,7 @@ koreader/
 
 ## 更新与卸载
 
-当前版本为 **1.1.7**，改动与使用说明见[更新记录](CHANGELOG.md)，正式安装包以 [Releases 附件](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest)为准。
+当前版本为 **1.1.8**，改动与使用说明见[更新记录](CHANGELOG.md)，正式安装包以 [Releases 附件](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest)为准。
 
 更新插件时退出 KOReader，用新版 `picayomi.koplugin` 替换旧插件目录，再启动 KOReader。设置、账号、收藏、历史和下载保存在 KOReader 数据目录中；替换插件时保留该数据目录，重要数据建议先备份。
 
@@ -139,7 +139,7 @@ koreader/
 
 - [诊断日志](docs/DEBUG.md)
 - [低内存图片阅读设计](docs/IMAGE_MEMORY.md)
-- [漫画源 SDK、模板与制作指南](https://github.com/UFOAlastor/PicaYomi_MangaSources)
+- [漫画源 SDK、模板与制作指南](https://github.com/UFOAlastor/PicaYomi_Sources)
 - [参与贡献](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/CONTRIBUTING.md) · [安全问题反馈](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/SECURITY.md)
 - [MIT 许可证](LICENSE)与[第三方说明](THIRD_PARTY.md)
 

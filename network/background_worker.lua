@@ -16,16 +16,35 @@ end
 
 function Worker.request(spec)
     assert(type(spec) == "table", "后台请求描述无效")
+    if spec.kind == "novel_image" then
+        return require("network.novel_http").download(spec.request,spec.timeout,spec.destination,nil,spec.deadline)
+    end
     if spec.kind == "extension_https" then
         return require("source.extensions.https").get(spec.url, spec.limit)
     end
     assert(spec.kind == "http" and
-        (spec.operation == "request" or spec.operation == "requestWithRetry"), "未知后台请求")
+        (spec.operation == "request" or spec.operation == "requestWithRetry" or spec.operation=="requestOnce"), "未知后台请求")
     local http = require("network.http_client")
     return http[spec.operation](http, spec.method, spec.url, spec.headers, spec.body, spec.timeout)
 end
 
 function Worker.run(session, kind, options)
+    if kind == "novel" then
+        local pool=require("network.http_conn").new{timeout=20}
+        local request=options
+        while request do
+            Worker.reply(session,function()
+                if request.kind=="novel_image" then
+                    return require("network.novel_http").download(request.request,request.timeout,request.destination,pool,request.deadline)
+                end
+                return Worker.request(request)
+            end,require("network.async_task").MAX_RESULT)
+            local message=session:recv()
+            request=message and message.request
+        end
+        pool:close()
+        return
+    end
     if kind == "reader" then
         return require("network.reader_worker").loop(session, options)
     end

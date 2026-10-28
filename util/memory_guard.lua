@@ -82,10 +82,11 @@ function MemoryGuard:snapshot()
     return {available = available, reserve = reserve,
         worker = reserve + MemoryGuard.WORKER_BYTES}
 end
-function MemoryGuard:decode_budget()
-    local s = self:snapshot()
+function MemoryGuard:decode_budget(reserved, snapshot)
+    local s = snapshot or self:snapshot()
     if not s.available then return MemoryGuard.DECODE_FALLBACK end
-    return math.floor(math.max(0, math.min(s.available / 3, s.available - s.reserve)))
+    local available = math.max(0, s.available - (reserved or 0))
+    return math.floor(math.max(0, math.min(available / 3, available - s.reserve)))
 end
 -- Emergency grants are only for region rendering into an existing screen
 -- buffer. Keep the ordinary full-image and worker policies unchanged. The
@@ -179,6 +180,19 @@ function MemoryGuard:prepare_decode()
     self:relieve()
     self:relieve_critical()
     return self:decode_budget() -- fresh observation, even if eviction failed
+end
+-- Called after painting has returned, never while a cached tile is in use.
+-- A failed decoder needs an explicit recovery path even above worker pressure.
+function MemoryGuard:reclaim_for_decode()
+    local cache=doc_cache()
+    local before=cache and used_bytes(cache) or 0
+    if before>0 then
+        pcall(function()
+            if cache.clear then cache:clear() else cache.cache:clear() end
+        end)
+    end
+    collectgarbage("collect")
+    return self:decode_budget()
 end
 function MemoryGuard:make_room_for_fork()
     local s = self:snapshot()

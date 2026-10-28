@@ -104,7 +104,7 @@ function M.buildAction(opts)
     end
 
     action.run = function(item)
-        if type(item) ~= "table" then return false, _("无效的漫画数据") end
+        if type(item) ~= "table" then return false, _("无效的作品数据") end
         local is_fav = item.isFavourite == true
         if online then
             if is_fav then return comic_api:removeFavorite(item._id) end
@@ -219,7 +219,7 @@ function M.promptLocalSync(source)
         text=require("ffi/util").template(_("发现当前源有 %1 本本地收藏，是否同步到当前登录账号？\n已在线上收藏的作品会跳过，本地收藏始终保留。"),LocalFavorites.count(source.identifier)),
         ok_text=_("同步"),cancel_text=_("暂不"),
         ok_callback=function()
-            if not same_session() then UI:show(Info:new{text=_("账号或漫画源已变化，请重新发起同步。"),timeout=3},"ui");return end
+            if not same_session() then UI:show(Info:new{text=_("账号或源已变化，请重新发起同步。"),timeout=3},"ui");return end
             if M.syncing then UI:show(Info:new{text=_("正在同步本地收藏，请稍候。"),timeout=2},"ui");return end
             M.syncing=true
             -- Native ConfirmBox closes itself after this callback. Start only

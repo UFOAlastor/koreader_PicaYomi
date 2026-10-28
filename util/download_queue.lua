@@ -54,7 +54,7 @@ local function default_error_notifier(job, msg)
     if not ok or not UIManager then return end
     local ok2, InfoMessage = pcall(require, "ui/widget/infomessage")
     if not ok2 or not InfoMessage then return end
-    local name = (job and (job.title or (job.order and ("第" .. tostring(job.order) .. "话"))))
+    local name = (job and (job.title or (job.order and ("第" .. tostring(job.order) .. (job.source and job.source.content_type=="novel" and "章" or "话")))))
         or "章节"
     pcall(function()
         UIManager:show(InfoMessage:new{
@@ -178,6 +178,11 @@ function Queue:enqueue(source, comic, chapters)
         return 0, 0
     end
     local source_id = source.identifier or "unknown"
+    if source.content_type=="novel" then
+        comic=require("source.contract").copy(comic)
+        comic.content_type="novel"
+        comic.text_filters=require("source.contract").copy(source.text_filters or {},true)
+    end
 
     local accepted = {}
     for _i, ch in ipairs(chapters) do
@@ -193,6 +198,7 @@ function Queue:enqueue(source, comic, chapters)
                     comic = comic,
                     comic_id = comic._id,
                     order = ch.order,
+                    chapter_id=ch._id or ch.id,
                     title = ch.title,
                     pages = tonumber(ch.pages),
                     phase = "queued",
@@ -361,6 +367,7 @@ function Queue:_stop_prepare(job,nonblocking)
     if not job then return false end
     local pending=job.prepare_token~=nil
     job.prepare_token=nil
+    if job.prepare_cleanup then job.prepare_cleanup();job.prepare_cleanup=nil end
     if job.prepare_task then
         job.prepare_task.nonblocking=nonblocking
         job.prepare_task:cancel()
@@ -398,11 +405,25 @@ function Queue:_prepare(job)
     end
     local context={deadline=require("socket").gettime()+60,isCancelled=cancelled}
     local task=self.prepare_runner(function()
-        finish(self.get_images(job.source,job.comic_id,job.order,context))
+        if job.source.content_type=="novel" then
+            local session=require("novel.native").session(job.source,tostring(job.comic_id),tostring(job.chapter_id))
+            local ok,document,err=require("novel.document").prepare(session,{
+                root=require("util.cache").BASE_DIR.."/novels/downloads",
+                book=tostring(job.comic_id),chapter=tostring(job.chapter_id),title=job.title,call=context,
+                on_cleanup=function(fn)job.prepare_cleanup=fn end,
+                http=function(request,timeout)
+                    local r=require("network.http_client"):get(request.url,request.headers,timeout)
+                    return r and {status=r.status_code,body=r.body}
+                end,
+            })
+            job.prepare_cleanup=nil
+            finish(ok and document or nil,err and err.message)
+        else finish(self.get_images(job.source,job.comic_id,job.order,context)) end
     end,{
         timeout=60,is_cancelled=cancelled,
         on_error=function(err) finish(nil,err) end,
         on_cancel=function()
+            if job.prepare_cleanup then job.prepare_cleanup();job.prepare_cleanup=nil end
             if self.active==job and job.prepare_token==token then
                 job.prepare_token=nil;job.prepare_task=nil;job.phase="failed"
                 OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
@@ -426,6 +447,17 @@ function Queue:_apply_preparation(job,images,err)
             .. " 章取图片列表失败: " .. tostring(err))
         self:_notify_error(job, tostring(err or "获取章节图片失败"))
         return false
+    end
+
+    if job.source.content_type=="novel" then
+        local bytes=0;for _,file in ipairs(images.manifest.files) do bytes=bytes+file.bytes end
+        OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,{
+            document={key=images.key,generation=images.generation},state="done",bytes=bytes,
+            done=0,total=0,error="",
+        },{force=true})
+        OfflineLibrary.setTargetsDone(job.source_id,job.comic_id)
+        job.phase="done"
+        return true
     end
 
     job.images = images

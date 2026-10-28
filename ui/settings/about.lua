@@ -124,7 +124,7 @@ function AboutSettings:show()
             self:showQr(self.LINKS.plugin, _("PicaYomi GitHub 仓库链接"))
         end },
         {
-            text = _("漫画阅读插件 · 基于 KOReader"),
+            text = _("漫画与小说阅读插件 · 基于 KOReader"),
             callback = function()
                 self:showQr(AboutSettings.LINKS.koreader,
                     _("KOReader GitHub 仓库链接"))
@@ -148,7 +148,7 @@ function AboutSettings:show()
             self._license_time=now
             if self._license_taps==3 then
                 self._license_taps=0
-                self:showQr(self.LINKS.sources, _("PicaYomi 漫画源仓库"))
+                self:showQr(self.LINKS.sources, _("PicaYomi 源仓库"))
             end
         end, _license=true },
         self:createBackButton(),
@@ -167,13 +167,13 @@ end
 
 function AboutSettings:showFeatures()
     local items = {
-        { text = _("多漫画源: 哔咔漫画 / 禁漫天堂 / 绅士漫画"), enabled = false, select_enabled = false },
-        { text = _("流式阅读: 不必等整章下载完, 按需加载"), enabled = false, select_enabled = false },
-        { text = _("后台预取: 可在阅读设置里关闭 (省电 / 弱网)"), enabled = false, select_enabled = false },
+        { text = _("多源阅读: 漫画源与小说源独立管理"), enabled = false, select_enabled = false },
+        { text = _("漫画: 图片按需加载，支持条漫与横屏"), enabled = false, select_enabled = false },
+        { text = _("小说: 图文阅读，沿用 KOReader 字体与排版"), enabled = false, select_enabled = false },
         { text = _("浏览: 推荐 / 分类 / 排行榜 / 搜索"), enabled = false, select_enabled = false },
-        { text = _("收藏与历史: 网络收藏 + 本地浏览历史"), enabled = false, select_enabled = false },
+        { text = _("收藏与历史: 账号或本地收藏、按源保存进度"), enabled = false, select_enabled = false },
         { text = _("缓存: 统一缓存根, 可在缓存管理查看与清理"), enabled = false, select_enabled = false },
-        { text = _("阅读器菜单: 返回 Picayomi / 上一话 / 下一话"), enabled = false, select_enabled = false },
+        { text = _("阅读器菜单: 返回 Picayomi / 上一章 / 下一章"), enabled = false, select_enabled = false },
         self:createBackButton(),
     }
     local menu = self:createMenu(_("主要功能"), items)

@@ -34,61 +34,68 @@ function CacheSettings:show()
     local temp_size = sizes.temp or 0
     local other_size = sizes.others or 0
 
-    local items = {
-        {
-            text = T(_("占用的存储空间: %1 MB"), to_mb(total)),
-            enabled = false,
-            select_enabled = false,
-        },
-        {
-            text = T(_("封面: %1 MB · 阅读页: %2 MB"), to_mb(cover_size), to_mb(reading_size)),
-            enabled = false,
-            select_enabled = false,
-        },
-        {
-            text = T(_("图片: %1 MB · 数据: %2 MB"), to_mb(image_size), to_mb(data_size)),
-            enabled = false,
-            select_enabled = false,
-        },
-        {
-            text = T(_("临时: %1 MB · 其他: %2 MB"), to_mb(temp_size), to_mb(other_size)),
-            enabled = false, select_enabled = false,
-        },
-        {
-            text = T(_("已下载: %1 MB（清缓存时保留）"), to_mb(download_size)),
-            enabled = false, select_enabled = false,
-        },
-        {
-            text = _("最大缓存容量（不含已下载）"),
-            mandatory_func = function() return T(_("%1 MB"),self:safeConfigGet("max_cache_size",500)) end,
-            callback = function()
-                self:setMaxCacheSize()
-            end,
-        },
-        {
-            text=_("仅自动清理缓存；下载内容需手动删除"),enabled=false,select_enabled=false,
-        },
-        {
-            text = _("清除封面/阅读缓存"),
-            callback = function()
-                self:clearImageCache()
-            end,
-        },
-        {
-            text = _("清除所有缓存"),
-            callback = function()
-                self:clearAllCache()
-            end,
-        },
-        {
-            text=_("清空所有已下载"),
-            callback=function() self:clearDownloads() end,
-        },
-        self:createBackButton(),
+    local Screen=require("device").screen
+    local Geom=require("ui/geometry")
+    local Input=require("ui/widget/container/inputcontainer")
+    local Frame=require("ui/widget/container/framecontainer")
+    local Vertical=require("ui/widget/verticalgroup")
+    local Horizontal=require("ui/widget/horizontalgroup")
+    local Text=require("ui/widget/textboxwidget")
+    local Theme=require("ui.common.theme")
+    local pad=Screen:scaleBySize(12)
+    local width=Screen:getWidth()-pad*2
+    local page=Input:new{title=_("存储管理"),is_picayomi_page=true,covers_fullscreen=true,is_popout=false,
+        _settings_module=self,dimen=Geom:new{x=0,y=0,w=Screen:getWidth(),h=Screen:getHeight()}}
+    local body=Vertical:new{align="left"}
+    body[#body+1]=require("ui.common.menu_style").titleBar{title=_("存储管理"),width=width}
+    local summary={
+        T(_("总占用 %1 MB · 缓存 %2 MB"),to_mb(total),to_mb(total-download_size)),
+        T(_("漫画阅读 %1 MB · 小说阅读 %2 MB"),to_mb(reading_size+image_size),to_mb(sizes.novel_reading)),
+        T(_("共享封面 %1 MB · 数据及其他 %2 MB"),to_mb(cover_size),to_mb(data_size+temp_size+other_size)),
+        T(_("漫画下载 %1 MB · 小说下载 %2 MB"),to_mb(download_size-(sizes.novel_downloads or 0)),to_mb(sizes.novel_downloads)),
     }
-
-    local menu = self:createMenu(_("存储管理"), items)
-    self:showMenu(menu)
+    body[#body+1]=Text:new{text=table.concat(summary,"\n"),width=width,face=Theme.face("info")}
+    body[#body+1]=require("ui/widget/verticalspan"):new{width=pad}
+    local rows={
+        {{text=T(_("缓存上限：%1 MB（不含下载）"),self:safeConfigGet("max_cache_size",500)),callback=function()self:setMaxCacheSize()end}},
+        {{text=_("清漫画与封面缓存"),callback=function()self:clearImageCache()end},
+         {text=_("清小说缓存"),callback=function()self:clearNovelCache()end}},
+        {{text=_("删除漫画下载"),callback=function()self:clearDownloads("comic")end},
+         {text=_("删除小说下载"),callback=function()self:clearDownloads("novel")end}},
+        {{text=_("清除全部缓存"),callback=function()self:clearAllCache()end},
+         {text=_("清空全部下载"),callback=function()self:clearDownloads()end}},
+        {{text=_("返回"),callback=function()self:goBack()end}},
+    }
+    local footer,footer_buttons=require("ui.common.action_style").footer(Screen:getWidth(),rows[#rows])
+    rows[#rows]=footer_buttons
+    page.action_rows=rows
+    for row_index=1,#rows-1 do
+        local row=rows[row_index]
+        local group=Horizontal:new{}
+        for column,action in ipairs(row)do
+            group[#group+1]=require("ui.common.action_style").Button:new{
+                text=action.text,callback=action.callback,width=math.floor(width/#row),
+                height=Screen:scaleBySize(48),show_parent=page,
+            }
+            row[column]=group[#group]
+        end
+        body[#body+1]=group
+    end
+    local content=Frame:new{padding=pad,margin=0,bordersize=0,body}
+    local gap=math.max(0,Screen:getHeight()-content:getSize().h-footer:getSize().h)
+    page.content_height=content:getSize().h+gap+footer:getSize().h
+    page.footer_widget=footer
+    page.footer_buttons=footer_buttons
+    page[1]=Frame:new{padding=0,margin=0,bordersize=0,
+        background=require("ffi/blitbuffer").COLOR_WHITE,
+        Vertical:new{align="left",content,require("ui/widget/verticalspan"):new{width=gap},footer}}
+    page.close_callback=function()self:goBack()end
+    page.onClose=page.close_callback
+    page.key_events={Close={{"Back"}}}
+    page.updateItems=function()self:refresh()end
+    require("ui.common.tap_guard").install(page,page.dimen)
+    require("ui.common.menu_swipe").attach(page,function()self:goBack()end)
+    self:showMenu(page)
 end
 
 function CacheSettings:setMaxCacheSize()
@@ -137,7 +144,7 @@ end
 
 function CacheSettings:clearAllCache()
     local confirm_box = self:createConfirmBox{
-        text = _("确定要清除所有缓存吗？将清除图片和章节目录等漫画信息缓存。阅读历史、进度、收藏、账号和已下载内容会保留。"),
+        text = _("确定要清除所有缓存吗？将清除封面、正文、插图和章节目录等缓存。阅读历史、进度、收藏、账号和已下载内容会保留。"),
         ok_callback = function()
             local success, cleared = pcall(function()
                 return self.cache:clearAllCache()
@@ -157,17 +164,28 @@ function CacheSettings:clearAllCache()
     UIManager:show(confirm_box, "ui")
 end
 
-function CacheSettings:clearDownloads()
+function CacheSettings:clearNovelCache()
+    UIManager:show(self:createConfirmBox{text=_("清除小说正文与插图缓存？已下载小说、阅读进度、收藏和账号会保留。"),ok_callback=function()
+        local ok,bytes=pcall(self.cache.clearNovelCache,self.cache)
+        if not ok then self:showError(bytes);return end
+        self:showInfo(T(_("已清除 %1 MB 小说缓存"),to_mb(bytes)));self:refresh()
+    end},"ui")
+end
+
+function CacheSettings:clearDownloads(kind)
     UIManager:show(self:createConfirmBox{
-        text=_("确定清空所有已下载吗？\n所有漫画源的下载文件和未完成下载都会删除，无法恢复。阅读历史、进度、收藏和账号会保留。"),
+        text=kind and T(_("确定删除全部%1下载吗？包括未完成任务，无法恢复。另一类下载、历史、进度、收藏和账号会保留。"),kind=="novel" and _("小说") or _("漫画"))
+            or _("确定清空所有已下载吗？\n所有源的下载文件和未完成下载都会删除，无法恢复。阅读历史、进度、收藏和账号会保留。"),
         ok_text=_("清空"),cancel_text=_("取消"),
         ok_callback=function()
             local Loading=require("ui.common.loading_task")
-            local notice=require("ui/widget/infomessage"):new{text=_("正在停止任务并清空所有已下载…")}
+            local notice=require("ui/widget/infomessage"):new{text=kind and _("正在删除所选类型的下载…") or _("正在停止任务并清空所有已下载…")}
             UIManager:show(notice,"ui");UIManager:forceRePaint()
             local ok,result,err=Loading.call(notice,function()
+                local Library=require("util.offline_library")
+                if kind then return true,Library.clearType(kind) end
                 require("util.download_queue").instance():cancel("清空所有已下载")
-                return true,require("util.offline_library").clearAll()
+                return true,Library.clearAll()
             end)
             if not ok then self:showError(err);return end
             self:showInfo(T(_("已清空 %1 部下载，释放 %2 MB"),result.comics,to_mb(result.bytes)))

@@ -29,29 +29,20 @@ function M.attach(menu, on_back)
     if not menu or not Device:isTouchDevice() then return menu end
     require("ui.common.host_menu").attach(menu)
 
+    -- Custom full-screen InputContainers do not inherit Menu's gesture range.
+    menu.ges_events=menu.ges_events or {}
+    menu.ges_events.Swipe=menu.ges_events.Swipe or {
+        require("ui/gesturerange"):new{ges="swipe",range=menu.dimen or require("device").screen:getSize()},
+    }
     local native = menu.onSwipe
     menu.onSwipe = function(self, arg, ges)
-        -- **唯一的退出入口**: 边缘往中间划。
-        -- 必须先判: 左边缘右滑的方向也是 east, 否则会被当成"上一屏"。
-        if SwipeRules.isBackSwipe(ges) then
-            if on_back then on_back() end
-            return true
-        end
-
-        local direction = ges and ges.direction
-        local page = self.page or 1
-        local pages = self.page_num or 1
-
-        if direction == "west" then
-            -- 还有下一页才翻; 已经是最后一页就什么都不做 (不循环回第一页)
-            if page < pages then return self:onNextPage() end
-            return true
-        elseif direction == "east" then
-            -- 不在第一页就退一页; 已经在第一页**什么都不做** ——
-            -- 退出只归边缘滑动, 中间滑到边界就停住。
-            if page > 1 then return self:onPrevPage() end
-            return true
-        end
+        local handled=SwipeRules.dispatchPageSwipe(ges,{
+            back=on_back,
+            next=function()if (self.page or 1)<(self.page_num or 1) then self:onNextPage()end end,
+            prev=function()if (self.page or 1)>1 then self:onPrevPage()end end,
+        })
+        if handled then return true end
+        local direction=ges and ges.direction
 
         -- Native Menu treats south as Close, which exits the plugin on Home.
         -- A top pull is intercepted before this handler; body swipes stay here.

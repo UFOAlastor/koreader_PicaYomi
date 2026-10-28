@@ -47,22 +47,31 @@ end
 function SourceRegistry:list(include_local)
     local result = {}
     for id, source in pairs(registered_sources) do
-        table.insert(result, {
-            identifier = id,
-            name = source.name or id,
-            capabilities = source.capabilities or {},
-        })
+        if include_local or not source._offline then
+            table.insert(result, {
+                identifier = id,
+                name = source.name or id,
+                content_type = source.content_type or "comic",
+                capabilities = source.capabilities or {},
+            })
+        end
     end
     if include_local then
         self._local_ids = local_sources()
         for id in pairs(self._local_ids) do
             if not registered_sources[id] then
                 result[#result + 1] = { identifier = id, name = id .. "（源已删除）",
+                    content_type = require("source.offline").new(id).content_type or "comic",
                     capabilities = { local_favorites = true }, offline = true }
             end
         end
     end
+    local priority = {copymanga=10,htcomic=100,jm=101,picacg=102}
     table.sort(result, function(a, b)
+        local a_novel,b_novel=a.content_type=="novel",b.content_type=="novel"
+        if a_novel~=b_novel then return a_novel end
+        local ap,bp=priority[a.identifier] or 20,priority[b.identifier] or 20
+        if ap~=bp then return ap<bp end
         return a.identifier < b.identifier
     end)
     return result

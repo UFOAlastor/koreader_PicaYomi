@@ -52,7 +52,12 @@ function M.line(comic, opts)
 
     local eps = num(comic.epsCount)
     if eps > 0 then
-        parts[#parts + 1] = T(_("%1话"), eps)
+        parts[#parts + 1] = T(comic.content_type=="novel" and _("%1章") or _("%1话"), eps)
+    end
+
+    local words = type(comic.metadata)=="table" and comic.metadata.word_count
+    if comic.content_type=="novel" and type(words)=="string" and words~="" then
+        parts[#parts + 1] = words
     end
 
     local pages = num(comic.pagesCount)

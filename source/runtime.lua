@@ -9,13 +9,13 @@ local capability={getRecommendations="recommendations",getLatest="latest",search
     getRandom="random",
     getCategories="categories",getCategoryComics="categories",getRankings="rankings",
     getRankingTypes="rankings",getFavorites="favorites",addFavorite="favorites",removeFavorite="favorites",
-    getComments="comments",getCommentReplies="comments",login="login",logout="login",getUserProfile="login"}
+    getComments="comments",getCommentReplies="comments",getCommentDetails="comment_details",login="login",logout="login",getUserProfile="login"}
 local mutations={login=true,logout=true,addFavorite=true,removeFavorite=true,punchIn=true,setCredential=true}
-local arity={getManga=1,getChapters=2,getPages=2,getImageRequest=2,getLatest=1,getRecommendations=1,
+local arity={getManga=1,getChapters=2,getPages=2,getChapterContent=2,getImageRequest=2,getLatest=1,getRecommendations=1,
     search=2,getCategories=0,getCategoryComics=2,getRankingTypes=0,getRankings=2,getSortOptions=1,
     getSession=0,getCredential=0,setCredential=1,login=2,logout=0,getUserProfile=0,getFavorites=1,
-    addFavorite=1,removeFavorite=1,getComments=2,getCommentReplies=3,punchIn=0,getRandom=1}
-local function message(err) return err and err.message or "漫画源请求失败" end
+    addFavorite=1,removeFavorite=1,getComments=2,getCommentReplies=3,getCommentDetails=2,punchIn=0,getRandom=1}
+local function message(err) return err and err.message or "源请求失败" end
 local function project(item,kind)
     local out=Contract.copy(item)
     if kind=="page" then out.url=out.resource.url
@@ -39,6 +39,8 @@ function Runtime.new(source,manifest,digest,extension_context)
     local caps=Contract.copy(source.capabilities,true)
     local access=Contract.copy(source.access or {},true)
     local handle={identifier=manifest.id,name=manifest.name,version=manifest.version,
+        content_type=manifest.content_type or "comic",
+        text_filters=Contract.copy(manifest.text_filters or {},true),
         _extension_digest=digest,_api_version=manifest.api_version,_source_runtime=true,
         capabilities=Contract.copy(caps),access=Contract.copy(access)}
     function handle:init() return true end -- already initialized by the loader
@@ -102,11 +104,11 @@ function Runtime.new(source,manifest,digest,extension_context)
         if context.deadline and require("socket").gettime()>=context.deadline then
             return false,nil,Contract.error("timeout","操作超时",method,nil,true)
         end
-        if not called then return false,nil,Contract.error("invalid_response","漫画源执行失败",method) end
+        if not called then return false,nil,Contract.error("invalid_response","源执行失败",method) end
         if not legacy then
             if type(ok)~="boolean" or ok and (data==nil or err~=nil)
                 or not ok and (data~=nil or not Contract.isError(err)) then
-                return false,nil,Contract.error("invalid_response","漫画源返回约定无效",method)
+                return false,nil,Contract.error("invalid_response","源返回约定无效",method)
             end
         end
         if mutations[method] and legacy then
@@ -152,6 +154,16 @@ function Runtime.new(source,manifest,digest,extension_context)
         if account_change and (ok or was_logged~=logged()) then invalidate_sessions() end
         if not ok then return false,nil,err end
         return Contract.protect(method,function()
+            if method=="getChapterContent" then
+                if handle.content_type~="novel" then Contract.invalid(method,"当前源不是小说源") end
+                local out=Contract.copy(data,true)
+                if type(out)~="table" or out.complete~=true or out.format~="html" then
+                    Contract.invalid(method,"小说章节不完整或格式无效")
+                end
+                Contract.string(out.html,"chapter.html",Contract.MAX_STRING)
+                require("source.image_request").validate({url=out.base_url,method="GET",headers={}})
+                return out
+            end
             if method=="getImageRequest" then return require("source.image_request").validate(data) end
             if not legacy and mutations[method] then
                 if type(data)~="table" or data.success~=true then Contract.invalid(method,"写操作缺少成功结果") end
@@ -165,6 +177,7 @@ function Runtime.new(source,manifest,digest,extension_context)
             end
             if method=="getManga" or method=="getComicDetail" then
                 local manga=Contract.manga(data,legacy)
+                manga.content_type=handle.content_type
                 manga._list_display=Contract.copy(list_display,true)
                 return manga
             end
@@ -184,7 +197,7 @@ function Runtime.new(source,manifest,digest,extension_context)
             end
             if list_methods[method] then
                 local result=Contract.list(data,"manga",legacy)
-                for _,manga in ipairs(result.items) do manga._list_display=Contract.copy(list_display,true) end
+                for _,manga in ipairs(result.items) do manga._list_display=Contract.copy(list_display,true);manga.content_type=handle.content_type end
                 return result
             end
             if method=="getChapters" then
@@ -195,6 +208,7 @@ function Runtime.new(source,manifest,digest,extension_context)
                 end
                 return result
             end
+            if method=="getCommentDetails" then return Contract.comment(data,legacy) end
             if method=="getComments" or method=="getCommentReplies" then
                 return Contract.list(data,method=="getComments" and "comment" or "reply",legacy)
             end
@@ -260,6 +274,7 @@ function Runtime.new(source,manifest,digest,extension_context)
         local started=generation
         local ok,data,err=self:directory(manga_id,context)
         if not ok then return false,nil,message(err) end
+        if method=="getCommentDetails" then return true,project(data,"comment") end
         if started~=generation or key~=chapter_cache_key(manga_id) then return false,nil,"登录或源设置已改变，请重新打开详情" end
         -- Cache writes are optional: disk-full/oversized snapshots must not hide
         -- a valid network directory. A failed refresh never replaces last good data.
@@ -377,7 +392,9 @@ function Runtime.new(source,manifest,digest,extension_context)
             page_number=tonumber(args[at]) or 1
             paging_key=method..":"..tostring(args[1])..":"..(at==3 and tostring(args[2]) or "")
             continuation_state(paging_key)
-            args[at]=page_number==1 and {} or continuations[paging_key][page_number]
+            local indexed=indexed_pages[paging_key]
+            if indexed and page_number>indexed.pages then return false,nil,"页码超出范围，请重新加载" end
+            args[at]=page_number==1 and {} or indexed and {page=page_number} or continuations[paging_key][page_number]
             if not args[at] then return false,nil,"续页已失效，请重新加载" end
         elseif not legacy and canonical=="getPages" then
             local id=orders[tostring(args[1])] and orders[tostring(args[1])][tostring(args[2])]
@@ -394,7 +411,7 @@ function Runtime.new(source,manifest,digest,extension_context)
         if not legacy and method=="getChapters" then ok,data,err=handle:directory(args[1])
         else ok,data,err=handle:invoke(canonical,args,context) end
         if ok and paging_key then
-            if data.pagination and data.pagination.page~=page_number then return false,nil,"漫画源返回页码不一致" end
+            if data.pagination and data.pagination.page~=page_number then return false,nil,"源返回页码不一致" end
             if page_number==1 then continuations[paging_key]={};continuation_seen[paging_key]={};indexed_pages[paging_key]=nil end
             indexed_pages[paging_key]=data.pagination
             local state=continuations[paging_key]
@@ -402,7 +419,7 @@ function Runtime.new(source,manifest,digest,extension_context)
             if encoded and not data.pagination then
                 local hash=require("ffi/sha2").sha256(encoded)
                 local previous=continuation_seen[paging_key][hash]
-                if previous and previous<page_number then return false,nil,"漫画源续页重复，请重新加载" end
+                if previous and previous<page_number then return false,nil,"源续页重复，请重新加载" end
                 continuation_seen[paging_key][hash]=page_number
             end
             state[page_number+1]=data.next
@@ -452,7 +469,7 @@ function Runtime.new(source,manifest,digest,extension_context)
     end
     for method in pairs(list_methods) do handle[method]=function(_,...) return facade(method,...) end end
     for _,method in ipairs({"getComicDetail","getChapters","getAllChapterImages","getChapterImages",
-        "getComments","getCommentReplies","getCategories","getRankingTypes","getSortOptions",
+        "getComments","getCommentReplies","getCommentDetails","getCategories","getRankingTypes","getSortOptions",
         "login","logout","getUserProfile","addFavorite","removeFavorite","punchIn"}) do
         handle[method]=function(_,...) return facade(method,...) end
     end

@@ -172,13 +172,10 @@ end
 function Cache:getSizeBreakdown()
     local out = {
         total = 0, covers = 0, images = 0, reading = 0,
-        downloads = 0, data = 0, temp = 0, others = 0,
+        downloads = 0, data = 0, temp = 0, others = 0, novel_reading=0, novel_downloads=0,
     }
 
     local root = self.CACHE_DIR
-    if lfs.attributes(root, "mode") ~= "directory" then
-        return out
-    end
 
     local prefixes = {
         { prefix = self.COVER_CACHE_DIR .. "/",     key = "covers" },
@@ -213,7 +210,11 @@ function Cache:getSizeBreakdown()
         end
     end
 
-    walk(root)
+    if lfs.attributes(root,"mode")=="directory" then walk(root) end
+    out.novel_reading=self:getDirSize(self.BASE_DIR.."/novels/reading")
+    out.novel_downloads=self:getDirSize(self.BASE_DIR.."/novels/downloads")
+    out.total=out.total+out.novel_reading+out.novel_downloads
+    out.downloads=out.downloads+out.novel_downloads
     return out
 end
 
@@ -247,10 +248,21 @@ function Cache:clearDataCache()
     return size_before
 end
 
+-- Text and illustrations share one complete-chapter cache. Positions live
+-- beside it and must survive every cache operation.
+function Cache:clearNovelCache()
+    require("novel.prefetch").changed()
+    local root=self.BASE_DIR.."/novels/reading"
+    local before=self:getDirSize(root)
+    if lfs.attributes(root,"mode")=="directory" then self:clearDir(root) end
+    return math.max(0,before-self:getDirSize(root))
+end
+
 -- 清除所有缓存
 function Cache:clearAllCache()
     cache_store = {}
     local before = self:getSizeBreakdown()
+    self:clearNovelCache()
 
     -- 删除缓存目录下所有文件, **但保留 downloads**: 那是用户主动下载的
     -- 离线漫画 (见 util/offline_library.lua), 删掉清单还在, 列表就会指向空目录。

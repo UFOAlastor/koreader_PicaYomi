@@ -11,6 +11,18 @@ local Redact = require("util.log_redact")
 
 local HttpClient = {}
 
+-- Cookie-based source logins must inspect each response before following Location.
+-- This operation never follows redirects or retries a credential submission.
+function HttpClient:requestOnce(method,url,headers,body,timeout)
+    assert(type(url)=="string" and url:match("^https://"),"单步认证请求仅支持 HTTPS")
+    local Async=require("network.async_task")
+    if Async.active() then
+        return Async.await(function()return self:requestOnce(method,url,headers,body,timeout) end,
+            {kind="http",operation="requestOnce",method=method,url=url,headers=headers,body=body,timeout=timeout})
+    end
+    return self:_httpsOnce(method,url,headers,body,timeout)
+end
+
 --- 发送 HTTP 请求
 -- @param method: "GET"/"POST"/"PUT"/"DELETE"
 -- @param url: 完整 URL
@@ -208,11 +220,15 @@ function HttpClient:_httpsOnce(method, url, headers, body, timeout, sink)
         return nil, tostring(code)
     end
 
-    return {
+    local response = {
         status_code = code,
         headers = resp_headers,
         body = (not sink) and table.concat(response_body) or nil,
     }
+    if not sink and resp_headers and (resp_headers["content-encoding"] or resp_headers["Content-Encoding"]) then
+        return require("network.http_content").decode(response)
+    end
+    return response
 end
 
 --- HTTPS 请求 (使用 ssl.https，手动跟随重定向)

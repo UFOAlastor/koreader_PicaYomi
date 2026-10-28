@@ -23,7 +23,7 @@ local function field(comic,name)
         local stat=name:match("^stats%.(.+)$")
         if stat then
             local count=tonumber(comic[projected[stat]] or type(comic.stats)=="table" and comic.stats[stat])
-            return count and count>0 and T(_(units[stat]),math.floor(count)) or nil
+            return count and count>0 and T(stat=="chapters" and comic.content_type=="novel" and _("%1章") or _(units[stat]),math.floor(count)) or nil
         end
         local extra=name:match("^metadata%.(.+)$")
         local value=extra and type(comic.metadata)=="table" and comic.metadata[extra]

@@ -14,7 +14,7 @@
 -- 只做最基本的"是 >=1 的整数", 其余由 on_jump 返回 (ok, err) 表达。
 
 local InfoMessage = require("ui/widget/infomessage")
-local InputDialog = require("ui/widget/inputdialog")
+local InputDialog = require("ui.common.action_style").InputDialog
 local UIManager = require("ui/uimanager")
 local _ = require("gettext")
 

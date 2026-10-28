@@ -23,6 +23,7 @@ ConfigDefaults.defaults = {
     -- 预取窗口太小就来不及 —— 翻页时看到的仍是"加载中…"。预取的代价只有磁盘
     -- (解码只发生在 MultiImageDoc:openPage, 且上一页的缓冲立刻释放), 所以放宽到 3。
     prefetch_pages = 3,
+    novel_prefetch_chapters = 1,
     -- 翻页刷新: ui/reader.lua 的 forceFullRefresh 读取。
     -- true = 每翻一页整屏刷一次 (消墨水屏残影); false = 交给 KOReader 的刷新计数。
     refresh_on_page_turn = true,
@@ -61,6 +62,9 @@ ConfigDefaults.validators = {
             or value == "high" or value == "original"
     end,
 
+    novel_prefetch_chapters = function(value)
+        return type(value)=="number" and value%1==0 and value>=0 and value<=5
+    end,
     prefetch_pages = function(value)
         return type(value) == "number" and value >= 0 and value <= 9
     end,
@@ -94,6 +98,7 @@ ConfigDefaults.validators = {
 ConfigDefaults.descriptions = {
     grayscale_images = _("图片模式"),
     image_quality = _("图片质量"),
+    novel_prefetch_chapters = _("提前加载章节数（0~5，0 = 关闭）"),
     prefetch_pages = _("提前加载页数（0~9，0 = 关闭）"),
     max_cache_size = _("最大缓存容量（MB）"),
     refresh_on_page_turn = _("翻页刷新"),

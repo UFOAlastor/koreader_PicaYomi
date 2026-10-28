@@ -26,7 +26,7 @@ local Screen = Device.screen
 
 local Cloud = InputContainer:extend{
     name = "picayomi_category_cloud",
-    title = _("漫画分类"),
+    title = _("分类浏览"),
     is_picayomi_page = true,
     covers_fullscreen = true,
     is_popout = false,

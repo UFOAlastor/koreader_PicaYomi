@@ -1,10 +1,9 @@
 local InfoMessage = require("ui/widget/infomessage")
-local Menu = require("ui/widget/menu")
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local ConfirmBox = require("ui/widget/confirmbox")
+local ConfirmBox = require("ui.common.action_style").ConfirmBox
 local _ = require("gettext")
 local T = require("ffi/util").template
 local logger = require("util.logger")
@@ -67,7 +66,7 @@ function Favorites:getSourceName()
         local s = SourceRegistry:getCurrent()
         if s and s.name then return s.name end
     end
-    return _("当前漫画源")
+    return _("当前源")
 end
 
 --- 当前源 (每次进来都重新取: 用户可能中途换过源)
@@ -104,6 +103,18 @@ function Favorites:promptLogin()
             end
         end,
     }, "ui")
+end
+
+-- Shelves often return only the stable book ID and title. Resolve visible
+-- rows lazily through the same cancellable queue used by reading history.
+function Favorites:resolveCover(comic,source)
+    source=source or self:currentSource()
+    if not source or not source.getComicDetail or not require("ui.common.source_access").check(source,nil,true) then return nil,"failed" end
+    local ok,detail=source:getComicDetail(comic._id)
+    if not ok or type(detail)~="table" then return nil,"failed" end
+    local thumb=detail.thumb or detail.cover
+    if type(thumb)~="string" or thumb=="" then return nil,"missing" end
+    return thumb
 end
 
 --- 收藏入口: 登录了看账号收藏, 没登录看本地收藏
@@ -147,6 +158,9 @@ function Favorites:loadLocalFavorites(source)
     self.favorites_menu = VisualComicList:new{
         title = _("我的收藏 (本地)"),
         comics = comics,
+        resolve_cover = function(comic) return self:resolveCover(comic,source) end,
+        source = source,
+        source_id = source_id,
         server_page = 1,
         total_pages = 1,
         total_count = #raw,
@@ -174,7 +188,7 @@ function Favorites:showEmptyLocalFavorites(source)
     local can_login = source and source.hasCapability and source:hasCapability("favorites")
     if not can_login then
         UIManager:show(InfoMessage:new{
-            text = _("你还没有收藏漫画"),
+            text = source and source.content_type=="novel" and _("你还没有收藏小说") or _("你还没有收藏漫画"),
         }, "ui")
         return
     end
@@ -188,11 +202,12 @@ end
 
 --- 账号收藏 (已登录)
 function Favorites:loadRemoteFavorites()
+    local source = self:currentSource()
     if not require("ui.common.source_access").check(require("source.registry"):getCurrent(),"favorites") then return end
     -- 显示加载消息
     if logger.enabled then logger.info("Picayomi", "开始加载收藏漫画...") end
     local loading = InfoMessage:new{
-        text = _("加载收藏漫画..."),
+        text = source and source.content_type=="novel" and _("加载收藏小说...") or _("加载收藏漫画..."),
     }
     UIManager:show(loading, "ui")
     -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
@@ -226,16 +241,17 @@ function Favorites:loadRemoteFavorites()
             self:promptLogin()
         else
             UIManager:show(InfoMessage:new{
-                text = T(_("获取收藏漫画失败: %1"), require("ui.common.error_message").describe(error_msg)),
+                text = T(source and source.content_type=="novel" and _("获取收藏小说失败: %1") or _("获取收藏漫画失败: %1"), require("ui.common.error_message").describe(error_msg)),
             }, "ui")
         end
     end
 end
 
 function Favorites:showFavoritesList(favorites_data)
+    local source = self:currentSource()
     if not favorites_data.comics or #favorites_data.comics == 0 then
         UIManager:show(InfoMessage:new{
-            text = _("你还没有收藏漫画"),
+            text = source and source.content_type=="novel" and _("你还没有收藏小说") or _("你还没有收藏漫画"),
         }, "ui")
         return
     end
@@ -252,9 +268,12 @@ function Favorites:showFavoritesList(favorites_data)
     self.favorites_menu = VisualComicList:new{
         title = _("我的收藏"),
         comics = comics,
+        resolve_cover = function(comic) return self:resolveCover(comic,source) end,
+        source = source,
+        source_id = source and source.identifier,
         -- 单层分页: 翻到缓冲区末尾时由列表自己按需补货
         server_page = self.current_page,
-        total_pages = self.total_pages,
+        total_pages = self.total_pages, server_page_size = favorites_data.page_size,
         has_more = favorites_data.has_more,
         -- 首次进入就要有总条数, 否则界面算不出总屏数 (见 ui/home.lua 同处的说明)
         total_count = favorites_data.total,

@@ -4,7 +4,7 @@ local codes={unsupported=true,auth_required=true,auth_expired=true,network=true,
     rate_limited=true,not_found=true,protocol_changed=true,invalid_response=true,cancelled=true,resource_limit=true}
 function C.error(code,message,operation,field,retryable)
     assert(codes[code],"unknown source error")
-    local text=require("util.log_redact").text(message or "漫画源返回值无效")
+    local text=require("util.log_redact").text(message or "源返回值无效")
     text=text:gsub("https?://[^%s\"'<>]+",function(url) return require("util.log_redact").url(url) end)
     return {code=code,message=text:sub(1,1024),operation=operation,field=field,retryable=retryable==true}
 end
@@ -14,33 +14,33 @@ function C.copy(value,strict)
     local nodes,bytes,stack=0,0,{}
     local function copy(v,depth)
         nodes=nodes+1
-        if nodes>C.MAX_NODES or depth>C.MAX_DEPTH then invalid("result","漫画源数据超过限额","resource_limit") end
+        if nodes>C.MAX_NODES or depth>C.MAX_DEPTH then invalid("result","源数据超过限额","resource_limit") end
         local t=type(v)
         if v==nil or t=="boolean" then return v end
         if t=="string" then
             bytes=bytes+#v
-            if bytes>C.MAX_BYTES then invalid("result","漫画源数据超过字节限额","resource_limit") end
-            if #v>C.MAX_STRING then invalid("result","漫画源文本超过限额","resource_limit") end
+            if bytes>C.MAX_BYTES then invalid("result","源数据超过字节限额","resource_limit") end
+            if #v>C.MAX_STRING then invalid("result","源文本超过限额","resource_limit") end
             return v
         end
         if t=="number" and v==v and math.abs(v)<math.huge then return v end
         if t=="userdata" and not strict and v==require("rapidjson").null then return nil end
-        if t~="table" or stack[v] then invalid("result","漫画源数据必须为无循环的 JSON 值") end
+        if t~="table" or stack[v] then invalid("result","源数据必须为无循环的 JSON 值") end
         local meta=getmetatable(v)
         local tag=type(meta)=="table" and rawget(meta,"__jsontype")
         if meta then
-            if tag~="array" and tag~="object" then invalid("result","漫画源数据元表无效") end
-            for k in pairs(meta) do if k~="__jsontype" then invalid("result","漫画源数据元表无效") end end
+            if tag~="array" and tag~="object" then invalid("result","源数据元表无效") end
+            for k in pairs(meta) do if k~="__jsontype" then invalid("result","源数据元表无效") end end
         end
         stack[v]=true
         local out={}
         local numeric,strings=false,false
         for k,item in pairs(v) do
-            if type(k)~="string" and (type(k)~="number" or k<1 or k%1~=0) then invalid("result","漫画源数据键无效") end
+            if type(k)~="string" and (type(k)~="number" or k<1 or k%1~=0) then invalid("result","源数据键无效") end
             if type(k)=="number" and type(item)=="userdata" then invalid("result","数组条目不能为 JSON null") end
             if type(k)=="string" then
                 bytes=bytes+#k
-                if #k>4096 or bytes>C.MAX_BYTES then invalid("result","漫画源数据键超过限额","resource_limit") end
+                if #k>4096 or bytes>C.MAX_BYTES then invalid("result","源数据键超过限额","resource_limit") end
             end
             out[k]=copy(item,depth+1)
             if type(k)=="number" then numeric=true else strings=true end
@@ -72,32 +72,32 @@ function C.serialize(value)
     return encode(C.copy(value,true))
 end
 function C.string(v,field,max)
-    if type(v)~="string" or v=="" or #v>(max or C.MAX_ID) or v:find("%z") then invalid(field,"漫画源字段无效: "..field) end
+    if type(v)~="string" or v=="" or #v>(max or C.MAX_ID) or v:find("%z") then invalid(field,"源字段无效: "..field) end
     -- IDs are opaque UTF-8, not byte strings or path segments.
     local i=1
     while i<=#v do
         local a=v:byte(i)
         local n=a<128 and 1 or a>=194 and a<=223 and 2 or a>=224 and a<=239 and 3 or a>=240 and a<=244 and 4 or 0
-        if n==0 or i+n-1>#v then invalid(field,"漫画源字段不是有效 UTF-8: "..field) end
-        for j=1,n-1 do local b=v:byte(i+j);if b<128 or b>191 then invalid(field,"漫画源字段不是有效 UTF-8: "..field) end end
+        if n==0 or i+n-1>#v then invalid(field,"源字段不是有效 UTF-8: "..field) end
+        for j=1,n-1 do local b=v:byte(i+j);if b<128 or b>191 then invalid(field,"源字段不是有效 UTF-8: "..field) end end
         local b=v:byte(i+1)
         if n==3 and (a==224 and b<160 or a==237 and b>=160) or n==4 and (a==240 and b<144 or a==244 and b>=144) then
-            invalid(field,"漫画源字段不是有效 UTF-8: "..field)
+            invalid(field,"源字段不是有效 UTF-8: "..field)
         end
         i=i+n
     end
     return v
 end
 function C.array(v,field)
-    if type(v)~="table" then invalid(field,"漫画源列表无效: "..field) end
+    if type(v)~="table" then invalid(field,"源列表无效: "..field) end
     local meta=getmetatable(v)
-    if type(meta)=="table" and rawget(meta,"__jsontype")=="object" then invalid(field,"漫画源列表必须为数组: "..field) end
+    if type(meta)=="table" and rawget(meta,"__jsontype")=="object" then invalid(field,"源列表必须为数组: "..field) end
     local n=#v
-    if n>C.MAX_ITEMS then invalid(field,"漫画源列表超过限额","resource_limit") end
+    if n>C.MAX_ITEMS then invalid(field,"源列表超过限额","resource_limit") end
     for k in pairs(v) do
-        if type(k)~="number" or k%1~=0 or k<1 or k>n then invalid(field,"漫画源列表必须为连续数组: "..field) end
+        if type(k)~="number" or k%1~=0 or k<1 or k>n then invalid(field,"源列表必须为连续数组: "..field) end
     end
-    for i=1,n do if v[i]==nil then invalid(field,"漫画源列表必须为连续数组: "..field) end end
+    for i=1,n do if v[i]==nil then invalid(field,"源列表必须为连续数组: "..field) end end
     return v
 end
 function C.url(v,field)
@@ -184,6 +184,7 @@ function C.comment(v,legacy)
     if type(out)~="table" then invalid("comment","评论返回值无效") end
     out.id=C.string(legacy and tostring(out._id or "") or out.id,"comment.id")
     if type(out.content)~="string" or type(out.author)~="table" then invalid("comment","评论正文或作者无效") end
+    if out.content_complete~=nil and type(out.content_complete)~="boolean" then invalid("comment","评论完整性标记无效") end
     if out.replies then
         C.array(out.replies,"comment.replies")
         for i,r in ipairs(out.replies) do out.replies[i]=C.comment(r,legacy) end
@@ -295,7 +296,7 @@ function C.list(value,kind,legacy,opts)
         if not out.has_more and out.next~=nil then invalid("list.next","结束列表不能携带续页数据") end
         if value.pagination~=nil then
             local p=value.pagination
-            if kind~="manga" or type(p)~="table" or p.mode~="page" then invalid("list.pagination","页码分页声明无效") end
+            if (kind~="manga" and kind~="comment" and kind~="reply") or type(p)~="table" or p.mode~="page" then invalid("list.pagination","页码分页声明无效") end
             for _,key in ipairs({"page","pages","page_size"}) do
                 local n=p[key]
                 local limit=key=="page_size" and C.MAX_ITEMS or 1000000
@@ -316,13 +317,13 @@ function C.protect(operation,fn,...)
     local ok,result=pcall(fn,...)
     if ok then return true,result,nil end
     if type(result)=="table" and codes[result.code] then result.operation=operation; return false,nil,result end
-    return false,nil,C.error("invalid_response","漫画源返回值无效",operation)
+    return false,nil,C.error("invalid_response","源返回值无效",operation)
 end
 function C.sourceError(value,operation)
     if type(value)=="table" and codes[value.code] and type(value.message)=="string" and type(value.retryable)=="boolean" then
         return C.error(value.code,value.message,operation,value.field,value.retryable)
     end
-    return C.error("network",type(value)=="string" and value or "漫画源请求失败",operation,nil,false)
+    return C.error("network",type(value)=="string" and value or "源请求失败",operation,nil,false)
 end
 function C.isError(value)
     return type(value)=="table" and codes[value.code]==true and type(value.message)=="string"

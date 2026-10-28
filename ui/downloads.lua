@@ -33,6 +33,10 @@ local Downloads = WidgetContainer:extend{
     refresh_interval = 1.5,
 }
 
+local function chapter_unit(comic)
+    return comic and comic.content_type=="novel" and _("章") or _("话")
+end
+
 function Downloads:init()
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
@@ -69,7 +73,18 @@ local function to_comic(entry)
     return comic
 end
 
+function Downloads:entries()
+    local out={}
+    for _,entry in ipairs(OfflineLibrary.list()) do
+        local kind=entry.content_type=="novel" and "novel" or "comic"
+        if kind==(self.content_type or "comic") then out[#out+1]=entry end
+    end
+    return out
+end
+
 function Downloads:show(return_callback)
+    self.content_type=self.content_type or "comic"
+    local section=self.content_type=="novel" and _("小说下载") or _("漫画下载")
     self.return_callback = return_callback
     self._closed = false
 
@@ -78,12 +93,12 @@ function Downloads:show(return_callback)
     local old_list = self.list
     self.list = nil
 
-    local entries = OfflineLibrary.list()
+    local entries = self:entries()
     if #entries == 0 then
         -- 一部都没有了 (删掉最后一部): 过期的列表必须收掉, 不能留在栈里
         if old_list then UIManager:close(old_list, "ui") end
         UIManager:show(InfoMessage:new{
-            text = _("还没有下载任何漫画。\n在漫画详情页点「下载章节…」即可离线保存。"),
+            text = section.._("为空。\n在作品详情页点「下载章节」即可离线保存。"),
             timeout = 4,
         }, "ui")
         if self.return_callback then self.return_callback() end
@@ -103,12 +118,21 @@ function Downloads:show(return_callback)
 
     -- 标题直接写清"有几章在下", 用户一眼知道这里是下载中的列表
     local list_title = downloading > 0
-        and T(_("已下载 · %1 部下载中"), downloading)
-        or _("已下载")
+        and T(_("%1 · %2 部下载中"), section,downloading)
+        or section
 
     self.list = VisualComicList:new{
         title = list_title,
         comics = comics,
+        cover_concurrency = 1, -- One source-bound transport; do not cancel another row's source.
+        resolve_cover = function(comic)
+            local source=self:sourceFor(comic.source_id)
+            if not source or not source.getComicDetail or not require("ui.common.source_access").check(source,nil,true) then return nil,"failed" end
+            local ok,detail=source:getComicDetail(comic._id)
+            if not ok or type(detail)~="table" then return nil,"failed" end
+            local thumb=detail.thumb or detail.cover
+            return thumb,thumb and "ready" or "missing"
+        end,
         server_page = 1,
         total_pages = 1,
         total_count = #comics,
@@ -156,7 +180,7 @@ end
 --- 把实时进度同步到列表缓冲区; 返回是否发生了变化
 function Downloads:syncProgress()
     if not self.list or self.list._closed then return false, {} end
-    local fresh = OfflineLibrary.list()
+    local fresh = self:entries()
     local map = {}
     local retryable, downloading = false, 0
     for _i, e in ipairs(fresh) do
@@ -257,7 +281,7 @@ function Downloads:_enqueueRetry(comic, chapters)
     local sid = comic.source_id or "unknown"
     local source = self:sourceFor(sid)
     if not source then
-        return 0, T(_("找不到漫画源 %1"), sid)
+        return 0, T(_("找不到源 %1"), sid)
     end
     local queue = self.queue or DownloadQueue.instance()
     local ok, queued = pcall(queue.enqueue, queue, source, comic, chapters)
@@ -278,7 +302,7 @@ function Downloads:retryChapters(comic, chapters)
         return 0
     end
     UIManager:show(InfoMessage:new{
-        text = T(_("已重新加入 %1 话下载"), queued),
+        text = T(_("已重新加入 %1 %2下载"), queued,chapter_unit(comic)),
         timeout = 3,
     }, "ui")
     self:repaintAfterRetry()
@@ -288,7 +312,7 @@ end
 
 --- 列表页脚「重试失败」: 把所有漫画的失败章节一起重新排队
 function Downloads:retryAllFailed()
-    local entries = OfflineLibrary.list()
+    local entries = self:entries()
     local plans = {}
     for _i, e in ipairs(entries) do
         local chapters = OfflineLibrary.failedChapters(e.source_id, e._id)
@@ -310,7 +334,7 @@ function Downloads:retryAllFailed()
         return 0
     end
     UIManager:show(InfoMessage:new{
-        text = T(_("已重新加入 %1 话下载"), total),
+        text = T(_("已重新加入 %1 个章节下载"), total),
         timeout = 3,
     }, "ui")
     self:repaintAfterRetry()
@@ -354,7 +378,7 @@ function Downloads:openComic(comic, navigation)
             dialog = ButtonDialog:new{
                 is_picayomi_page = true,
                 title = T(_("「%1」上次下载未完成"), comic.title or comic._id),
-                text = T(_("还有 %1 话没有下载完成，要重新下载吗？"), #failed),
+                text = T(_("还有 %1 %2没有下载完成，要重新下载吗？"), #failed,chapter_unit(comic)),
                 buttons = {
                     {
                         {
@@ -376,7 +400,7 @@ function Downloads:openComic(comic, navigation)
             UIManager:show(dialog, "ui")
         else
             UIManager:show(InfoMessage:new{
-                text = _("这部漫画还没有完整下载的章节"),
+                text = _("这部作品还没有完整下载的章节"),
                 timeout = 3,
             }, "ui")
         end
@@ -388,6 +412,7 @@ function Downloads:openComic(comic, navigation)
     if not source then
         source = require("source.offline").new(sid)
     end
+    if comic.content_type=="novel" then source.content_type="novel" end
     -- 阅读链路 (api/comic) 走的是"当前源"; 跨源条目先切过去,
     -- 否则会拿 A 源的 id 去问 B 源。
     local current = SourceRegistry:getCurrent()
@@ -399,6 +424,7 @@ function Downloads:openComic(comic, navigation)
     local episodes = {}
     for _i, ch in ipairs(chapters) do
         episodes[#episodes + 1] = {
+            _id=ch.id,
             order = ch.order,
             title = ch.title,
             pagesCount = ch.pages,
@@ -410,7 +436,7 @@ function Downloads:openComic(comic, navigation)
     if #failed > 0 then
         extra_actions = {
             {
-                text = T(_("重新下载失败章节（%1 话）"), #failed),
+                text = T(_("重新下载失败章节（%1 %2）"), #failed,chapter_unit(comic)),
                 callback = function()
                     self:retryChapters(comic, failed)
                 end,
@@ -452,10 +478,10 @@ end
 -- 卡片里自带封面 + 作者/分类 + 下载进度, 与「已下载」页长得一模一样,
 -- 用户点的就是刚才看到的那一行。
 function Downloads:showDeleteMenu()
-    local entries = OfflineLibrary.list()
+    local entries = self:entries()
     if #entries == 0 then
         UIManager:show(InfoMessage:new{
-            text = _("还没有下载任何漫画"),
+            text = _("还没有下载任何作品"),
             timeout = 3,
         }, "ui")
         return
@@ -555,7 +581,7 @@ function Downloads:deleteDownload(entry)
     local ok,remove_error = OfflineLibrary.remove(sid, cid)
     if not ok then
         UIManager:show(InfoMessage:new{
-            text = T(_("删除未能完成：%1"),require("ui.common.error_message").describe(remove_error,_("该漫画不在下载清单中。"))),
+            text = T(_("删除未能完成：%1"),require("ui.common.error_message").describe(remove_error,_("该作品不在下载清单中。"))),
             timeout = 3,
         }, "ui")
         return false

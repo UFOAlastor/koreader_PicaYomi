@@ -117,7 +117,7 @@ function Sources:show()
     local count=0
     for _ in pairs(m.state.repositories) do count=count+1 end
     local items = {
-        { text = "更新漫画源（全部订阅）", callback = function() self:updateSubscriptions() end },
+        { text = "更新源（全部订阅）", callback = function() self:updateSubscriptions() end },
         { text = "管理订阅", mandatory=tostring(count).." 个", callback = function() self:repositories() end },
         { text = "自动检查更新", mandatory_func=function() return m.state.auto_check and "开启" or "关闭" end,
             callback = function()
@@ -138,10 +138,17 @@ function Sources:show()
     end
     local ids = {}
     for id in pairs(m.state.sources) do ids[#ids + 1] = id end
-    table.sort(ids)
+    table.sort(ids,function(a,b)
+        local ak=m.state.sources[a].manifest.content_type=="novel" and 2 or 1
+        local bk=m.state.sources[b].manifest.content_type=="novel" and 2 or 1
+        return ak==bk and a<b or ak<bk
+    end)
+    local last_kind
     for _, id in ipairs(ids) do
         local rec = m.state.sources[id]
-        local label = "漫画源：" .. rec.manifest.name .. " " .. rec.manifest.version .. " · "
+        local kind=rec.manifest.content_type=="novel" and "小说源" or "漫画源"
+        if kind~=last_kind then items[#items+1]={text=kind,enabled=false};last_kind=kind end
+        local label = rec.manifest.name .. " " .. rec.manifest.version .. " · "
             .. (rec.enabled and "已启用" or "已禁用")
         if m:pending(id) then label = label .. " · 待重启"
         elseif m.errors[id] then label = label .. " · 加载失败"
@@ -166,6 +173,38 @@ function Sources:show()
     self:page("源管理", items, function() self:show() end)
 end
 
+function Sources:filters(id)
+    local record=Manager.instance().state.sources[id]
+    if not record or record.manifest.content_type~="novel" then return end
+    local Filters=require("novel.filters")
+    local source={identifier=id,text_filters=record.manifest.text_filters or {}}
+    local enabled,lines=Filters.options(source)
+    local function redraw() self:filters(id) end
+    local function save(key,value)
+        if not self.config:set("novel_filters."..id.."."..key,value) then self:showError("保存过滤设置失败");return end
+        self:reload(redraw)
+    end
+    self:page(record.manifest.name.." · 固定文案过滤",{
+        {text="启用过滤",mandatory=enabled and "开启" or "关闭",callback=function()save("enabled",not enabled)end},
+        {text="查看过滤文案（"..#lines.." 条）",callback=function()
+            UIManager:show(require("ui/widget/textviewer"):new{title="固定过滤文案",text=#lines>0 and (function()local numbered={} for i,line in ipairs(lines)do numbered[i]=i..". "..line end return table.concat(numbered,"\n\n") end)() or "此源尚未配置固定过滤文案，可手动添加。",show_menu=false},"ui")
+        end},
+        {text="编辑过滤文案",callback=function()
+            local dialog
+            dialog=InputDialog:new{title="编辑过滤文案",description="每行一条规则，按原文匹配。屏幕自动折行不算新规则；编号不属于文案。",input=table.concat(lines,"\n"),input_height=math.floor(require("device").screen:getHeight()*.45),multiline=true,
+                buttons={{{text="取消",callback=function()UIManager:close(dialog,"ui")end},{text="保存",callback=function()
+                    local ok,value=pcall(Filters.parse,dialog:getInputText())
+                    if not ok then self:showError(value);return end
+                    UIManager:close(dialog,"ui");save("lines",value)
+                end}}}}
+            UIManager:show(dialog,"ui");dialog:onShowKeyboard()
+        end},
+        {text="恢复源默认文案",callback=function()save("lines",record.manifest.text_filters or {})end},
+        {text="下次打开章节生效，原始下载正文保留",enabled=false},
+        {text="返回",callback=function()self:goBack()end},
+    },redraw,"novel-filters:"..id)
+end
+
 function Sources:source(id)
     local m = Manager.instance()
     local rec = m.state.sources[id]
@@ -173,6 +212,9 @@ function Sources:source(id)
     local items = {
         { text = "版本：" .. rec.manifest.version .. " · 作者：" .. rec.manifest.author, enabled = false },
     }
+    if rec.manifest.content_type=="novel" then
+        items[#items+1]={text="固定文案过滤",callback=function()self:filters(id)end}
+    end
     local running = m.loaded[id]
     local caps = running and running.capabilities or {}
     local names = { search="搜索", recommendations="推荐", latest="最新", categories="分类", rankings="排行", login="登录", comments="评论", download="下载" }
@@ -222,7 +264,7 @@ function Sources:repositories()
                 m:addRepository(url)
                 m:acceptRepository(url,m:previewRepository(url),true)
                 return true
-            end, "订阅已添加，请点击更新漫画源")
+            end, "订阅已添加，请点击更新源")
         end)
     end } }
     if not next(m.state.repositories) then
@@ -249,7 +291,7 @@ function Sources:repository(url)
         { text = url, enabled = false },
     }
     if repo.error then items[#items+1]={text="检查失败："..require("ui.common.error_message").describe(repo.error),enabled=false} end
-    items[#items+1]={text="更新漫画源（含新源）",callback=function()
+    items[#items+1]={text="更新源（含新源）",callback=function()
         self:perform(function() return self:updateRepository(url) end)
     end}
     local seen={}
@@ -259,7 +301,7 @@ function Sources:repository(url)
             local id=entry.id
             local status=m:candidate(url,id)
             local chosen=status.entry or entry
-            items[#items+1]={text="漫画源："..chosen.name.." "..chosen.version.." · "..status.label,
+            items[#items+1]={text="源："..chosen.name.." "..chosen.version.." · "..status.label,
                 enabled=status.code=="update",callback=function()
                     self:perform(function()
                         local ok,err=m:installFromRepository(url,id)
@@ -270,11 +312,17 @@ function Sources:repository(url)
         end
     end
     items[#items + 1] = { text = "移除订阅（保留已安装源）", callback = function()
-        self:perform(function()
-            m:removeRepository(url)
-            self.next_view = function() self:repositories() end
-            return true
-        end, "订阅已移除")
+        UIManager:show(self:createConfirmBox{
+            text = "确定移除此订阅吗？将停止从该地址检查更新，已安装源、收藏、历史和下载会保留。",
+            ok_text = "移除", cancel_text = "取消",
+            ok_callback = function()
+                self:perform(function()
+                    m:removeRepository(url)
+                    self.next_view = function() self:repositories() end
+                    return true
+                end, "订阅已移除")
+            end,
+        }, "ui")
     end }
     items[#items + 1] = self:createBackButton()
     self:page(repo.name, items, function() self:repository(url) end, "repository:"..url)
@@ -314,7 +362,7 @@ function Sources:updateRepository(url)
         end
     end
     if #results==0 then
-        return true,#lines>0 and ("本次未安装或更新漫画源\n"..table.concat(lines,"\n")) or "漫画源已是最新，无需更新",false,stats
+        return true,#lines>0 and ("本次未安装或更新源\n"..table.concat(lines,"\n")) or "源已是最新，无需更新",false,stats
     end
     return true,table.concat(lines,"\n"),stats.updated>0,stats
 end
@@ -346,7 +394,7 @@ function Sources:updateRepositories()
     if failed>0 then summary=summary.."，更新失败 "..failed.." 个源" end
     if skipped>0 then summary=summary.."，跳过 "..skipped.." 个源" end
     if repo_failed>0 then summary=summary.."，检查失败 "..repo_failed.." 个订阅" end
-    if updated>0 then summary=summary.."\n成功更新的漫画源将在重启 KOReader 后生效" end
+    if updated>0 then summary=summary.."\n成功更新的源将在重启 KOReader 后生效" end
     return true,summary.."\n\n"..table.concat(lines,"\n"),updated>0
 end
 

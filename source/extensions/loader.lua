@@ -43,6 +43,7 @@ function Loader.activate(context)
     local source=factory(context.ctx)
     assert(type(source)=="table", "源工厂必须返回对象")
     source.identifier,source.name,source.version=m.id,m.name,m.version
+    source.content_type=m.content_type or "comic"
     source._extension_digest=digest
     if m.api_version==3 and source.getImageRequest==nil then
         function source:getImageRequest(resource) return context.ctx.imageRequest(resource) end
@@ -52,6 +53,9 @@ function Loader.activate(context)
     end
     local required=m.api_version==3 and {"init","getManga","getChapters","getPages","getImageRequest"}
         or {"init","getComics","getComicDetail","getChapters","getAllChapterImages","imageHeaders","hasCapability"}
+    if source.content_type=="novel" then
+        required={"init","getManga","getChapters","getChapterContent","getImageRequest"}
+    end
     for _,method in ipairs(required) do
         assert(type(source[method])=="function", "缺少源接口: "..method)
     end

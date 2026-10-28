@@ -68,6 +68,7 @@ function Search:show(return_callback)
 end
 
 function Search:showSearchDialog()
+    self.source = require("source.registry"):getCurrent()
     if not require("ui.common.source_access").check(require("source.registry"):getCurrent(),"search") then return end
     -- 幂等: 上一个输入框还在栈里就先收掉。
     --
@@ -90,7 +91,7 @@ function Search:showSearchDialog()
         -- 输入框是插件自己 show 出来的模态层, 不标记的话任何一条忘记关它的路径
         -- 都会把它留到 KOReader 的界面上 (这正是用户报的"搜索框遗留")。
         is_picayomi_page = true,
-        title = _("搜索漫画"),
+        title = self.source and self.source.content_type=="novel" and _("搜索小说") or _("搜索漫画"),
         input = "", -- A fresh input must not reuse the active result query.
         -- 按返回键关掉输入框时: 清引用 + 回到调用方 (主页)。
         -- 不接的话 self.search_dialog 会一直指着一个已经关掉的控件,
@@ -253,19 +254,28 @@ function Search:showHistoryMenu(page)
             end,
         })
     end
-    table.insert(item_table, {
+    local clear_history = {
         text = _("清空历史"),
         callback = function()
-            SearchHistory.clear()
-            UIManager:close(self.history_menu, "ui")
-            self.history_menu = nil
-            UIManager:show(InfoMessage:new{
-                text = _("已清空搜索历史"),
-                timeout = 3,
+            local menu = self.history_menu
+            UIManager:show(ConfirmBox:new{
+                is_picayomi_page = true,
+                text = _("确定清空全部搜索记录吗？清空后无法恢复。"),
+                ok_text = _("清空"), cancel_text = _("取消"),
+                ok_callback = function()
+                    if self.history_menu ~= menu or not WidgetSweep.isInStack(menu) then return end
+                    SearchHistory.clear()
+                    UIManager:close(self.history_menu, "ui")
+                    self.history_menu = nil
+                    UIManager:show(InfoMessage:new{
+                        text = _("已清空搜索历史"),
+                        timeout = 3,
+                    }, "ui")
+                    self:showSearchDialog()
+                end,
             }, "ui")
-            self:showSearchDialog()
         end,
-    })
+    }
     -- 「返回」: 去掉右上角 ✕ 之后, 这里必须有一个看得见的退出口
     table.insert(item_table, {
         text = _("返回"),
@@ -278,6 +288,7 @@ function Search:showHistoryMenu(page)
 
     local title_bar = MenuStyle.titleBar{ title = _("搜索历史") }
     self.history_menu = Menu:new{
+        footer_actions = {clear_history},
         is_picayomi_page = true, -- 退出 Picayomi 时由 util/widget_sweep 清扫
         title = title_bar.title,
         custom_title_bar = title_bar,
@@ -370,7 +381,7 @@ function Search:performSearch()
             -- 保存搜索结果
             self.search_results = search_data.comics
             self.current_page = search_data.page
-            self.total_pages = search_data.pages
+            self.total_pages = search_data.pages; self.server_page_size=search_data.page_size
             self.result_has_more=search_data.has_more
             self.total_count = search_data.total
 
@@ -408,6 +419,7 @@ function Search:_sortOptions()
 end
 
 function Search:showSearchResults()
+    self.source = require("source.registry"):getCurrent()
     -- 换排序 / 重搜时旧列表要收掉, 否则窗口栈里会堆出多层一模一样的列表
     -- (踩过: "点了没反应" 就是这种堆叠造成的)。
     -- 但**不能先关再建**: 建新列表要排版, 中间露出来的是搜索框 (上一页) ——
@@ -419,7 +431,7 @@ function Search:showSearchResults()
         -- 没有结果: 旧列表必须收掉 (否则关掉提示又回到一份过期的结果)
         if old_list then UIManager:close(old_list, "ui") end
         UIManager:show(InfoMessage:new{
-            text = T(_("没有找到与【%1】相关的漫画"), self.current_keyword),
+            text = T(self.source and self.source.content_type=="novel" and _("没有找到与【%1】相关的小说") or _("没有找到与【%1】相关的漫画"), self.current_keyword),
         }, "ui")
         return
     end
@@ -438,7 +450,7 @@ function Search:showSearchResults()
         comics = comics,
         -- 单层分页: 翻到缓冲区末尾时由列表自己按需补货
         server_page = self.current_page,
-        total_pages = self.total_pages,
+        total_pages = self.total_pages, server_page_size = self.server_page_size,
         has_more = self.result_has_more,
         -- 首次进入就要有总条数, 否则界面算不出总屏数
         total_count = self.total_count,

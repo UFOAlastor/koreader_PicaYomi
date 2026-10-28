@@ -261,6 +261,8 @@ end
 -- 里, 而那个函数全项目没有调用点。于是 `PicaReader:onEndOfBook` 永远不执行,
 -- 用户翻到最后一页什么都不会发生。
 function Picayomi:onEndOfBook()
+    local novel=self.ui and self.ui._picayomi_novel_controls
+    if novel then return novel:onEndOfBook() end
     local ok, handled = pcall(function()
         return require("ui.reader"):onEndOfBook()
     end)
@@ -444,13 +446,8 @@ function Picayomi:returnToPicayomi()
     -- 必须在 nextTick **之前** show + forceRePaint: 真正的关阅读器在下一拍里,
     -- 不强制刷一次的话提示根本还没画出来就开始阻塞了。
     if self._return_info then return end
-    local info = InfoMessage:new{
-        text = _("返回中…"),
-        dismissable = false,
-    }
+    local info = require("ui.common.loading_task").showReturning()
     self._return_info = info
-    UIManager:show(info, "ui")
-    UIManager:forceRePaint()
 
     -- **关阅读器与补底层界面必须落在同一轮同步代码里**, 不能先关再排期补。
     --
@@ -587,8 +584,14 @@ function Picayomi:addToMainMenu(menu_items)
     -- (最后统一排位 —— 见下面的 promoteInToolsMenu)
     local ordered_ids = {}
     -- Clear dynamic entries before rebuilding a reused menu for another book.
-    for _i, id in ipairs({"picayomi", "picayomi_return", "picayomi_prev_episode", "picayomi_next_episode", "picayomi_save_image"}) do
+    for _i, id in ipairs({"picayomi", "picayomi_return", "picayomi_prev_episode", "picayomi_next_episode", "picayomi_save_image", "picayomi_chapter_directory", "picayomi_novel"}) do
         menu_items[id] = nil
+    end
+    local novel=self.ui and self.ui._picayomi_novel_controls
+    if novel then
+        novel:addToMainMenu(menu_items)
+        promoteInToolsMenu({"picayomi_return","picayomi_prev_episode","picayomi_next_episode","picayomi_chapter_directory"})
+        return
     end
 
     -- 正在阅读 PicaYomi 漫画时, 补上"看完怎么回去"的入口。
@@ -698,7 +701,7 @@ function Picayomi:checkNetwork()
     UIManager:show(InfoMessage:new{
         text = _("当前没有网络连接。\n\n"
             .. "请先在 KOReader 里打开 Wi-Fi 再浏览/阅读；\n"
-            .. "已缓存的漫画与浏览历史仍可查看。"),
+            .. "已缓存的作品与浏览历史仍可查看。"),
         timeout = 6,
     }, "ui")
     return false

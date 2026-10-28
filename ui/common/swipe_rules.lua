@@ -16,10 +16,9 @@
 -- 三个设置项 (设置 -> 操作与手势), **每次判定现读配置**, 改完立刻生效:
 --   swipe_edge_back  = false      关掉边缘返回 (仍然消费事件, 只是不返回)
 --   swipe_edge_side  = left/right 只允许某一侧 (default both)
---   swipe_edge_width = narrow/normal/wide (5% / 8% / 12%, default normal)
+--   swipe_edge_width = narrow/normal/wide (3% / 5% / 8%, default normal)
 --
--- 8% 的取法: PW5 上约 99px, 够稳定起手, 又远窄于 KOReader 左翻页点击区的 25%
--- —— 用 25% 的话, "在左边右滑回上一屏"这个日常动作会天天误退。
+-- 默认 5%（PW5 上约 62px）；三个档位统一供所有页面的快滑与慢拖读取。
 
 local Screen = require("device").screen
 local config = require("util.config")
@@ -31,7 +30,7 @@ M.CONFIG_ENABLED = "swipe_edge_back"
 M.CONFIG_SIDE = "swipe_edge_side"
 M.CONFIG_WIDTH = "swipe_edge_width"
 
-M.WIDTHS = { narrow = 0.05, normal = 0.08, wide = 0.12 }
+M.WIDTHS = { narrow = 0.03, normal = 0.05, wide = 0.08 }
 
 --- 边缘返回是否启用
 function M.isEnabled()
@@ -86,6 +85,23 @@ function M.isBackSwipe(ges)
     end
     return direction == "west" or direction == "northwest"
         or direction == "southwest"
+end
+
+-- Returns nil for gestures outside page navigation, so native menu handling
+-- (e.g. diagonal refresh) can remain with its owner.
+function M.dispatchPageSwipe(ges,actions)
+    if M.isBackSwipe(ges) then
+        if actions.back then actions.back() end
+        return true
+    end
+    local direction=ges and ges.direction
+    if direction=="west" then
+        if actions.next then actions.next() end
+        return true
+    elseif direction=="east" then
+        if actions.prev then actions.prev() end
+        return true
+    end
 end
 
 --- 这次滑动的**主轴** (按位移, 不按 direction 的名字)

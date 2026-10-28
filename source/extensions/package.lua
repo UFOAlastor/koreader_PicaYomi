@@ -52,6 +52,15 @@ function Bundle.manifest(m, host_version, allow_incompatible)
     if m.api_version==3 then
         assert(Bundle.compare(m.min_app_version,"0.10.6")>=0,"API v3 最低主程序版本为 0.10.6")
     end
+    assert(m.content_type==nil or m.content_type=="comic" or m.content_type=="novel", "内容类型无效")
+    if m.content_type=="novel" then
+        assert(m.api_version==3 and Bundle.compare(m.min_app_version,"1.1.0")>=0,
+            "小说源要求 API v3 与 PicaYomi 1.1.0")
+    end
+    if m.text_filters~=nil then
+        assert(m.content_type=="novel" and Bundle.compare(m.min_app_version,"1.1.1")>=0,"固定过滤文案要求小说源与 PicaYomi 1.1.1")
+        require("novel.filters").validate(m.text_filters)
+    end
     assert(m.identity_policy==nil or m.identity_policy=="stable" or m.identity_policy=="legacy", "章节身份策略无效")
     assert(m.identity_policy~="legacy" or builtin[m.id], "历史身份仅用于旧源")
     for _,key in ipairs({"data_schema_version","cache_schema_version"}) do

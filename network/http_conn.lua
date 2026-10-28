@@ -128,7 +128,12 @@ function Pool._connect(self, host, port, tls)
         return nil, "TLS 包装失败: " .. tostring(werr)
     end
     pcall(function() conn:sni(host) end)
+    -- LuaSec wraps the fd but does not inherit the TCP timeout. Set it before
+    -- handshaking, otherwise a stalled TLS peer can wait until the task watchdog.
+    conn:settimeout(self.timeout)
     local hok, herr = conn:dohandshake()
+    -- Blocking LuaSec reports an expired handshake as wantread/wantwrite.
+    if not hok and (herr=="wantread" or herr=="wantwrite") then herr="timeout" end
     if not hok then
         pcall(function() conn:close() end)
         return nil, "TLS 握手失败: " .. tostring(herr)

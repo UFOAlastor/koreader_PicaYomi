@@ -437,7 +437,8 @@ end
 function ScaledDecode.region_input(path, budget)
     local size=require("libs/libkoreader-lfs").attributes(path,"size")
     if not size then return nil,"read_failed" end
-    if size>ImageGuard.FILE_LIMIT or size*2>=(budget or 0) then return nil,"memory_budget" end
+    if size>ImageGuard.FILE_LIMIT then return nil,"file_limit" end
+    if size*2>=(budget or 0) then return nil,"memory_budget",size*2+1 end
     return read_all(path)
 end
 
@@ -493,7 +494,7 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             end
             raw_height=height*denom
             local bytes = width * height * (color and 3 or 1)
-            if input_bytes + bytes + workspace > budget then return nil, "memory_budget" end
+            if input_bytes + bytes + workspace > budget then return nil, "memory_budget",input_bytes+bytes+workspace end
             local limit = math.floor((budget-input_bytes-bytes)/1048576)
             if limit < 1 or lib.tj3Set(handle, lib.TJPARAM_MAXMEMORY, limit) < 0 then return nil, "memory_budget" end
             if crop(handle, ffi.new("picayomi_tjregion", {0,y,width,height})) < 0 then
@@ -530,7 +531,7 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             local zoom=math.min(1,display_zoom or 1)
             local ow,oh=math.ceil(width*zoom),math.ceil(height*zoom)
             local bytes=ow*oh*(color and (alpha and 8 or 3) or (alpha and 5 or 4))
-            if input_bytes+bytes+workspace>budget then return nil,"memory_budget" end
+            if input_bytes+bytes+workspace>budget then return nil,"memory_budget",input_bytes+bytes+workspace end
             cfg.output.colorspace=alpha and 1 or 0 -- RGBA only when compositing is needed
             if color and not alpha then
                 -- Decode directly into the owned result, avoiding a second
@@ -568,7 +569,7 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
     if cfg then pcall(function() lib.WebPFreeDecBuffer(cfg.output) end) end
     if not ok or not result then
         if output then output:free() end
-        return nil, not ok and tostring(result):lower():find("allocat",1,true) and "memory_budget" or (ok and origin or tostring(result))
+        return nil, not ok and tostring(result):lower():find("allocat",1,true) and "memory_budget" or (ok and origin or tostring(result)),ok and source_height or nil
     end
     return result,origin,source_height
 end

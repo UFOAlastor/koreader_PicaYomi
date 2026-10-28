@@ -55,7 +55,7 @@ local function notify(m)
     if not idle() or U.prompt or U.downloading then return end
     local available=m.state.auto_check and candidates(m) or {}
     if #available>0 then
-        local lines={"发现 "..#available.." 个漫画源有更新，是否下载？"}
+        local lines={"发现 "..#available.." 个源有更新，是否下载？"}
         for _,r in ipairs(available) do
             lines[#lines+1]=r.name.." "..r.version
             U.asked[r.id]=r.hash
@@ -91,7 +91,7 @@ local function notify(m)
     end
     local count=unnotified(m)
     if count>0 then
-        local text="已下载 "..#pending(m).." 个漫画源更新，重启 KOReader 后生效"
+        local text="已下载 "..#pending(m).." 个源更新，重启 KOReader 后生效"
         if U.error then text=text.."\n另有更新未完成："..require("ui.common.error_message").describe(U.error) end
         U.error=nil
         require("ui.settings.sources"):offerRestart(text)
@@ -105,7 +105,7 @@ end
 function U.downloadUpdates(m,available)
     if logger.enabled then logger.info("Picayomi source check: download confirmed",#available) end
     U.download=require("ui.common.loading_task").run{
-        message="正在下载漫画源更新…\n点击取消",async=true,delay=.1,timeout=180,
+        message="正在下载源更新…\n点击取消",async=true,delay=.1,timeout=180,
         set_busy=function(value) U.downloading=value;if not value then U.download=nil end end,
         fetch=function()
             local stats={updated=0,failed=0,skipped=0}
@@ -132,7 +132,7 @@ function U.downloadUpdates(m,available)
             if ok and stats and stats.updated>0 then
                 for _,r in ipairs(pending(m)) do U.notified[r.id]=nil end
             elseif ok and stats and stats.failed==0 and #pending(m)==0 then
-                require("ui.settings.sources"):showInfo("漫画源已是最新，无需下载")
+                require("ui.settings.sources"):showInfo("源已是最新，无需下载")
                 refresh();return
             end
             notify(m);U.schedule()

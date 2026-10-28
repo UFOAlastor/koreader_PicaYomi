@@ -10,8 +10,8 @@ local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
 local Screen = require("device").screen
-local Menu = require("ui/widget/menu")
-local ConfirmBox = require("ui/widget/confirmbox")
+local Menu = require("ui.common.action_style").Menu
+local ConfirmBox = require("ui.common.action_style").ConfirmBox
 local logger = require("util.logger")
 local Diag = require("util.diag")
 local _ = require("gettext")
@@ -1136,12 +1136,7 @@ function PicaReader:onReturn(reason_text)
         return
     end
 
-    local info = InfoMessage:new{
-        text = reason_text or _("返回中…"),
-        dismissable = false,   -- 关阅读器期间别让用户点到它
-    }
-    UIManager:show(info, "ui")
-    UIManager:forceRePaint()
+    local info = require("ui.common.loading_task").showReturning(reason_text)
     self._return_info = info
 
     -- 返回前把**精确**页码落一次历史: 翻页时的写入是节流的, 最后几页可能

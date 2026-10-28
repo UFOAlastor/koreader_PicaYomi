@@ -11,6 +11,10 @@ local VisualComicList = require("ui.common.visual_comic_list")
 local ComicDetail = require("ui.common.comic_detail")
 local CategoryCloud = require("ui.common.category_cloud")
 local WidgetSweep = require("util.widget_sweep")
+local function isNovel()
+    local source=require("source.registry"):getCurrent()
+    return source and source.content_type=="novel"
+end
 
 local Categories = WidgetContainer:extend{
     name = "picayomi_categories",
@@ -128,6 +132,7 @@ function Categories:showCategoryList()
     end
     local page
     page = CategoryCloud:new{
+        title = isNovel() and _("小说分类") or _("漫画分类"),
         categories = comic_categories,
         on_select = function(category) self:onCategorySelected(category) end,
         on_hold = function(category) self:onCategoryHold(category) end,
@@ -257,7 +262,7 @@ function Categories:loadCategoryComics(category, page, sort)
             else
                 logger.err("ComicAPI", "获取分类漫画失败: " .. (error_msg or "未知错误"))
                 UIManager:show(InfoMessage:new{
-                    text = T(_("获取【%1】分类漫画失败: %2"), category.title,
+                    text = T(isNovel() and _("获取【%1】分类小说失败: %2") or _("获取【%1】分类漫画失败: %2"), category.title,
                         require("ui.common.error_message").describe(error_msg)),
                     timeout = 3,
                 }, "ui")
@@ -277,7 +282,7 @@ end
 function Categories:showComicList(comics_data)
     if not comics_data.comics or #comics_data.comics == 0 then
         UIManager:show(InfoMessage:new{
-            text = T(_("【%1】分类下没有漫画"), self.current_category.title),
+            text = T(isNovel() and _("【%1】分类下没有小说") or _("【%1】分类下没有漫画"), self.current_category.title),
         }, "ui")
         return
     end
@@ -303,11 +308,11 @@ function Categories:showComicList(comics_data)
     local old_list = self.comic_list_menu
 
     self.comic_list_menu = VisualComicList:new{
-        title = T(_("【%1】分类漫画"), self.current_category.title),
+        title = T(isNovel() and _("【%1】分类小说") or _("【%1】分类漫画"), self.current_category.title),
         comics = comics,
         -- 单层分页: 翻到缓冲区末尾时由列表自己按需补货
         server_page = current_page,
-        total_pages = comics_data.pages,
+        total_pages = comics_data.pages, server_page_size = comics_data.page_size,
         has_more = comics_data.has_more,
         -- 首次进入就要有总条数, 否则界面算不出总屏数 (见 ui/home.lua 同处的说明)
         total_count = comics_data.total,

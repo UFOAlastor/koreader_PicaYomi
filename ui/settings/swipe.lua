@@ -5,7 +5,7 @@
 -- (不需要重开页面, 也不需要重启 KOReader):
 --   * 边缘滑动返回  —— 关掉后边缘滑动只消费事件, 不返回
 --   * 允许的边缘    —— 两侧 / 仅左 / 仅右
---   * 边缘宽度      —— 窄 5% / 标准 8% / 宽 12% (治"起手点偏一点就滑不动")
+--   * 边缘宽度      —— 窄 3% / 标准 5% / 宽 8% (治"起手点偏一点就滑不动")
 --
 -- 中间滑动 (翻屏) **不提供开关**: 那是页面内导航, 关掉只会让人以为页面坏了。
 
@@ -31,9 +31,9 @@ local SIDE_LABELS = {
 }
 
 local WIDTH_LABELS = {
-    narrow = _("窄（5%）"),
-    normal = _("标准（8%）"),
-    wide = _("宽（12%）"),
+    narrow = T(_("窄（%1%）"), SwipeRules.WIDTHS.narrow * 100),
+    normal = T(_("标准（%1%）"), SwipeRules.WIDTHS.normal * 100),
+    wide = T(_("宽（%1%）"), SwipeRules.WIDTHS.wide * 100),
 }
 
 function SwipeSettings:show()
@@ -122,9 +122,9 @@ end
 function SwipeSettings:chooseWidth()
     local current = self:safeConfigGet(SwipeRules.CONFIG_WIDTH)
     local options = {
-        { text = _("窄（5%）"), value = "narrow" },
-        { text = _("标准（8%，默认）"), value = "normal" },
-        { text = _("宽（12%）"), value = "wide" },
+        { text = WIDTH_LABELS.narrow, value = "narrow" },
+        { text = WIDTH_LABELS.normal .. _("（默认）"), value = "normal" },
+        { text = WIDTH_LABELS.wide, value = "wide" },
     }
     local items = {}
     for _idx, opt in ipairs(options) do

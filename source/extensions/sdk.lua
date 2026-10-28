@@ -50,7 +50,7 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
         config=scoped, secrets=secrets, logger=require("util.logger"), getSetting=settings }
     local http=ctx.http
     ctx.http=setmetatable({}, {__index=function(_,name)
-        if api_version==3 and not ({get=true,post=true,request=true,requestWithRetry=true,
+        if api_version==3 and not ({get=true,post=true,request=true,requestWithRetry=true,requestOnce=true,
             parseJsonResponse=true,fixImageUrl=true,resolveRedirect=true})[name] then return nil end
         local value=http[name]
         if type(value)~="function" then return value end
@@ -62,7 +62,7 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
             assert(not call or not call.deadline or require("socket").gettime()<call.deadline,"操作超时")
             if api_version==3 then
                 local args={...}
-                local at=({get=3,post=4,request=5,requestWithRetry=5,httpsRequest=5,download=4})[name]
+                local at=({get=3,post=4,request=5,requestWithRetry=5,requestOnce=5,httpsRequest=5,download=4})[name]
                 if at then
                     local limit=call and call.deadline and call.deadline-require("socket").gettime() or 60
                     local requested=args[at] or 20

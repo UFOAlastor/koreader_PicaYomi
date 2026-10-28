@@ -77,6 +77,7 @@ function ComicModel:saveHistory(comic_id, title, episode, source_id, progress)
             item.episode_title = progress.episode_title
         end
         if progress then
+            if progress.content_type=="novel" then item.content_type="novel" end
             if type(progress.thumb) == "string" and progress.thumb ~= "" then item.thumb = progress.thumb end
             local p = tonumber(progress.page)
             local total = tonumber(progress.pages)
@@ -251,9 +252,12 @@ function ComicModel:processComicData(comic)
         local ok,spec=pcall(Contract.listDisplay,comic._list_display)
         if ok then
             processed._list_display=spec
-            local valid,metadata=pcall(Contract.metadata,comic.metadata)
-            if valid then processed.metadata=metadata end
         end
+    end
+
+    if comic.metadata then
+        local valid,metadata=pcall(require("source.contract").metadata,comic.metadata)
+        if valid then processed.metadata=metadata end
     end
 
     -- 复制基本字段

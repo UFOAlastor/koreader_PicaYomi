@@ -575,6 +575,13 @@ end
 
 --- 预取页数 (读设置, 0~9; 0 = 关闭)
 function StreamSession:prefetch_count()
+    if self.memory_wait then return 0 end
+    if self.memory_required then
+        local s=MemoryGuard.instance():snapshot()
+        -- Leave the observed foreground requirement available after a worker
+        -- starts. Current-page downloads are not subject to this prefetch gate.
+        if s.available and MemoryGuard.instance():decode_budget(math.max(s.worker,self.memory_worker_cost or 0),s)<self.memory_required then return 0 end
+    end
     if MemoryGuard.instance():under_pressure() then return 0 end
     local n = tonumber(Config:get("prefetch_pages"))
     if not n then n = PREFETCH_DEFAULT end
@@ -762,33 +769,63 @@ end
 -- Temporary memory pressure must not cache a refusal for the lifetime of the
 -- file. Recheck without decoding or downloading, and redraw only after the
 -- normal planner accepts it. Timers are bounded and always yield to input.
-function StreamSession:wait_for_memory(n, can_retry)
+function StreamSession:cancel_memory_wait()
+    if self.memory_retry then UIManager:unschedule(self.memory_retry) end
+    self.memory_wait,self.memory_retry=nil,nil
+end
+
+function StreamSession:wait_for_memory(n, can_retry, required)
     self.memory_epoch = self.memory_epoch or {}
     self.memory_blocked = self.memory_blocked or {}
     self.memory_retry_counts = self.memory_retry_counts or {}
     self.memory_blocked[n] = true
-    if self.cancelled or (self.memory_retry_counts[n] or 0) >= 3 then return end
+    if required then self.memory_required=math.max(self.memory_required or 0,required) end
+    self.prefetch_queue={}
+    self.scheduler:_drop_prefetch_entries()
+    if self.cancelled then return end
+    if (self.memory_retry_counts[n] or 0) >= 3 then
+        require("ui.reader_feedback").queue(self,n,"display","当前图片所需内存仍不足，请稍后重试。")
+        return
+    end
     if self.memory_wait and self.memory_wait.page == n then return end
-    self.memory_wait = {page=n, can_retry=can_retry, checks=0}
-    if self.memory_retry then return end
+    self:cancel_memory_wait()
+    local wait = {page=n, can_retry=can_retry, checks=0,required=required}
+    self.memory_wait = wait
     self.memory_retry = function()
-        local wait = self.memory_wait
-        if self.cancelled or not wait then self.memory_retry=nil; return end
+        if self.cancelled or self.memory_wait ~= wait then return end
         wait.checks = wait.checks + 1
+        local before=MemoryGuard.instance():snapshot().available
+        local reclaimed=TransportWorker.reclaim_idle("read")
+        if wait.checks==1 or reclaimed>0 then MemoryGuard.instance():reclaim_for_decode() end
+        local after=MemoryGuard.instance():snapshot().available
+        if reclaimed>0 and before and after then
+            self.memory_worker_cost=math.max(self.memory_worker_cost or 0,after-before)
+        end
         local ok, ready = pcall(wait.can_retry)
         if ok and ready then
+            if Diag.enabled then Diag.mark(string.format("decode recovery p%d checks=%d reclaimed_workers=%d need=%s",wait.page,wait.checks,reclaimed,tostring(wait.required or "planner"))) end
             self.memory_wait, self.memory_retry = nil, nil
             self.memory_epoch[wait.page] = (self.memory_epoch[wait.page] or 0) + 1
             self.memory_retry_counts[wait.page] = (self.memory_retry_counts[wait.page] or 0) + 1
-            self.memory_blocked[wait.page] = nil
             refresh_page_if_current(self, wait.page)
         elseif wait.checks < 15 then
             UIManager:scheduleIn(2, self.memory_retry)
         else
             self.memory_wait, self.memory_retry = nil, nil
+            require("ui.reader_feedback").queue(self,wait.page,"display","当前图片所需内存仍不足，请稍后重试。")
         end
     end
-    UIManager:scheduleIn(2, self.memory_retry)
+    UIManager:scheduleIn(required and 0.1 or 2, self.memory_retry)
+end
+
+function StreamSession:memory_recovered(n)
+    if not (self.memory_blocked and self.memory_blocked[n]) then return end
+    self.memory_blocked[n]=nil
+    self.memory_retry_counts[n]=nil
+    if self.memory_wait and self.memory_wait.page==n then
+        self:cancel_memory_wait()
+    end
+    require("ui.reader_feedback").clear(self)
 end
 
 --- 确保第 n 页在本地 (**会阻塞**, 缺页时同步下载)
@@ -913,6 +950,9 @@ function StreamSession:on_page_turn(page, dir)
     if self.cancelled then return end
     page = tonumber(page)
     if not page then return end
+    if self.memory_wait and self.memory_wait.page~=page then
+        self:cancel_memory_wait()
+    end
     -- 方向要一起交给调度器: 它的排序键里 dist 是对称的, 不传方向就分不出
     -- "刚翻过的 n+1" 与 "马上要看的 n-1" (两者距离都是 1)。
     if self.scheduler.policy.keep_radius then
@@ -1013,8 +1053,7 @@ function StreamSession:cancel()
     if self.failure_refresh then UIManager:unschedule(self.failure_refresh); self.failure_refresh = nil end
     self.prefetch_queue = {}
     self.scheduler:cancel_all()
-    if self.memory_retry then UIManager:unschedule(self.memory_retry); self.memory_retry = nil end
-    self.memory_wait = nil
+    self:cancel_memory_wait()
     if self.release_start_guard then self.release_start_guard() end
     if self.release_downloads then self.release_downloads(); self.release_downloads = nil end
 end
@@ -1033,8 +1072,7 @@ function StreamSession:shutdown()
     if self.failure_refresh then UIManager:unschedule(self.failure_refresh); self.failure_refresh = nil end
     self.prefetch_queue = {}
     self.scheduler:cancel_all(true)
-    if self.memory_retry then UIManager:unschedule(self.memory_retry); self.memory_retry = nil end
-    self.memory_wait = nil
+    self:cancel_memory_wait()
     if self.release_start_guard then self.release_start_guard() end
     if self.release_downloads then self.release_downloads(); self.release_downloads = nil end
 end
@@ -1432,14 +1470,14 @@ function MultiImageDoc:openPage(n)
         -- Assemble only the requested output strip. Source rows may be far
         -- apart; no full decoded page is needed for host band reordering.
         local bytes=sz.w*height*(color and 4 or 1)
-        if bytes>=current_budget then return nil,"memory_budget" end
+        if bytes>=current_budget then return nil,"memory_budget",bytes+1 end
         local output,piece
-        local ok,result,why=pcall(function()
+        local ok,result,why,needed=pcall(function()
             output=Blitbuffer.new(sz.w,height,color and Blitbuffer.TYPE_BBRGB32 or Blitbuffer.TYPE_BB8)
             for _,part in ipairs(require("source.image_service").regionPieces(post_plan,y,height)) do
-                local origin
-                piece,origin=read_piece(part.source_y,part.height,current_budget-bytes,1)
-                if not piece then return nil,origin end
+                local origin,required
+                piece,origin,required=read_piece(part.source_y,part.height,current_budget-bytes,1)
+                if not piece then return nil,origin,required and required+bytes end
                 output:blitFrom(piece,0,part.target_y,0,part.source_y-origin,sz.w,part.height)
                 piece:free();piece=nil
             end
@@ -1448,7 +1486,7 @@ function MultiImageDoc:openPage(n)
         if piece then piece:free() end
         if not ok or not result then
             if output then output:free() end
-            return nil,ok and why or "memory_budget"
+            return nil,ok and why or "memory_budget",needed
         end
         return result,y,height
     end
@@ -1481,6 +1519,7 @@ function MultiImageDoc:openPage(n)
             end
             local function draw_strip(bb,start,raw_height,lines)
                 local scaled,view,canvas
+                local required_extra
                 local ok,err=pcall(function()
                     local consumed=0
                     repeat
@@ -1506,7 +1545,10 @@ function MultiImageDoc:openPage(n)
                         local left=math.floor(x0/ratio*zoom)
                         local width=math.ceil(x1/ratio*zoom)-left
                         local extra=canonical and (x1-x0)*math.ceil((last-first)*vertical)*(color and 4 or 1) or 0
-                        if bb:getWidth()*bb:getHeight()*(color and 4 or 1)+width*height*(color and 8 or 2)+extra>decode_budget() then error("memory_budget") end
+                        -- bb is already resident in the freshly sampled free
+                        -- memory. Charge only new crop/resampling allocations.
+                        required_extra=width*height*(color and 8 or 2)+extra
+                        if required_extra>decode_budget() then error("memory_budget") end
                         if canonical then
                             local cy=math.floor((first-start)*vertical+0.5)
                             local ch=math.floor((last-first)*vertical+0.5)
@@ -1536,11 +1578,11 @@ function MultiImageDoc:openPage(n)
                 if view then view:free();canvas=nil end
                 if canvas then canvas:free() end
                 bb:free()
-                if not ok then logger.warn("Picayomi region render:",err);return false end
+                if not ok then logger.warn("Picayomi region render:",err);return false,required_extra end
                 row=row+lines
                 return true
             end
-            local function failed(reason)
+            local function failed(reason,required,input_missing)
                 record(reason)
                 page.is_placeholder=true
                 logger.warn("Picayomi region decode:",reason)
@@ -1555,19 +1597,26 @@ function MultiImageDoc:openPage(n)
                     placeholder_page(current_page_state(self.session,n)):draw(dc,target)
                 else
                     local placeholder = placeholder_page("too_large",{reason=reason=="memory_budget" and reason or "decode_failed"})
-                    require("ui.reader_feedback").queue(self.session, n, "display", placeholder.placeholder_text)
                     placeholder:draw(dc,target)
                     if reason=="memory_budget" then
                         local before=decode_budget()
-                        self.session:wait_for_memory(n,function() return decode_budget()>before end)
+                        required=required or before+1024*1024
+                        -- Compressed input is released below and must fit again
+                        -- on retry along with the native workspace.
+                        if format~="png" and not input_missing then required=required+file_size_of(path)*2 end
+                        if Diag.enabled then Diag.mark(string.format("decode blocked p%d budget=%d need=%d stage=region",n,before,required)) end
+                        self.session:wait_for_memory(n,function() return decode_budget()>=required end,required)
+                    else
+                        require("ui.reader_feedback").queue(self.session,n,"display",placeholder.placeholder_text)
                     end
                 end
+                region_input=nil
             end
             target:fill(Blitbuffer.COLOR_WHITE)
             if format~="png" then
-                local err
-                region_input,err=ScaledDecode.region_input(path,decode_budget())
-                if not region_input then failed(err);return end
+                local err,required
+                region_input,err,required=ScaledDecode.region_input(path,decode_budget())
+                if not region_input then failed(err,required,true);return end
             end
             while row<th do
                 -- Each native strip restarts the codec. Start with the visible
@@ -1575,7 +1624,7 @@ function MultiImageDoc:openPage(n)
                 -- PNG keeps its streaming/canonical 64-row extraction path.
                 local batch=format=="png" and 64 or th
                 local lines=math.min(batch,th-row)
-                local success,reason
+                local success,reason,required
                 repeat
                     local y0,height=range(lines)
                     if height<=0 then return end
@@ -1593,14 +1642,17 @@ function MultiImageDoc:openPage(n)
                             end)
                     else
                         local bb,start,raw_height=region_decode(format,y0,height,decode_budget(),zoom)
-                        if bb then success=draw_strip(bb,start,raw_height,lines);reason="memory_budget"
-                        else reason=start end
+                        if bb then success,required=draw_strip(bb,start,raw_height,lines);reason="memory_budget"
+                        else reason=start;required=raw_height end
                     end
                     if success or reason~="memory_budget" or lines==1 then break end
                     lines=math.max(1,math.floor(lines/2))
                 until false
-                if not success then failed(reason);return end
+                if not success then failed(reason,required);return end
             end
+            region_input=nil
+            page.is_placeholder=nil
+            self.session:memory_recovered(n)
             record("ok")
         end
         return finish(page,"region")

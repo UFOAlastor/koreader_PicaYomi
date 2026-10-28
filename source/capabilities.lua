@@ -1,12 +1,12 @@
 -- Source contract shared by loaders and UI. Missing optional capabilities are off.
 local C = {}
 local booleans = { recommendations=true, latest=true, login=true, requires_login=true, search=true, categories=true,
-    rankings=true, random=true, favorites=true, comments=true, download=true, local_favorites=true }
+    rankings=true, random=true, favorites=true, comments=true, comment_details=true, download=true, local_favorites=true }
 local methods = {
     recommendations={"getRecommendations"}, latest={"getLatest"},
     search={"search"}, categories={"getCategories","getCategoryComics"},
     rankings={"getRankingTypes","getRankings"}, login={"login","logout","isLoggedIn","getUserProfile"},
-    favorites={"getFavorites","addFavorite","removeFavorite"}, comments={"getComments"},
+    favorites={"getFavorites","addFavorite","removeFavorite"}, comments={"getComments"}, comment_details={"getCommentDetails"},
     download={"getAllChapterImages","imageHeaders"},
 }
 function C.needsLogin(source, name)
@@ -55,10 +55,12 @@ function C.validate(source, api)
     end
     assert(not caps.requires_login or caps.login, "要求登录但不支持登录")
     assert(not caps.replies or caps.replies=="none" or caps.comments, "回复能力要求评论能力")
+    assert(not caps.comment_details or caps.comments, "评论全文要求评论能力")
     for name, required in pairs(methods) do
         if caps[name] then
             if api==3 and name=="login" then required={"login","logout","getSession","getUserProfile"} end
             if api==3 and name=="download" then required={"getPages","getImageRequest"} end
+            if api==3 and name=="download" and source.content_type=="novel" then required={"getChapterContent","getImageRequest"} end
             for _, method in ipairs(required) do
                 assert(type(source[method])=="function" and source[method]~=ComicSource[method], "能力缺少实现: "..method)
             end

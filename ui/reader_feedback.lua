@@ -69,7 +69,7 @@ function Feedback.queue(session, page, kind, detail)
         Feedback.clear(session)
         session.feedback_key = key
         local dialog
-        dialog = require("ui/widget/confirmbox"):new{
+        dialog = require("ui.common.action_style").ConfirmBox:new{
             is_picayomi_page = true,
             text = string.format(_("第 %d 页：%s\n\n%s"), page, reason, suffix),
             ok_text = _("重试"), cancel_text = _("关闭"),

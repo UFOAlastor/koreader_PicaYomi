@@ -149,7 +149,9 @@ function M.save(force)
     if not force and last_save > 0 and now - last_save < SAVE_INTERVAL then
         return true
     end
-    last_save = now
+    -- 失败后必须允许立即重试，包括成功节流窗口内的强制保存失败。
+    -- 只有原子替换成功才能开始下一轮节流。
+    last_save = 0
 
     ensure_dir(M.DATA_FILE:match("^(.*)/[^/]+$") or ".")
     local text = json.encode(data)
@@ -167,6 +169,8 @@ function M.save(force)
     local ok = os.rename(tmp, M.DATA_FILE)
     if not ok then
         logger.warn("Picayomi OfflineLibrary: 清单改名失败 " .. tostring(tmp))
+    else
+        last_save = now
     end
     return ok
 end
@@ -208,6 +212,7 @@ end
 -- 卡片 / 详情页真正会读的字段。与 util/local_favorites.lua 同一套口径:
 -- 清单是整份读写的, 不把源的原始响应整个塞进来。
 local KEEP_FIELDS = {
+    "content_type", "text_filters",
     "_id", "title", "author", "author_text",
     "categories", "categories_text", "tags", "tags_text",
     "thumb", "description", "epsCount", "pagesCount", "likesCount",
@@ -226,9 +231,9 @@ local function trim_comic(comic)
     local valid,display=pcall(Contract.listDisplay,comic._list_display)
     if valid and display then
         out._list_display=display
-        local ok,metadata=pcall(Contract.metadata,comic.metadata)
-        if ok then out.metadata=metadata end
     end
+    local ok,metadata=pcall(Contract.metadata,comic.metadata)
+    if ok then out.metadata=metadata end
     out._id = tostring(comic._id or "")
     return out
 end
@@ -248,6 +253,7 @@ function M.begin(source_id, comic, chapters)
     for _i, ch in ipairs(chapters or {}) do
         local key = chapter_key(ch.order)
         entry.targets[key] = {
+            id=ch._id or ch.id,
             order = ch.order,
             sort_index = ch.sort_index,
             title = ch.title,
@@ -255,6 +261,7 @@ function M.begin(source_id, comic, chapters)
         }
         local prev = entry.chapters[key]
         entry.chapters[key] = {
+            id=ch._id or ch.id or (prev and prev.id),
             order = ch.order,
             title = ch.title or (prev and prev.title),
             sort_index = ch.sort_index or (prev and prev.sort_index),
@@ -263,6 +270,7 @@ function M.begin(source_id, comic, chapters)
             total = tonumber(ch.pages) or (prev and prev.total) or 0,
             bytes = (prev and prev.state == "done") and (prev.bytes or 0) or 0,
             page_manifest = prev and prev.page_manifest,
+            document = prev and prev.document,
             updated_at = os.time(),
         }
     end
@@ -498,6 +506,11 @@ function M.isChapterComplete(source_id, comic_id, order)
     if not entry then return false end
     local ch = (entry.chapters or {})[chapter_key(order)]
     if not ch or ch.state ~= "done" then return false end
+    if entry.comic and entry.comic.content_type=="novel" then
+        if type(ch.document)~="table" then return false end
+        local ok,doc=pcall(require("novel.document").load,Cache.BASE_DIR.."/novels/downloads",ch.document.key,ch.document.generation)
+        return ok and doc~=nil
+    end
     local total = tonumber(ch.total) or 0
     if total <= 0 then return false end
     local images = M.localImages(source_id, comic_id, order)
@@ -514,7 +527,7 @@ function M.completedChapters(source_id, comic_id)
     local out = {}
     for _k, ch in pairs(entry.chapters or {}) do
         if ch.state == "done" and M.isChapterComplete(source_id, comic_id, ch.order) then
-            out[#out + 1] = { order = ch.order, title = ch.title, pages = ch.total, sort_index = ch.sort_index }
+            out[#out + 1] = { id=ch.id, order = ch.order, title = ch.title, pages = ch.total, sort_index = ch.sort_index }
         end
     end
     table.sort(out, function(a, b)
@@ -543,6 +556,7 @@ function M.failedChapters(source_id, comic_id)
             -- 队列还在处理, 不重复
         else
             out[#out + 1] = {
+                id=t.id or (ch and ch.id),
                 order = t.order,
                 sort_index = t.sort_index,
                 title = (ch and ch.title) or t.title,
@@ -611,6 +625,14 @@ end
 function M.remove(source_id, comic_id)
     local entry = entry_of(source_id, comic_id, false)
     if entry then
+        if entry.comic and entry.comic.content_type=="novel" then
+            local ok=pcall(function()
+                for _,ch in pairs(entry.chapters or {}) do
+                    if ch.document then require("novel.document").remove(Cache.BASE_DIR.."/novels/downloads",ch.document.key) end
+                end
+            end)
+            if not ok then return false,"部分小说文件未能删除，请重试" end
+        end
         for _k, ch in pairs(entry.chapters or {}) do
             local dir = M.chapterDir(source_id, comic_id, ch.order)
             pcall(function()
@@ -645,11 +667,36 @@ function M.remove(source_id, comic_id)
     return false
 end
 
+-- Cancel only affected books; downloads of the other content type continue.
+function M.clearType(kind)
+    assert(kind=="comic" or kind=="novel","invalid download type")
+    M.load()
+    assert(not M.load_error,"下载清单损坏，无法清空")
+    local before=Cache:getDirSize(Cache.DOWNLOAD_CACHE_DIR)+Cache:getDirSize(Cache.BASE_DIR.."/novels/downloads")
+    local count=0
+    for _,comic in ipairs(M.list()) do
+        if (comic.content_type=="novel" and "novel" or "comic")==kind then
+            require("util.download_queue").instance():cancelComic(comic.source_id,comic._id,"清空分类下载")
+            local ok,err=M.remove(comic.source_id,comic._id);assert(ok,err)
+            count=count+1
+        end
+    end
+    return {comics=count,bytes=math.max(0,before-Cache:getDirSize(Cache.DOWNLOAD_CACHE_DIR)-Cache:getDirSize(Cache.BASE_DIR.."/novels/downloads"))}
+end
+
 -- Caller must stop the download queue before purging its persistent files.
 function M.clearAll()
     local data=M.load()
     assert(not M.load_error,"下载清单损坏，无法清空")
+    local before_bytes=Cache:getDirSize(Cache.DOWNLOAD_CACHE_DIR)+Cache:getDirSize(Cache.BASE_DIR.."/novels/downloads")
     local count,bytes=0,0
+    for sid,bucket in pairs(data.comics or {}) do
+        local novels={}
+        for cid,entry in pairs(bucket) do if entry.comic and entry.comic.content_type=="novel" then novels[#novels+1]=cid end end
+        for _,cid in ipairs(novels) do
+            local ok,err=M.remove(sid,cid);assert(ok,err);count=count+1
+        end
+    end
     for _,bucket in pairs(data.comics or {}) do for _ in pairs(bucket) do count=count+1 end end
     local function clear(path)
         local attr=(lfs.symlinkattributes or lfs.attributes)(path)
@@ -664,14 +711,14 @@ function M.clearAll()
             if attr.mode=="file" then bytes=bytes+(attr.size or 0) end
         end
     end
-    if lfs.attributes(Cache.DOWNLOAD_CACHE_DIR,"mode")=="directory" then
-        for name in lfs.dir(Cache.DOWNLOAD_CACHE_DIR) do
-            if name~="." and name~=".." then clear(Cache.DOWNLOAD_CACHE_DIR.."/"..name) end
+    for _,download_root in ipairs{Cache.DOWNLOAD_CACHE_DIR,Cache.BASE_DIR.."/novels/downloads"} do
+        if lfs.attributes(download_root,"mode")=="directory" then
+            for name in lfs.dir(download_root) do if name~="." and name~=".." then clear(download_root.."/"..name) end end
         end
     end
     data.comics={}
     assert(M.save(true),"下载文件已删除，但清单保存失败，请重试")
-    return {comics=count,bytes=bytes}
+    return {comics=count,bytes=math.max(0,before_bytes-Cache:getDirSize(Cache.DOWNLOAD_CACHE_DIR)-Cache:getDirSize(Cache.BASE_DIR.."/novels/downloads"))}
 end
 
 --- 重启后把上次未完成的状态归为 partial，不归零已经落盘的页数。

@@ -44,9 +44,9 @@ function Async.run(fn, opts)
         local ok, err = pcall(cb, ...)
         if not ok then require("util.logger").warn("Picayomi async callback: " .. tostring(err)) end
     end
-    local function release()
+    local function release(keep_session)
         if task.poll then UIManager:unschedule(task.poll) end
-        if task.session then
+        if task.session and not keep_session then
             pcall(function()
                 if task.nonblocking and task.session.terminate then task.session:terminate()
                 else task.session:close() end
@@ -90,7 +90,13 @@ function Async.run(fn, opts)
         task.chunks, task.bytes = {}, 0
         task.started = socket.gettime()
         local session, err
-        if request and not opts.subprocess and require("ffi").os == "OSX" then
+        if request and opts.reuse_worker and not opts.subprocess then
+            if task.session then
+                local ok,why=task.session:send({request=request})
+                if ok then session=task.session else err=why end
+            else session,err=Fork.spawnWorker("novel",request) end
+            task.persistent_session=true
+        elseif request and not opts.subprocess and require("ffi").os == "OSX" then
             session, err = Fork.spawnWorker("request", request)
         else
             session, err = Fork.spawn(function(child)
@@ -125,7 +131,7 @@ function Async.run(fn, opts)
                 task.chunks[#task.chunks + 1] = frame.chunk
                 if frame.last then
                     local result = buffer.decode(table.concat(task.chunks))
-                    release()
+                    release(task.persistent_session)
                     resume(result.ok, result.value, result.err)
                     return
                 end

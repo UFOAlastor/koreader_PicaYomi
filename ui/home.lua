@@ -21,7 +21,6 @@ local Geom = require("ui/geometry")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local ButtonDialog = require("ui.common.action_style").ButtonDialog
-local InputDialog = require("ui/widget/inputdialog")
 local SpinWidget = require("ui.common.action_style").SpinWidget
 local Input = require("device").input
 local VisualComicList = require("ui.common.visual_comic_list")
@@ -137,18 +136,14 @@ function Home:createMainMenu()
 
     -- 当前源条目本身就是切换入口: 原来"当前源(灰、不可点)"+"切换漫画源"两项只做一件事,
     -- 合并为可点击的一项 (Kindle 小屏上省一行, 也更直观)。
-    table.insert(item_table, {
-        text = T(_("漫画源: %1 (点击切换)"), source and source.name or _("无")),
-        callback = function()
-            self:showSourceSwitcher()
-        end,
-    })
+    local source_action={text=source and source.content_type=="novel" and _("小说源") or _("漫画源"),
+        callback=function()self:showSourceSwitcher()end}
 
     if has("recommendations") then
-        table.insert(item_table, { text = _("推荐漫画"), callback = function() self:showRecommended(nil, "recommendations") end })
+        table.insert(item_table, { text = source.content_type=="novel" and _("推荐小说") or _("推荐漫画"), callback = function() self:showRecommended(nil, "recommendations") end })
     end
     if has("latest") or source and not source._extension_digest and not source._offline then
-        table.insert(item_table, { text = _("最新漫画"), callback = function() self:showRecommended(nil, "latest") end })
+        table.insert(item_table, { text = source and source.content_type=="novel" and _("最新小说") or _("最新漫画"), callback = function() self:showRecommended(nil, "latest") end })
     end
 
     if has("categories") then
@@ -200,30 +195,15 @@ function Home:createMainMenu()
 
     if has("search") then
         table.insert(item_table, {
-            text = _("搜索漫画"),
+            text = source and source.content_type=="novel" and _("搜索小说") or _("搜索漫画"),
             callback = function()
                 self:showSearch()
             end,
         })
     end
 
-    self.account_item = nil
-    if has("login") then
-        self.account_item = {
-            text = source and source:isLoggedIn() and _("账号管理") or _("登录账号"),
-            callback = function()
-                self:showAccount()
-            end,
-        }
-        table.insert(item_table,self.account_item)
-    end
-
-    table.insert(item_table, {
-        text = _("设置"),
-        callback = function()
-            self:showSettings()
-        end,
-    })
+    self.account_item={text=_("账号管理"),enabled=has("login"),callback=function()self:showAccount()end}
+    local settings_action={text=_("设置"),callback=function()self:showSettings()end}
 
     -- 关掉插件页面之后, 保证窗口栈里还剩**非插件**的底层界面
     --
@@ -266,17 +246,13 @@ function Home:createMainMenu()
         end
     end
 
-    table.insert(item_table, {
-        -- 名字就写「退出」: 它做的事就是退出插件, 不叫"返回"才不会让人以为
-        -- 还能退回上一页。
-        text = _("退出"),
-        callback = leave_home,
-    })
+    local navigation_actions={source_action,self.account_item,settings_action,{text=_("退出"),callback=leave_home}}
 
     -- 标题栏走 MenuStyle: 去掉右上角那个与「返回」做同一件事的 ✕
     -- (理由见 ui/common/menu_style.lua)
-    local title_bar = MenuStyle.titleBar{ title = _("Picayomi") }
+    local title_bar = MenuStyle.titleBar{ title = _("Picayomi") .. " · " .. (source and source.name or _("无")) }
     self.main_menu = Menu:new{
+        navigation_actions=navigation_actions,
         is_picayomi_page = true, -- 退出 Picayomi 时由 util/widget_sweep 清扫
         -- 标记: 供 Home.findShownMenu 判断"主页菜单是否已在窗口栈里"
         is_picayomi_home_menu = true,
@@ -351,7 +327,7 @@ function Home:refreshFavoritesLabel()
         end
     end
     if self.account_item then
-        local label=self.source and self.source:isLoggedIn() and _("账号管理") or _("登录账号")
+        local label=_("账号管理")
         if self.account_item.text~=label then self.account_item.text=label;changed=true end
     end
     if changed then self.main_menu:updateItems() end
@@ -511,6 +487,7 @@ function Home:showRecommended(sort, kind)
     local source = self.source
     local method = kind == "recommendations" and "getRecommendations" or "getLatest"
     local title = kind == "recommendations" and _("推荐漫画") or _("最新漫画")
+    if source and source.content_type=="novel" then title=kind=="recommendations" and _("推荐小说") or _("最新小说") end
     local status = require("source.capabilities").query(source, kind)
     if source and source._extension_digest and not status.available then
         UIManager:show(InfoMessage:new{ text=status.reason,timeout=3 },"ui"); return
@@ -537,7 +514,7 @@ function Home:showRecommended(sort, kind)
         self.current_sort = sort_options[1] and sort_options[1].value or nil
     end
 
-    if logger.enabled then logger.info("Picayomi Home: 加载推荐漫画 (排序 " .. tostring(self.current_sort) .. ")") end
+    if logger.enabled then logger.info("Picayomi Home: 加载" .. title .. " (排序 " .. tostring(self.current_sort) .. ")") end
     local loading = InfoMessage:new{ text = title .. _("加载中…（点击取消）") }
     UIManager:show(loading, "ui")
     -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
@@ -710,7 +687,7 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
         if #data.comics == 0 then
             close_loading()
             UIManager:show(InfoMessage:new{
-                text = _("没有找到漫画"),
+                text = source and source.content_type=="novel" and _("没有找到小说") or _("没有找到漫画"),
                 timeout = 2,
             }, "ui")
             self:returnToListBase()
@@ -778,7 +755,7 @@ function Home:_showComicList(title, data, page, sort_spec, fetch_page)
         source_id = self.source and self.source.identifier or "picacg",
         -- 单层分页: 翻到缓冲区末尾时由列表自己按需补货
         server_page = data.page or page or 1,
-        total_pages = data.pages,
+        total_pages = data.pages, server_page_size = data.page_size,
         has_more = data.has_more,
         -- 总条数必须在**首次进入**时就带上: 只给 pages 的话界面上算不出总屏数,
         -- 得等翻到第二批补货才拿到 total, 表现为"刚进列表不显示总量"
@@ -872,7 +849,14 @@ function Home:showSourceSwitcher()
 
     local item_table = {}
     -- 注意: 循环变量不要用 `_`, 否则会遮蔽 gettext 的 `_`
-    for _idx, info in ipairs(SourceRegistry:list(true)) do
+    local group
+    for _idx, info in ipairs(SourceRegistry:list(false)) do
+        local kind=info.content_type=="novel" and "novel" or "comic"
+        if kind~=group then
+            group=kind
+            item_table[#item_table+1]={text=kind=="novel" and _("小说源") or _("漫画源"),
+                enabled=false,select_enabled=false,bold=true}
+        end
         local id = info.identifier
         local label = info.name
         if id == current_id then
@@ -907,7 +891,7 @@ function Home:showSourceSwitcher()
         callback = close_source_menu,
     })
 
-    local source_title_bar = MenuStyle.titleBar{ title = _("选择漫画源") }
+    local source_title_bar = MenuStyle.titleBar{ title = _("选择内容源") }
     self.source_menu = Menu:new{
         is_picayomi_page = true, -- 退出 Picayomi 时由 util/widget_sweep 清扫
         title = source_title_bar.title,
@@ -999,7 +983,9 @@ end
 
 function Home:showDownloads()
     local return_callback = function() self:show() end
-    self:_getUI("downloads"):show(return_callback)
+    local downloads=self:_getUI("downloads")
+    downloads.content_type=self.source and self.source.content_type=="novel" and "novel" or "comic"
+    downloads:show(return_callback)
 end
 
 function Home:showAccount()

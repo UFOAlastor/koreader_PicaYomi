@@ -1,11 +1,9 @@
 local InfoMessage = require("ui/widget/infomessage")
-local Menu = require("ui/widget/menu")
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local ConfirmBox = require("ui/widget/confirmbox")
-local ButtonDialog = require("ui/widget/buttondialog")
+local ConfirmBox = require("ui.common.action_style").ConfirmBox
 local _ = require("gettext")
 local T = require("ffi/util").template
 local FavoriteActions = require("util.favorites")
@@ -79,11 +77,11 @@ end
 --   * 老记录只有话号 -> 只显示话号, 不显示"第 nil 页";
 --   * 源没给页数 (pages 缺失) -> 只显示"第5页";
 --   * 换过话的记录页码会被清掉 (见 saveHistory), 同样只显示话号。
-function History.progressText(item)
+function History.progressText(item, source)
     if not (item and item.episode) then return _("未记录进度") end
     local text = type(item.episode_title) == "string" and item.episode_title ~= ""
         and (_("读到 ") .. item.episode_title)
-        or T(_("读到 第%1话"), tostring(item.episode))
+        or T((item.content_type=="novel" or source and source.content_type=="novel") and _("读到 第%1章") or _("读到 第%1话"), tostring(item.episode))
     local page = tonumber(item.page)
     local pages = tonumber(item.pages)
     if page and page > 0 then
@@ -129,9 +127,10 @@ function History:showHistoryList()
         table.insert(comics, {
             _id = item.id,
             title = item.title,
+            content_type = item.content_type or source and source.content_type,
             thumb = item.thumb,
             author_text = time_str,
-            categories_text = History.progressText(item),
+            categories_text = History.progressText(item, source),
             _history = item,
         })
     end
@@ -196,7 +195,7 @@ end
 
 function History:showHistoryDetail(history, navigation)
     local loading = InfoMessage:new{
-        text = _("加载漫画信息..."),
+        text = _("加载作品信息..."),
     }
     UIManager:show(loading, "ui")
     -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
@@ -209,7 +208,7 @@ function History:showHistoryDetail(history, navigation)
 
     if not success or not comic_detail then
         UIManager:show(InfoMessage:new{
-            text = T(_("获取漫画信息失败: %1"), require("ui.common.error_message").describe(error_msg)),
+            text = T(_("获取作品信息失败: %1"), require("ui.common.error_message").describe(error_msg)),
         }, "ui")
         return
     end
@@ -257,7 +256,7 @@ end
 function History:removeFromHistory(comic_id)
     -- 显示确认对话框
     UIManager:show(ConfirmBox:new{
-        text = _("确定要从历史记录中删除这部漫画吗？"),
+        text = _("确定要从历史记录中删除这部作品吗？"),
         ok_text = _("确定"),
         cancel_text = _("取消"),
         ok_callback = function()

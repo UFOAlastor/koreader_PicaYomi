@@ -76,12 +76,16 @@ local function shorten(text, max)
 end
 
 function DownloadSelect:chapterLabel(ep)
-    local title = shorten(ep.title or T(_("第%1话"), ep.order), MAX_TITLE_CHARS)
+    local title = shorten(ep.title or T(_("第%1%2"), ep.order,self:chapterUnit()), MAX_TITLE_CHARS)
     local pages = tonumber(ep.pagesCount or ep.total or ep.pages)
     if pages and pages > 0 then
         return T(_("%1 (%2 页)"), title, pages)
     end
     return title
+end
+
+function DownloadSelect:chapterUnit()
+    return (self.source and self.source.content_type=="novel" or self.comic and self.comic.content_type=="novel") and _("章") or _("话")
 end
 
 function DownloadSelect:selectedCount()
@@ -126,7 +130,7 @@ function DownloadSelect:buildItemTable()
 
     -- 主操作: 加粗 + ▶, 一眼能认出"这一步是真正开始下载的按钮"。
     table.insert(items, {
-        text = T(_("▶ 开始下载（已选 %1 话）"), self:selectedCount()),
+        text = T(_("▶ 开始下载（已选 %1 %2）"), self:selectedCount(),self:chapterUnit()),
         bold = true,
         picayomi_primary = true,
         enabled = self:selectedCount()>0,
@@ -136,14 +140,14 @@ function DownloadSelect:buildItemTable()
     table.insert(items, {
         text = self:allSelected()
             and _("□ 取消全选")
-            or T(_("■ 全选本页（%1 话可选）"), selectable),
+            or T(_("■ 全选本页（%1 %2可选）"), selectable,self:chapterUnit()),
         enabled = selectable > 0,
         callback = function() self:toggleAll() end,
     })
     -- 说明行: 灰字 + 圆点前缀, 与可点的行区分开 (它本来也点不动)
     table.insert(items, {
-        text = T(_("· 已下载 %1/%2 话 · 点下面的章节切换选中"),
-            self:downloadedCount(), #self.episodes),
+        text = T(_("· 已下载 %1/%2 %3 · 点下面的章节切换选中"),
+            self:downloadedCount(), #self.episodes,self:chapterUnit()),
         enabled = false,
         select_enabled = false,
         dim = true,
@@ -266,6 +270,7 @@ function DownloadSelect:selectedChapters()
     for _i, ep in ipairs(self.episodes) do
         if self.selected[ep.order] then
             out[#out + 1] = {
+                id=ep._id or ep.id,
                 order = ep.order,
                 sort_index = ep.sort_index,
                 title = ep.title,
@@ -292,7 +297,7 @@ end
 -- 单独抽出来是为了能测: 文案在 startDownload 里内联时, 测试只能真的跑一遍
 -- 入队 (依赖队列/源实现), 而这句提示本身跟队列无关。
 function DownloadSelect:downloadStartedText(queued)
-    local text = T(_("已开始下载 %1 话…"), queued)
+    local text = T(_("已开始下载 %1 %2…"), queued,self:chapterUnit())
     if self:isLocalOnlySource() then
         text = text .. _("（本地）")
     end

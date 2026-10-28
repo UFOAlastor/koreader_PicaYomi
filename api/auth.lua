@@ -55,7 +55,7 @@ end
 function AuthAPI:login(a, b)
     local source = currentSource()
     if not source then
-        return false, nil, "没有可用的漫画源"
+        return false, nil, "没有可用的源"
     end
 
     local ok, err = source:login(a, b)
@@ -80,7 +80,7 @@ function AuthAPI:getProfile()
 
     local source = currentSource()
     if not source then
-        return false, nil, "没有可用的漫画源"
+        return false, nil, "没有可用的源"
     end
     if not source:isLoggedIn() then
         return false, nil, "未登录"
@@ -115,13 +115,13 @@ end
 --- 兼容接口: 直接返回源原始资料
 function AuthAPI:getUserProfile()
     local source = currentSource()
-    if not source then return nil, "没有可用的漫画源" end
+    if not source then return nil, "没有可用的源" end
     return source:getUserProfile()
 end
 
 function AuthAPI:punchIn()
     local source = currentSource()
-    if not source then return false, "没有可用的漫画源" end
+    if not source then return false, "没有可用的源" end
     return source:punchIn()
 end
 

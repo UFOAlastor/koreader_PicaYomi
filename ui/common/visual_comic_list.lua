@@ -15,7 +15,7 @@ local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local ListView = require("ui/widget/listview")
 local Menu = require("ui.common.action_style").Menu
-local PageJump = require("ui/common/page_jump")
+local PageJump = require("ui.common.page_jump")
 local ProgressWidget = require("ui/widget/progresswidget")
 local Size = require("ui/size")
 local TapGuard = require("ui.common.tap_guard")
@@ -191,6 +191,13 @@ end
 
 function ComicListItem:buildContent()
     local comic = self.comic or {}
+    -- Older saved entries may predate content_type; never overwrite mixed-source items.
+    if not comic.content_type and self.source and (not comic.source_id or comic.source_id==self.source.identifier) then
+        local typed = {}
+        for k,v in pairs(comic) do typed[k]=v end
+        typed.content_type = self.source.content_type
+        comic = typed
+    end
     local padding = Screen:scaleBySize(8)
     local gap = Screen:scaleBySize(10)
     local text_w = self.width - self.cover_w - gap - padding * 2
@@ -244,9 +251,9 @@ function ComicListItem:buildContent()
         third_line = third_line ~= "" and (third_line .. " · " .. text) or text
     end
     if download_state == "done" then
-        append_meta(T(_("已下载 %1 话"), comic.download_total or 0))
+        append_meta(T(comic.content_type=="novel" and _("已下载 %1 章") or _("已下载 %1 话"), comic.download_total or 0))
     elseif download_state == "partial" then
-        append_meta(T(_("已下载 %1/%2 话 · 部分未完成"),
+        append_meta(T(comic.content_type=="novel" and _("已下载 %1/%2 章 · 部分未完成") or _("已下载 %1/%2 话 · 部分未完成"),
             comic.download_done or 0, comic.download_total or 0))
     end
 
@@ -274,7 +281,7 @@ function ComicListItem:buildContent()
                 },
                 HorizontalSpan:new{ width = Screen:scaleBySize(8) },
                 TextBoxWidget:new{
-                    text = T(_("%1% · %2/%3 话"),
+                    text = T(comic.content_type=="novel" and _("%1% · %2/%3 章") or _("%1% · %2/%3 话"),
                         math.floor(pct * 100 + 0.5),
                         comic.download_done or 0,
                         comic.download_total or 0),
@@ -441,12 +448,25 @@ function ComicListItem:loadCover(delay, on_done)
     end
 
     self.cover_loading = true
+    local function stale()
+        if not self.list_ui then return false end
+        if self.list_ui._closed then return true end
+        for _, item in ipairs(self.list_ui.items or {}) do
+            if item == self then return false end
+        end
+        return true
+    end
     local function start()
+        if stale() then
+            self.cover_loading = false
+            if on_done then on_done(nil) end
+            return
+        end
         CoverCache.ensure(self.source, self.source_id, comic, function(path)
             self.cover_loading = false
             -- 页面已关闭: 不必再重建控件 (省下这份无用功), 但 on_done 仍要回调
             if (path or self.list_ui and self.list_ui.resolve_cover)
-                    and not (self.list_ui and self.list_ui._closed) then
+                    and not stale() then
                 self.cover_loaded = path ~= nil
                 self.cover_error = not path and _("加载失败") or nil
                 -- 重建/刷新抛异常不能让 on_done 丢掉: on_done 是推进封面队列的唯一
@@ -747,6 +767,13 @@ function VisualComicList:onTapConsume()
 end
 
 --- 造一条列表项
+function VisualComicList:sourceForComic(comic)
+    local sid=comic and comic.source_id or self.source_id
+    if sid==self.source_id then return self.source end
+    local source=require("source.registry"):get(sid)
+    return source and not source._offline and source or nil
+end
+
 function VisualComicList:makeItem(comic, index)
     local bg = (index % 2 == 0) and Blitbuffer.COLOR_GRAY_E or Blitbuffer.COLOR_WHITE
     return ComicListItem:new{
@@ -755,8 +782,8 @@ function VisualComicList:makeItem(comic, index)
         -- 列表量过的文字块高度: 条目据此把封面放大到与文字块等高 (见 buildContent)
         text_h = self.text_h,
         comic = comic,
-        source = self.source,
-        source_id = self.source_id,
+        source = VisualComicList.sourceForComic(self, comic),
+        source_id = comic.source_id or self.source_id,
         on_select = self.on_select,
         on_hold = self.on_hold,
         list_ui = self,
@@ -1163,7 +1190,7 @@ function VisualComicList:maybePrefetch()
 end
 
 function VisualComicList:createHeader()
-    local title = self.title or _("漫画列表")
+    local title = self.title or (self.source and self.source.content_type=="novel" and _("小说列表") or _("作品列表"))
     return FrameContainer:new{
         padding = Screen:scaleBySize(6),
         margin = 0,
@@ -1186,54 +1213,23 @@ function VisualComicList:createHeader()
 end
 
 function VisualComicList:createFooter()
-    local button_h = Screen:scaleBySize(40)
-    -- 只有一对翻页按钮: 一"页"就是屏幕上的一屏
-    local specs = {
-        { text = _("上页"), enabled = false, callback = function() self:prevScreen() end },
-        { text = _("下页"), enabled = self.has_more ~= false, callback = function() self:nextScreen() end },
-        { text = _("跳页"), callback = function() self:showJumpDialog() end },
-    }
-    -- 只有源声明了可用排序时才显示按钮 (点了没反应的按钮比没有更糟)
-    if #(self.sort_options or {}) > 0 then
-        table.insert(specs, { text = _("排序"), callback = function() self:showSortMenu() end })
+    local extra={}
+    if #(self.sort_options or {})>0 then
+        extra[#extra+1]={text=_("排序"),callback=function()self:showSortMenu()end}
     end
-    for _idx, extra in ipairs(self.extra_buttons or {}) do
-        table.insert(specs, {
-            text = extra.text,
-            enabled = extra.enabled,
-            callback = function() if extra.callback then extra.callback(self) end end,
-        })
+    for _,action in ipairs(self.extra_buttons or {}) do
+        extra[#extra+1]={text=action.text,enabled=action.enabled,
+            callback=function()if action.callback then action.callback(self)end end}
     end
-    table.insert(specs, { text = _("返回"), callback = function() self:goBack() end })
-
-    -- 长文案留出左右空隙，与详情页共用宽度规则；短按钮分享剩余空间。
-    local padding = Screen:scaleBySize(4)
-    local inner_w = self.width - (padding + Size.border.thin) * 2
-    local widths = require("ui.common.action_style").footerWidths(inner_w,specs,button_h)
-    local group = HorizontalGroup:new{}
-    for idx, spec in ipairs(specs) do
-        local btn = Button:new{
-            text = spec.text,
-            enabled = spec.enabled ~= false,
-            width = widths[idx],
-            height = button_h,
-            callback = spec.callback,
-        }
-        -- 记住分页按钮, 换页后需要同步它们的可用状态
-        if spec.text == _("上页") then self.prev_button = btn end
-        if spec.text == _("下页") then self.next_button = btn end
-        if spec.text == _("跳页") then self.jump_button = btn end
-        table.insert(group, btn)
-    end
-
-    return FrameContainer:new{
-        padding = padding,
-        margin = 0,
-        bordersize = Size.border.thin,
-        background = Blitbuffer.COLOR_GRAY_E,
-        width = self.width,
-        group,
-    }
+    local footer,buttons,nav=require("ui.common.action_style").navigationFooter(self.width,{
+        prev={enabled=false,callback=function()self:prevScreen()end},
+        next={enabled=self.has_more~=false,callback=function()self:nextScreen()end},
+        jump={callback=function()self:showJumpDialog()end},extra=extra,
+        back=function()self:goBack()end,
+    })
+    self.footer_widget,self.footer_buttons=footer,buttons
+    self.prev_button,self.next_button,self.jump_button=nav.prev,nav.next,nav.jump
+    return footer
 end
 
 --- 服务端给的总条数; 与总页数对不上时视为不可信 (封顶哨兵值)
@@ -1492,7 +1488,7 @@ function VisualComicList:pumpCoverQueue()
     self.cover_busy = true
     self._cover_active = self._cover_active or 0
     self._cover_metadata_tasks = self._cover_metadata_tasks or {}
-    while not self._closed and self._cover_active < 2 do
+    while not self._closed and self._cover_active < (self.cover_concurrency or 2) do
         local entry = table.remove(self.cover_queue or {}, 1)
         if not entry then break end
         self._cover_active = self._cover_active + 1
@@ -1535,11 +1531,11 @@ function VisualComicList:dispatchCover(entry, generation)
             else
                 -- 下一屏: 只预热磁盘缓存, 不碰控件
                 local comic = entry.comic
-                local existing = CoverCache.find(self.source_id, comic._id)
+                local existing = CoverCache.find(comic.source_id or self.source_id, comic._id)
                 if existing then
                     next_one()
                 else
-                    CoverCache.ensure(self.source, self.source_id, comic, function()
+                    CoverCache.ensure(self:sourceForComic(comic), comic.source_id or self.source_id, comic, function()
                         next_one()
                     end)
                 end
@@ -1555,7 +1551,7 @@ function VisualComicList:dispatchCover(entry, generation)
     end
     local comic = entry.item and entry.item.comic
     if comic and self.resolve_cover and (not comic.thumb or comic.thumb == "")
-            and not CoverCache.find(self.source_id, comic._id) then
+            and not CoverCache.find(comic.source_id or self.source_id, comic._id) then
         local function failed(reason)
             if stale() then return end
             entry.item.cover_error = reason == "missing" and _("无封面") or _("加载失败")
@@ -1610,20 +1606,11 @@ end
 -- 中间多滑一下就把页面退掉太容易误触。
 -- 竖直/斜向滑动一律不处理 (返回 true 表示"已消费", 不让它继续往下层传)。
 function VisualComicList:onSwipe(_arg, ges)
-    if SwipeRules.isBackSwipe(ges) then
-        return self:goBack()
-    end
-    local direction = ges and ges.direction
-    if direction == "west" then
-        return self:nextScreen()
-    elseif direction == "east" then
-        if (self:absScreen() or 1) > 1 then
-            return self:prevScreen()
-        end
-        -- 第一屏再右滑 = 什么都不做: 退出只归边缘滑动 (见 SwipeRules),
-        -- 中间滑动到边界就停住, 不会"再滑一下退出去"。
-        return true
-    end
+    SwipeRules.dispatchPageSwipe(ges,{
+        back=function()self:goBack()end,
+        next=function()self:nextScreen()end,
+        prev=function()if (self:absScreen() or 1)>1 then self:prevScreen()end end,
+    })
     return true
 end
 

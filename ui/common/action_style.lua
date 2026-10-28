@@ -120,6 +120,38 @@ function Style.footerWidths(width,specs,height)
     return widths
 end
 
+function Style.footer(width,specs)
+    local padding=Screen:scaleBySize(4)
+    local height=Screen:scaleBySize(40)
+    local widths=Style.footerWidths(width-2*(padding+Size.border.thin),specs,height)
+    local buttons={}
+    for i,spec in ipairs(specs) do
+        buttons[i]=Style.Button:new{text=spec.text,width=widths[i],height=height,
+            enabled=spec.enabled~=false,callback=spec.callback}
+    end
+    local group=require("ui/widget/horizontalgroup"):new(buttons)
+    return Frame:new{padding=padding,margin=0,bordersize=Size.border.thin,
+        background=BB.COLOR_GRAY_E,width=width,group},buttons
+end
+
+-- All paginated plugin pages share action order and labels. Callers only
+-- supply page semantics and optional actions before/after the navigation trio.
+function Style.navigationFooter(width,opts)
+    local specs,indices={},{}
+    for _,action in ipairs(opts.leading or {}) do specs[#specs+1]=action end
+    local gettext=require("gettext")
+    for _,key in ipairs{"prev","next","jump"} do
+        local action=opts[key] or {}
+        local labels={prev="上页",next="下页",jump="跳页"}
+        specs[#specs+1]={text=gettext(labels[key]),enabled=action.enabled,callback=action.callback}
+        indices[key]=#specs
+    end
+    for _,action in ipairs(opts.extra or {}) do specs[#specs+1]=action end
+    specs[#specs+1]={text=gettext("返回"),callback=opts.back}
+    local footer,buttons=Style.footer(width,specs)
+    return footer,buttons,{prev=buttons[indices.prev],next=buttons[indices.next],jump=buttons[indices.jump]}
+end
+
 local function decorate_menu(menu)
     for _,row in ipairs(menu.item_group or {}) do
         local entry=row.entry
@@ -145,6 +177,23 @@ local function decorate_menu(menu)
 end
 Style.Menu=NativeMenu:extend{linesize=0,
     is_enable_shortcut=NativeMenu.is_enable_shortcut and not require("device"):isTouchDevice()}
+function Style.Menu:init()
+    local last=self.item_table and self.item_table[#self.item_table]
+    self.fixed_navigation=self.navigation_actions or (self.is_picayomi_page and last and last.text==require("gettext")("返回")
+        and type(last.callback)=="function")
+    if self.fixed_navigation then
+        self.is_borderless=true
+        self.page_info_text=Style.Button:new{text="跳页",height=Screen:scaleBySize(48)+Size.border.thin*2,
+            callback=function()
+                require("ui.common.page_jump").show{current=self.page,
+                    description=string.format("共 %d 页",self.page_num),on_jump=function(n)
+                        if n>self.page_num then return false,"超出页码范围" end
+                        self:onGotoPage(n);return true
+                    end}
+            end}
+    end
+    NativeMenu.init(self)
+end
 function Style.Menu:registerKeyEvents()
     NativeMenu.registerKeyEvents(self)
     -- Hide keyboard badges in touch layouts while keeping actual keyboard keys.
@@ -153,6 +202,15 @@ function Style.Menu:registerKeyEvents()
     end
 end
 function Style.Menu:updateItems(...)
+    if self.fixed_navigation then
+        local items=self.item_table or {}
+        local last=items[#items]
+        if last and last.text==require("gettext")("返回") and last.callback then
+            self.footer_back=last.callback
+            self.item_table={}
+            for i=1,#items-1 do self.item_table[i]=items[i] end
+        end
+    end
     for _,entry in ipairs(self.item_table or {}) do
         if type(entry)=="table" then
             entry.dim=entry.enabled==false and not not (entry.callback or entry.sub_item_table or entry.tap_input)
@@ -165,6 +223,12 @@ function Style.Menu:updateItems(...)
 end
 local function restore_footer(menu)
     if menu._picayomi_footer_children then
+        if menu.footer_widget then
+            menu.footer_widget:free()
+            menu.footer_widget=nil
+            menu.footer_buttons=nil
+        end
+        for i=#menu.page_info,1,-1 do menu.page_info[i]=nil end
         for i,child in ipairs(menu._picayomi_footer_children) do menu.page_info[i]=child end
         menu._picayomi_footer_children=nil
         menu.page_info:resetLayout()
@@ -173,6 +237,27 @@ end
 function Style.Menu:updatePageInfo(...)
     restore_footer(self)
     NativeMenu.updatePageInfo(self,...)
+    if self.fixed_navigation then
+        self._picayomi_hidden_footer=false
+        self._picayomi_footer_children={}
+        for i,child in ipairs(self.page_info) do self._picayomi_footer_children[i]=child end
+        for i=#self.page_info,1,-1 do self.page_info[i]=nil end
+        if self.navigation_actions then
+            self.footer_widget,self.footer_buttons=Style.footer(self.inner_dimen.w,self.navigation_actions)
+        else
+            self.footer_widget,self.footer_buttons=Style.navigationFooter(self.inner_dimen.w,{
+                prev={enabled=self.page>1,callback=function()if self.page>1 then self:onGotoPage(self.page-1)end end},
+                next={enabled=self.page<self.page_num,callback=function()if self.page<self.page_num then self:onGotoPage(self.page+1)end end},
+                jump={enabled=self.page_num>1,callback=self.page_info_text.callback},
+                extra=self.footer_actions,
+                back=function()if self.footer_back then self.footer_back()end end,
+            })
+        end
+        self.page_info[1]=self.footer_widget
+        self.page_return_arrow:hide()
+        self.page_info:resetLayout()
+        return
+    end
     self._picayomi_hidden_footer=self.page_num<=1
     if self._picayomi_hidden_footer then
         self.page_info_text:disableWithoutDimming()

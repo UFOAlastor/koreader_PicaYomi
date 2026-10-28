@@ -15,6 +15,7 @@ local M = {}
 
 -- 卡片 / 详情页会读到的字段
 local KEEP_FIELDS = {
+    "content_type",
     "_id", "title", "author",
     "categories", "categories_text", "tags", "tags_text",
     "thumb", "description",
@@ -42,9 +43,9 @@ local function trim(comic, saved_at)
     local valid,display=pcall(Contract.listDisplay,comic._list_display)
     if valid and display then
         entry._list_display=display
-        local ok,metadata=pcall(Contract.metadata,comic.metadata)
-        if ok then entry.metadata=metadata end
     end
+    local ok,metadata=pcall(Contract.metadata,comic.metadata)
+    if ok then entry.metadata=metadata end
     entry._id = tostring(comic._id or "")
     entry.isFavourite = true
     entry.local_favorite = true
@@ -85,9 +86,9 @@ end
 
 --- 加入本地收藏 (已存在则只刷新内容, 不重复插入)
 function M.add(source_id, comic)
-    if type(comic) ~= "table" then return false, "无效的漫画数据" end
+    if type(comic) ~= "table" then return false, "无效的作品数据" end
     if comic._id == nil or tostring(comic._id) == "" then
-        return false, "漫画缺少 ID, 无法本地收藏"
+        return false, "作品缺少 ID, 无法本地收藏"
     end
 
     local items = M.list(source_id)

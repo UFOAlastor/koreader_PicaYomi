@@ -2,7 +2,7 @@
 
 [简体中文](README.md)
 
-A manga reader plugin for [KOReader](https://github.com/koreader/koreader), designed primarily for Kindle and other e-ink devices. It supports multiple sources, search, streaming, chapter downloads, favorites, and reading history.
+A manga and novel reader plugin for [KOReader](https://github.com/koreader/koreader), designed primarily for Kindle and other e-ink devices. It supports multiple sources, search, streaming, chapter downloads, favorites, and reading history.
 
 **The plugin interface currently supports Chinese only.** This page is an introduction; the [Chinese README](README.md) contains the full user guide. Compatibility with devices other than Kindle needs testing.
 
@@ -29,7 +29,7 @@ Select a source on the home page and sign in if the source requires it. Open a t
 
 Sources are managed under 设置 → 源管理 (Settings → Source management). The default subscription is already configured. Automatic source update checks are disabled by default; when enabled, downloading an update still requires confirmation. Source changes take effect after restarting KOReader.
 
-Version **1.0.2** adds resume buttons on manga lists, original-page image export with a folder picker, and access to KOReader's native menu by pulling down from the top of PicaYomi pages. While reading, “返回 Picayomi” returns to manga details; outside the reader, “退出 Picayomi” returns to KOReader's file browser. Enable panel zoom in KOReader's reading menu and long-press a manga image to open the full-page image viewer, then pinch to zoom. See the [Chinese changelog](CHANGELOG.md) for details and remaining device-testing limits.
+Version **1.1.7** adds illustrated novel reading, chapter navigation, typography settings, resume, offline downloads, and configurable chapter preloading. Install **Wenku8 1.0.0** and **BiliNovel 1.0.0** from Settings → Source Management → Update Sources (including new sources), then restart KOReader. Wenku8 browsing requires a personal account; BiliNovel search may be blocked by site verification and its online bookshelf is unavailable. Local favorites remain available. See the [Chinese changelog](CHANGELOG.md).
 
 To update the plugin, exit KOReader, replace the plugin folder with the new release, and restart. Keep the KOReader data directory to preserve accounts, settings, favorites, history, and downloads; back up important data first.
 

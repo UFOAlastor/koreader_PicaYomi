@@ -24,6 +24,9 @@ function Offline.new(id)
         _offline = true,
         init = function(self) self._http_client = {} end,
     }
+    for _,comic in ipairs(require("util.offline_library").list(id)) do
+        if comic.content_type=="novel" then source.content_type="novel";source.text_filters=comic.text_filters or {};break end
+    end
     function source:getComics()
         local comics = LocalFavorites.list(id)
         return true, { comics = comics, page = 1, pages = 1, total = #comics }
@@ -38,7 +41,7 @@ function Offline.new(id)
     function source:getChapters(comic_id)
         local episodes = {}
         for _, ch in ipairs(require("util.offline_library").completedChapters(id, comic_id)) do
-            episodes[#episodes + 1] = { _id = ch.order, order = ch.order, title = ch.title,
+            episodes[#episodes + 1] = { _id = ch.id or ch.order, order = ch.order, title = ch.title,
                 pagesCount = ch.pages, sort_index = ch.sort_index }
         end
         return true, { episodes = episodes, page = 1, pages = 1, total = #episodes }

@@ -28,6 +28,14 @@ local logger = require("util.logger")
 
 local LoadingTask = {}
 
+-- Shared by comic and novel return paths; paint before blocking reader cleanup.
+function LoadingTask.showReturning(reason)
+    local notice=InfoMessage:new{text=reason or require("gettext")("返回中…"),dismissable=false}
+    UIManager:show(notice,"ui")
+    UIManager:forceRePaint()
+    return notice
+end
+
 function LoadingTask.showFailure(err)
     UIManager:show(InfoMessage:new{
         text = require("ui.common.error_message").describe(err,
@@ -68,6 +76,7 @@ function LoadingTask.background(loading, fn, opts)
         if handle.cancelled then return end
         handle.task = require("network.async_task").run(fn, {
             timeout = opts.timeout,
+            reuse_worker = opts.reuse_worker,
             is_cancelled = opts.is_cancelled,
             on_cancel = cancelled,
             on_error = function(err)
@@ -153,7 +162,10 @@ end
 -- @param opts.on_done     function(ok, data, err)  可选
 -- @return loading 控件
 function LoadingTask.run(opts)
-    local loading = InfoMessage:new{ text = opts.message }
+    local loading
+    if opts.progress then
+        loading=require("ui.common.loading_progress"):new{title=opts.message,progress={message=opts.stage}}
+    else loading=InfoMessage:new{text=opts.message}end
     UIManager:show(loading, "ui")
     -- 同步刷一次: show 只是把刷新入队, 而后面马上就要阻塞做网络请求,
     -- 不等这一下的话事件循环没机会重绘, 提示等于没显示。
@@ -180,7 +192,9 @@ function LoadingTask.run(opts)
             return
         end
 
-        local ok, data, err = LoadingTask.call(loading, opts.fetch)
+        local fetch=opts.fetch
+        if opts.progress then fetch=function()return opts.fetch(function(p)loading:update(p)end)end end
+        local ok, data, err = LoadingTask.call(loading, fetch)
 
         -- 复位必须无条件: 放进任何分支里, 异常那条路就会把守卫永久留在 true
         if opts.set_busy then opts.set_busy(false) end

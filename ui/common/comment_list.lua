@@ -18,7 +18,7 @@
 local Blitbuffer = require("ffi/blitbuffer")
 local Button = require("ui.common.action_style").Button
 local Device = require("device")
-local FixedBox = require("ui/common/fixed_box")
+local FixedBox = require("ui.common.fixed_box")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
@@ -29,7 +29,7 @@ local TextBoxWidget = require("ui/widget/textboxwidget")
 local Theme = require("ui.common.theme")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
-local VisualComicList = require("ui/common/visual_comic_list")
+local VisualComicList = require("ui.common.visual_comic_list")
 local CommentTime = require("util.comment_time")
 local JN = require("util.json_null")
 local _ = require("gettext")
@@ -67,6 +67,8 @@ local function metaOf(comment)
     if likes and likes > 0 then
         table.insert(parts, T(_("%1 赞"), likes))
     end
+    local replies=JN.num(comment and comment.repliesCount,0)
+    if replies>0 then table.insert(parts,T(_("%1 回复"),replies)) end
     return table.concat(parts, " · ")
 end
 
@@ -119,7 +121,7 @@ function CommentRow:init()
     }
     table.insert(group,body)
     self.truncated=body.line_with_ellipsis~=nil
-    if not is_placeholder and not self.truncated then self.on_select=nil end
+    if not is_placeholder and not self.truncated and not self.has_replies and comment.content_complete~=false then self.on_select=nil end
 
     -- 行高固定 = 上下留白 + 元信息 + 正文。内容再长也不改变行高 (FixedBox),
     -- 于是绘制区 / 落位基准 / 命中区三者严格一致。
@@ -262,6 +264,8 @@ function CommentList:makeItem(comment, index)
         width = self.width,
         comment = comment,
         background = bg,
+        has_replies=not self.is_reply and self.source and self.source.capabilities
+            and self.source.capabilities.replies=="paged" and (tonumber(comment.repliesCount) or 0)>0,
         on_select = function(c)
             if not c then return end
             if c._placeholder ~= nil then
@@ -270,9 +274,35 @@ function CommentList:makeItem(comment, index)
                 end
                 return
             end
-            self:showFullComment(c)
+            if not self.is_reply and self.source and self.source.capabilities
+                and self.source.capabilities.replies=="paged" and (tonumber(c.repliesCount) or 0)>0 then
+                self:showCommentActions(c)
+            else self:showFullComment(c) end
         end,
     }
+end
+
+function CommentList:showCommentActions(comment)
+    local dialog
+    local function close() UIManager:close(dialog,"ui");self.comment_actions=nil end
+    dialog=require("ui.common.action_style").ButtonDialog:new{
+        title=_("评论"),is_picayomi_page=true,
+        buttons={
+            {{text=_("查看全文"),callback=function()close();self:showFullComment(comment) end}},
+            {{text=T(_("查看回复（%1）"),comment.repliesCount),callback=function()
+                close()
+                local parent_id=comment._id or comment.id
+                local replies=CommentList:new{
+                    title=_("评论回复"),source=self.source,source_id=self.source_id,comic_id=self.comic_id,is_reply=true,items_key="replies",
+                    fetch_page=function(page)return self.source:getCommentReplies(self.comic_id,parent_id,page) end,
+                }
+                UIManager:show(replies,"ui")
+            end}},
+            {{text=_("取消"),callback=close}},
+        },
+    }
+    self.comment_actions=dialog
+    UIManager:show(dialog,"ui")
 end
 
 --- 头部: 标题 + 页码
@@ -303,47 +333,38 @@ end
 
 --- 页脚: 上页 / 下页 / 跳页 / 返回 (评论页没有排序)
 function CommentList:createFooter()
-    local button_h = Screen:scaleBySize(40)
-    local specs = {
-        { text = _("上页"), enabled = false, callback = function() self:prevScreen() end },
-        { text = _("下页"), enabled = self.has_more ~= false, callback = function() self:nextScreen() end },
-        { text = _("跳页"), callback = function() self:showJumpDialog() end },
-        { text = _("返回"), callback = function() self:goBack() end },
-    }
-
-    -- 按钮宽度按"可用内宽"均分, 让整行铺满 (留缝就是点击死区, 会穿透到下层窗口)
-    local padding = Screen:scaleBySize(4)
-    local inner_w = self.width - (padding + Size.border.thin) * 2
-    local button_w = math.floor(inner_w / #specs)
-    local group = HorizontalGroup:new{}
-    for _idx, spec in ipairs(specs) do
-        local btn = Button:new{
-            text = spec.text,
-            enabled = spec.enabled ~= false,
-            width = button_w,
-            height = button_h,
-            callback = spec.callback,
-        }
-        -- 记住分页按钮: 换页后要同步可用状态 (基类 updatePageButtons 会用)
-        if spec.text == _("上页") then self.prev_button = btn end
-        if spec.text == _("下页") then self.next_button = btn end
-        if spec.text == _("跳页") then self.jump_button = btn end
-        table.insert(group, btn)
-    end
-
-    return FrameContainer:new{
-        padding = padding,
-        margin = 0,
-        bordersize = Size.border.thin,
-        background = Blitbuffer.COLOR_GRAY_E,
-        width = self.width,
-        group,
-    }
+    return require("ui.common.visual_comic_list").createFooter(self)
 end
 
 --- 长评论只打开本地全文浮层，不请求回复。
 function CommentList:showFullComment(comment)
     if self._closed or self.comment_viewer or not comment or comment._placeholder then return end
+    if comment.content_complete==false then
+        if self._comment_task then return end
+        if not require("ui.common.source_access").check(self.source,"comment_details") then return end
+        local generation=self.source.sessionGeneration and self.source:sessionGeneration()
+        local function stale()
+            return self._closed or generation and self.source:sessionGeneration()~=generation
+        end
+        -- Lists often contain only a title or a shortened preview. Fetch only
+        -- the selected post, never one extra request for every list row.
+        self._comment_task=require("ui.common.loading_task").run{
+            message=_("正在加载评论全文…"),async=true,delay=.01,
+            is_cancelled=stale,
+            fetch=function()return self.source:getCommentDetails(self.comic_id,comment._id or comment.id)end,
+            set_busy=function(busy)if not busy then self._comment_task=nil end end,
+            on_done=function(ok,full,err)
+                if stale() then return end
+                if not ok then require("ui.common.loading_task").showFailure(err);return end
+                if full.content_complete==false then
+                    require("ui.common.loading_task").showFailure(_("站点未返回完整评论"));return
+                end
+                comment.content=full.content;comment.content_complete=true
+                self:showFullComment(comment)
+            end,
+        }
+        return
+    end
     local viewer
     viewer=require("ui/widget/textviewer"):new{
         title=_("评论全文"),text=contentOf(comment),show_menu=false,
@@ -365,6 +386,8 @@ function CommentList:closeCommentViewer()
 end
 
 function CommentList:onCloseWidget()
+    if self._comment_task then self._comment_task:cancel();self._comment_task=nil end
+    if self.comment_actions then UIManager:close(self.comment_actions,"ui");self.comment_actions=nil end
     self:closeCommentViewer()
     VisualComicList.onCloseWidget(self)
 end

@@ -46,7 +46,7 @@ koreader/
 
 ## 小说阅读
 
-使用 **1.1.8 或更新版本**，进入 **设置 → 源管理 → 更新源（全部订阅）**，安装 **轻小说文库 1.0.0** 或 **哔哩轻小说 1.0.0**，再正常重启 KOReader。小说源需要单独安装；默认附带的三个漫画源保持不变。
+进入 **设置 → 源管理 → 更新源（全部订阅）**，安装 **轻小说文库** 或 **哔哩轻小说**，再正常重启 KOReader。小说源需要单独安装；若提示插件版本不兼容，请先从 [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest) 升级插件。
 
 首页按漫画、小说分组切源。小说支持按题材浏览、查看详情和目录、图文阅读、直接切章、收藏、续读及离线下载。字体和排版在阅读页使用 KOReader 设置；可设置提前加载后续 0～5 章，默认 1 章。长目录及章节加载会显示阶段与等待时间，可取消；退出阅读时显示返回提示。
 
@@ -113,7 +113,7 @@ koreader/
 
 ## 更新与卸载
 
-当前版本为 **1.1.8**，改动与使用说明见[更新记录](CHANGELOG.md)，正式安装包以 [Releases 附件](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest)为准。
+版本变化与升级注意事项见 [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases)及[更新记录](CHANGELOG.md)，安装包从 [Release 附件](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest)下载。
 
 更新插件时退出 KOReader，用新版 `picayomi.koplugin` 替换旧插件目录，再启动 KOReader。设置、账号、收藏、历史和下载保存在 KOReader 数据目录中；替换插件时保留该数据目录，重要数据建议先备份。
 

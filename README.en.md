@@ -44,4 +44,4 @@ To update the plugin, exit KOReader, replace the plugin folder with the new rele
 
 Project code is licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY.md) for bundled components. Thanks to [PicaComic](https://github.com/Pacalini/PicaComic), [rakuyomi](https://github.com/hanatsumi/rakuyomi), and KOReader for design references.
 
-This project is for learning and technical exchange. It does not provide or host manga content; copyrights belong to their respective owners. Follow local laws and platform rules, support authorized releases, and use the project at your own responsibility.
+This project is for learning and technical exchange. It does not provide or host manga or novel content; copyrights belong to their respective owners. Follow local laws and platform rules, support authorized releases, and use the project at your own responsibility.

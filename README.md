@@ -4,7 +4,7 @@
 
 面向 Kindle 等设备的 [KOReader](https://github.com/koreader/koreader) 漫画与小说阅读插件。支持多源浏览、搜索、流式阅读、章节下载、收藏和阅读历史，针对墨水屏提供刷新、版式与内存管理设置。
 
-**漫画源仓库：[PicaYomi Sources](https://github.com/UFOAlastor/PicaYomi_Sources)** · [默认订阅地址](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_Sources/main/packages/index.json)
+**漫画与小说源仓库：[PicaYomi Sources](https://github.com/UFOAlastor/PicaYomi_Sources)** · [默认订阅地址](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_Sources/main/packages/index.json)
 
 ## 页面预览
 
@@ -36,11 +36,11 @@ koreader/
 
 ## 漫画与小说源管理
 
-可用源、源版本和安装说明见独立的[漫画源仓库](https://github.com/UFOAlastor/PicaYomi_Sources)。
+可用源、源版本和安装说明见独立的[漫画与小说源仓库](https://github.com/UFOAlastor/PicaYomi_Sources)。
 
-在 **设置 → 源管理** 中管理漫画源与订阅。插件预置默认订阅，无需手动输入地址。仓库已更名为 PicaYomi Sources；从旧版升级后，移除源管理中的旧订阅，保留新订阅；没有订阅时点击“恢复默认订阅”，再执行“更新源（全部订阅）”。
+在 **设置 → 源管理** 中管理漫画与小说源及订阅。插件预置默认订阅，无需手动输入地址。仓库已更名为 PicaYomi Sources；从旧版升级后，移除源管理中的旧订阅，保留新订阅；没有订阅时点击“恢复默认订阅”，再执行“更新源（全部订阅）”。
 
-自动检查更新默认关闭。开启后，在已联网且首页空闲时检查已安装的漫画源；**发现更新先询问，点击“下载更新”才下载**，完成后提供 **“立即重启 KOReader”／“稍后”**。没有更新不提示，选择稍后在本次运行中不重复询问；检查或下载失败会说明原因。
+自动检查更新默认关闭。开启后，在已联网且首页空闲时检查已安装的源；**发现更新先询问，点击“下载更新”才下载**，完成后提供 **“立即重启 KOReader”／“稍后”**。没有更新不提示，选择稍后在本次运行中不重复询问；检查或下载失败会说明原因。
 
 > 目录成功检查后间隔 6 小时；到期后再次进入联网、空闲首页可重新检查，无需重启 KOReader，同版本提示在本次运行中去重。失败采用退避间隔，手动更新不受冷却限制。取消或异常提前中断可在之后再次尝试。不会自动开启 Wi-Fi、添加新源或恢复已卸载的源；切换页面时暂缓提示，返回首页后继续确认流程。
 >
@@ -56,8 +56,8 @@ koreader/
 
 ## 第一次使用
 
-1. 从 KOReader 的“工具”菜单进入 PicaYomi，在首页切换到要使用的漫画源。
-2. 按源站要求登录；支持匿名浏览的源可直接使用。未登录也可切换漫画源、打开设置和使用已下载内容；需要登录的在线操作会在点击时提示。推荐、最新、分类、排行等入口取决于当前源的能力。
+1. 从 KOReader 的“工具”菜单进入 PicaYomi，在首页切换到要使用的漫画或小说源。
+2. 按源站要求登录；支持匿名浏览的源可直接使用。未登录也可切换源、打开设置和使用已下载内容；需要登录的在线操作会在点击时提示。推荐、最新、分类、排行等入口取决于当前源的能力。
 3. 搜索或浏览作品，点击条目进入详情。**开始**从第一章第一页阅读，**继续**恢复已有进度，也可以直接选择章节。
 4. 阅读前建议看一遍 **设置 → 阅读设置** 和 **设置 → 操作与手势**，特别是翻页刷新、条漫滚动和边缘返回。
 
@@ -139,7 +139,7 @@ koreader/
 
 - [诊断日志](docs/DEBUG.md)
 - [低内存图片阅读设计](docs/IMAGE_MEMORY.md)
-- [漫画源 SDK、模板与制作指南](https://github.com/UFOAlastor/PicaYomi_Sources)
+- [内容源 SDK、模板与制作指南](https://github.com/UFOAlastor/PicaYomi_Sources)
 - [参与贡献](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/CONTRIBUTING.md) · [安全问题反馈](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/SECURITY.md)
 - [MIT 许可证](LICENSE)与[第三方说明](THIRD_PARTY.md)
 
@@ -151,4 +151,4 @@ koreader/
 
 ## 使用说明与免责声明
 
-本项目仅供学习与技术交流，不提供或托管漫画内容，作品版权归相关权利人所有。请遵守当地法律及平台规则，支持正版，并自行承担使用责任。
+本项目仅供学习与技术交流，不提供或托管漫画、小说内容，作品版权归相关权利人所有。请遵守当地法律及平台规则，支持正版，并自行承担使用责任。

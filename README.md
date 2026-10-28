@@ -8,11 +8,9 @@
 
 ## 页面预览
 
-以下为页面预览。
-
-| 主页 | 设置 | 漫画列表 | 分类 | 漫画详情 |
-|---|---|---|---|---|
-| ![主页](docs/screenshots/home.png) | ![设置](docs/screenshots/settings.png) | ![漫画列表](docs/screenshots/comic-list.png) | ![分类](docs/screenshots/categories.png) | ![琉璃龍龍详情页](docs/screenshots/detail.png) |
+| 漫画列表 | 漫画详情 | 小说详情 | 小说阅读 |
+|---|---|---|---|
+| ![漫画列表](docs/screenshots/comic-list.png) | ![漫画详情](docs/screenshots/detail.png) | ![小说详情](docs/screenshots/novel-detail.png) | ![小说阅读](docs/screenshots/novel-reader.png) |
 
 ## 安装
 

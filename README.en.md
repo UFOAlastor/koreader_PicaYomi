@@ -10,9 +10,9 @@ A manga and novel reader plugin for [KOReader](https://github.com/koreader/korea
 
 ## Preview
 
-| Home | Settings | Manga list | Categories | Details |
-|---|---|---|---|---|
-| ![Home](docs/screenshots/home.png) | ![Settings](docs/screenshots/settings.png) | ![Manga list](docs/screenshots/comic-list.png) | ![Categories](docs/screenshots/categories.png) | ![Details](docs/screenshots/detail.png) |
+| Manga list | Manga details | Novel details | Novel reading |
+|---|---|---|---|
+| ![Manga list](docs/screenshots/comic-list.png) | ![Manga details](docs/screenshots/detail.png) | ![Novel details](docs/screenshots/novel-detail.png) | ![Novel reading](docs/screenshots/novel-reader.png) |
 
 ## Installation
 

@@ -7,6 +7,13 @@ local sha=require("ffi/sha2").sha256
 local Manager={}; Manager.__index=Manager
 Manager.CHECK_INTERVAL=6*3600
 local function copy(v) return json.decode(json.encode(v)) end
+local function equal(a,b)
+    if type(a)~=type(b) then return false end
+    if type(a)~="table" then return a==b end
+    for k,v in pairs(a)do if not equal(v,b[k])then return false end end
+    for k in pairs(b)do if a[k]==nil then return false end end
+    return true
+end
 local function version()
     local path=assert(debug.getinfo(1,"S").source:match("^@(.*)/[^/]+$"))
     return assert(dofile(path.."/../../_meta.lua").version)
@@ -62,6 +69,7 @@ function Manager.new(opts)
         return s
     end)
     self.state=ok and state or blank()
+    self._state_raw=raw
     if not ok then self.state_error=tostring(state) end
     self.bundles=opts.bundles or {}
     if not opts.root and not opts.bundles then
@@ -86,7 +94,18 @@ end
 function Manager:_save(state)
     assert(not self.state_error,self.state_error)
     assert(#json.encode(state)<=2*1024*1024,"扩展目录总大小超限，请移除不用的订阅")
-    Storage.json(self.root.."/state.json",state); self.state=state; return true
+    local path=self.root.."/state.json"
+    local current=Storage.read(path)
+    local unchanged=current==self._state_raw
+    if not unchanged and current and self._state_raw then
+        local ok,same=pcall(function()return equal(json.decode(current),json.decode(self._state_raw))end)
+        unchanged=ok and same
+    end
+    assert(unchanged,"源状态已由其他操作更新，请重启 KOReader 后再试；已保留新状态")
+    Storage.json(path,state)
+    self._state_raw=Storage.read(path)
+    self.state=state
+    return true
 end
 function Manager:seed()
     local state=copy(self.state); local changed=false

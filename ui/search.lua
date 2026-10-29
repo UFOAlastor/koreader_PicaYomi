@@ -67,144 +67,84 @@ function Search:show(return_callback)
     self:showSearchDialog()
 end
 
-function Search:showSearchDialog()
-    self.source = require("source.registry"):getCurrent()
-    if not require("ui.common.source_access").check(require("source.registry"):getCurrent(),"search") then return end
-    -- 幂等: 上一个输入框还在栈里就先收掉。
-    --
-    -- 不这么做的话, 任何"重复进入搜索"的路径都会在栈里叠出第二个输入框:
-    -- 关掉看得见的那个, 下面那个还在 —— 用户看到的就是"搜索框怎么都关不掉"
-    -- 或者"从别的页面回到主页, 搜索框还留在屏幕上" (真机 2026-10-18)。
-    -- 主页的 Home:show 只在菜单已在栈里时 setDirty, 不会清理压在它上面的东西,
-    -- 所以这里必须自己保证"最多一个"。
-    if self.search_dialog then
-        local old = self.search_dialog
-        self.search_dialog = nil
-        pcall(function() old:onCloseKeyboard() end)
-        if WidgetSweep.isInStack(old) then
-            UIManager:close(old, "ui")
-        end
+-- The dialog is owned by one explicit entry. Action callbacks cannot close a
+-- newer input, and closing it never implicitly reopens another input.
+function Search:closeSearchDialog(expected)
+    if expected and self.search_dialog~=expected then return false end
+    local dialog=self.search_dialog
+    self.search_dialog=nil
+    if dialog then
+        dialog._search_action_close=true
+        dialog.close_callback=nil
+        pcall(function()dialog:onCloseKeyboard()end)
+        if WidgetSweep.isInStack(dialog)then UIManager:close(dialog,"ui")end
     end
-
-    self.search_dialog = InputDialog:new{
-        -- 标记为"插件顶层页面": 退出 Picayomi 时由 util/widget_sweep 统一清扫。
-        -- 输入框是插件自己 show 出来的模态层, 不标记的话任何一条忘记关它的路径
-        -- 都会把它留到 KOReader 的界面上 (这正是用户报的"搜索框遗留")。
-        is_picayomi_page = true,
-        title = self.source and self.source.content_type=="novel" and _("搜索小说") or _("搜索漫画"),
-        input = "", -- A fresh input must not reuse the active result query.
-        -- 按返回键关掉输入框时: 清引用 + 回到调用方 (主页)。
-        -- 不接的话 self.search_dialog 会一直指着一个已经关掉的控件,
-        -- 下次 showSearchDialog 的判断就靠它, 很容易叠出第二个框。
-        close_callback = function()
-            self.search_dialog = nil
-            if self.return_callback then self.return_callback() end
-        end,
-        buttons = {
-            {
-                {
-                    text = _("搜索"),
-                    -- 注意: KOReader 的 ButtonTable 调用 callback 时**不传参数**
-                    -- (buttontable.lua: btn_entry.callback()), 所以以前写的
-                    -- `function(input)` 里 input 恒为 nil ——
-                    -- 表现就是"明明输入了关键词, 点搜索却提示请输入关键词"。
-                    -- 必须自己去读输入框。
-                    callback = function()
-                        local raw = self.search_dialog
-                            and self.search_dialog:getInputText() or nil
-                        local input = raw and raw:gsub("^%s+", ""):gsub("%s+$", "") or ""
-                        if input ~= "" then
-                            self.current_keyword = input
-                            self.current_page = 1
-                            -- **必须先把输入框关掉再去搜**。原来这里是直接 performSearch,
-                            -- 于是搜索框留在栈里、结果列表压在上面; 之后从结果列表
-                            -- 「返回」又会 showSearchDialog 建**第二个**输入框 ——
-                            -- 两个一模一样的搜索框叠在一起, 关掉看得见的那个会露出
-                            -- 下面那个, 用户以为"搜索框关不掉", 最后一直留到 KOReader
-                            -- 的界面上 (用户报的就是这个)。
-                            -- 与「历史」「取消」同一个做法: 先收键盘再关框。
-                            if self.search_dialog then
-                                pcall(function() self.search_dialog:onCloseKeyboard() end)
-                                UIManager:close(self.search_dialog, "ui")
-                                self.search_dialog = nil
-                            end
-                            self:performSearch()
-                        else
-                            UIManager:show(InfoMessage:new{
-                                text = _("请输入搜索关键词"),
-                            }, "ui")
-                        end
-                    end,
-                },
-                {
-                    text = _("历史"),
-                    -- 没有历史时置灰: 点开一个空列表等于"点了没反应" (见 F-UI-005)
-                    enabled = SearchHistory.count() > 0,
-                    callback = function()
-                        -- 先收键盘再关输入框: 与「取消」同一个道理 —— 输入框关掉了但
-                        -- 键盘还留在屏上时, 用户看到的是"键盘底下什么也没发生"
-                        if self.search_dialog then
-                            pcall(function() self.search_dialog:onCloseKeyboard() end)
-                            UIManager:close(self.search_dialog, "ui")
-                            self.search_dialog = nil
-                        end
-                        self:showHistoryMenu()
-                    end,
-                },
-                {
-                    text = _("取消"),
-                    callback = function()
-                        if logger.enabled then logger.info("Picayomi Search: 点击取消按钮，关闭搜索界面") end
-                        -- 关闭所有可能存在的搜索相关对话框
-                        if self.search_dialog then
-                            -- 先收键盘: 输入框关掉了但键盘还留着的话, 屏幕看起来毫无变化,
-                            -- 用户会以为"点了取消没反应"
-                            pcall(function() self.search_dialog:onCloseKeyboard() end)
-                            UIManager:close(self.search_dialog, "ui")
-                            self.search_dialog = nil
-                        end
-                        if self.result_menu then
-                            UIManager:close(self.result_menu, "ui")
-                            self.result_menu = nil
-                        end
-                        if self.history_menu then
-                            UIManager:close(self.history_menu, "ui")
-                            self.history_menu = nil
-                        end
-                        -- 执行返回回调
-                        if self.return_callback then
-                            self.return_callback()
-                        end
-                    end,
-                },
-            },
-        },
-    }
-
-    UIManager:show(self.search_dialog, "ui")
+    return true
 end
 
---- 离开搜索, 回到调用方 (主页)
---
--- 只有**还没提交**的流程 (历史菜单 / 取消) 才回输入框; 一旦按了「搜索」,
--- 输入框就已经被释放, 结果列表返回时只负责回主页。
+function Search:showSearchDialog()
+    self.source=require("source.registry"):getCurrent()
+    if not require("ui.common.source_access").check(self.source,"search")then return end
+    self:closeSearchDialog()
+    self._left=false
+    self._dialog_generation=(self._dialog_generation or 0)+1
+    local generation=self._dialog_generation
+    local dialog
+    dialog=InputDialog:new{
+        is_picayomi_page=true,
+        title=self.source and self.source.content_type=="novel" and _("搜索小说")or _("搜索漫画"),
+        input="",
+        buttons={{
+            {text=_("搜索"),callback=function()
+                if self.search_dialog~=dialog then return end
+                local input=dialog:getInputText():gsub("^%s+",""):gsub("%s+$","")
+                self:closeSearchDialog(dialog)
+                if input==""then
+                    UIManager:show(InfoMessage:new{text=_("请输入搜索关键词")},"ui")
+                    return
+                end
+                self.current_keyword=input;self.current_page=1
+                self:performSearch()
+            end},
+            {text=_("历史"),enabled=SearchHistory.count()>0,callback=function()
+                if not self:closeSearchDialog(dialog)then return end
+                self:showHistoryMenu()
+            end},
+            {text=_("取消"),callback=function()
+                if not self:closeSearchDialog(dialog)then return end
+                self:leave()
+            end},
+        }},
+    }
+    local close=dialog.onCloseWidget
+    dialog.onCloseWidget=function(widget,...)
+        local owned=self.search_dialog==widget
+        if owned then self.search_dialog=nil end
+        close(widget,...)
+        if owned and not widget.sweeping and not widget._search_action_close then
+            -- The host is still removing this window. Return after that removal
+            -- so Home cannot try to close the same dialog a second time.
+            UIManager:nextTick(function()
+                if self._dialog_generation==generation and not self.search_dialog and not self._left then self:leave()end
+            end)
+        end
+    end
+    self.search_dialog=dialog
+    UIManager:show(dialog,"ui")
+end
+
+--- Every submitted/closed search returns to its caller, without a new input.
 function Search:leave()
-    if self.search_task then self.search_task:cancel(); self.search_task = nil end
-    if self.history_delete_dialog then
-        if WidgetSweep.isInStack(self.history_delete_dialog) then
-            UIManager:close(self.history_delete_dialog, "ui")
-        end
-        self.history_delete_dialog = nil
+    if self._left then return end
+    self._left=true
+    self._query_generation=(self._query_generation or 0)+1
+    if self.search_task then self.search_task:cancel();self.search_task=nil end
+    self:closeSearchDialog()
+    for _,name in ipairs({"history_delete_dialog","history_menu","result_menu"})do
+        local widget=self[name];self[name]=nil
+        if widget and WidgetSweep.isInStack(widget)then UIManager:close(widget,"ui")end
     end
-    if self.search_dialog then
-        local dlg = self.search_dialog
-        self.search_dialog = nil
-        pcall(function() dlg:onCloseKeyboard() end)
-        if WidgetSweep.isInStack(dlg) then
-            UIManager:close(dlg, "ui")
-        end
-    end
-    if self.return_callback then self.return_callback() end
+    if self.return_callback then self.return_callback()end
 end
 
 --- 用历史里的一个关键词直接重搜
@@ -216,7 +156,7 @@ end
 
 --- 搜索历史列表 (全屏 Menu)
 --
--- 流程: 先关掉输入框 -> 显示整屏菜单 -> 关菜单时把用户送回输入框。
+-- 流程: 释放输入框 -> 显示整屏菜单 -> 关闭时返回调用方。
 -- 选中条目时不能再触发"关菜单"的收尾 (否则栈里会多压一个一模一样的搜索框,
 -- 用户按「返回」要按好几次才退得出去) —— 由 MenuStyle.disableSelectAutoClose 统一拦住。
 function Search:showHistoryMenu(page)
@@ -232,7 +172,7 @@ function Search:showHistoryMenu(page)
             text = _("还没有搜索历史"),
             timeout = 3,
         }, "ui")
-        self:showSearchDialog()
+        self:leave()
         return
     end
 
@@ -242,13 +182,15 @@ function Search:showHistoryMenu(page)
     -- 新条目不会出现在屏幕上, 页脚停在 "无项目" (用户报的正是这个)。
     -- 其余菜单 (分类 / 排行榜 / 漫画源 / 章节列表) 都是"先建表再 new"。
     local item_table = {}
+    local menu
     for _i, keyword in ipairs(items) do
         table.insert(item_table, {
             text = keyword,
             search_keyword = keyword,
             picayomi_underline = true,
             callback = function()
-                UIManager:close(self.history_menu, "ui")
+                if self.history_menu~=menu or not WidgetSweep.isInStack(menu)then return end
+                UIManager:close(menu, "ui")
                 self.history_menu = nil
                 self:searchFromHistory(keyword)
             end,
@@ -257,7 +199,7 @@ function Search:showHistoryMenu(page)
     local clear_history = {
         text = _("清空历史"),
         callback = function()
-            local menu = self.history_menu
+            if self.history_menu ~= menu or not WidgetSweep.isInStack(menu) then return end
             UIManager:show(ConfirmBox:new{
                 is_picayomi_page = true,
                 text = _("确定清空全部搜索记录吗？清空后无法恢复。"),
@@ -271,7 +213,7 @@ function Search:showHistoryMenu(page)
                         text = _("已清空搜索历史"),
                         timeout = 3,
                     }, "ui")
-                    self:showSearchDialog()
+                    self:leave()
                 end,
             }, "ui")
         end,
@@ -280,14 +222,15 @@ function Search:showHistoryMenu(page)
     table.insert(item_table, {
         text = _("返回"),
         callback = function()
+            if self.history_menu~=menu or not WidgetSweep.isInStack(menu)then return end
             UIManager:close(self.history_menu, "ui")
             self.history_menu = nil
-            self:showSearchDialog()
+            self:leave()
         end,
     })
 
     local title_bar = MenuStyle.titleBar{ title = _("搜索历史") }
-    self.history_menu = Menu:new{
+    menu = Menu:new{
         footer_actions = {clear_history},
         is_picayomi_page = true, -- 退出 Picayomi 时由 util/widget_sweep 清扫
         title = title_bar.title,
@@ -300,24 +243,27 @@ function Search:showHistoryMenu(page)
         is_popout = false,
         covers_fullscreen = true,
         onMenuHold = function(_, item)
+            if self.history_menu~=menu then return true end
             if item and item.search_keyword then
                 self:confirmRemoveHistoryKeyword(item.search_keyword)
             end
             return true
         end,
         close_callback = function()
-            -- 只剩返回键/✕ 会走到这里: 把用户送回搜索框
-            self:showSearchDialog()
+            -- 返回键与可见返回入口都离开搜索，不重建输入框。
+            if self.history_menu==menu then self:leave()end
         end,
     }
-    MenuStyle.disableSelectAutoClose(self.history_menu)
+    self.history_menu=menu
+    MenuStyle.disableSelectAutoClose(menu)
     TapGuard.install(self.history_menu)
     -- 左右滑动: 与其它全屏菜单一致 (左滑下一页 / 右滑上一页 / 第一页右滑 = 返回)
-    -- 返回动作与条目里的「返回」完全相同: 收掉菜单 -> 回到搜索框
+    -- 返回动作与条目里的「返回」相同: 收掉菜单 -> 返回调用方。
     MenuSwipe.attach(self.history_menu, function()
-        UIManager:close(self.history_menu, "ui")
+        if self.history_menu ~= menu or not WidgetSweep.isInStack(menu) then return end
+        UIManager:close(menu, "ui")
         self.history_menu = nil
-        self:showSearchDialog()
+        self:leave()
     end)
 
     if page and page > 1 then
@@ -359,54 +305,54 @@ function Search:confirmRemoveHistoryKeyword(keyword)
 end
 
 function Search:performSearch()
-    if not require("ui.common.source_access").check(require("source.registry"):getCurrent(),"search") then return end
-    if self.search_task then self.search_task:cancel() end
-    -- 显示加载消息
-    local loading = InfoMessage:new{
-        text = T(_("搜索【%1】…（点击取消）"), self.current_keyword),
-    }
-    UIManager:show(loading, "ui")
-    -- 在准备请求和创建子进程之前先显示加载提示。
-    UIManager:forceRePaint()
-
-    local keyword, page, sort = self.current_keyword, self.current_page, self.current_sort
-    self.search_task = LoadingTask.background(loading, function()
-        -- 执行搜索
-        -- 抛异常时也关掉提示, 否则"搜索【…】..."永久盖屏 (见 loading_task 注释)
-        local success, search_data, error_msg = LoadingTask.call(loading, function()
-            return self.comic_api:searchComics(keyword, page, sort)
+    self:closeSearchDialog()
+    local keyword=type(self.current_keyword)=="string" and self.current_keyword:gsub("^%s+",""):gsub("%s+$","")or ""
+    if keyword==""then
+        UIManager:show(InfoMessage:new{text=_("请输入搜索关键词")},"ui")
+        return
+    end
+    self.current_keyword=keyword
+    -- Save the user's attempt before access checks or asynchronous HTTP. A
+    -- failed, cancelled or empty response must never decide history retention.
+    local saved,save_error=SearchHistory.add(keyword)
+    if not saved then
+        UIManager:show(InfoMessage:new{text=T(_("搜索历史保存失败：%1"),save_error),timeout=3},"ui")
+    end
+    local source=require("source.registry"):getCurrent()
+    if not require("ui.common.source_access").check(source,"search")then return end
+    self._left=false
+    self._query_generation=(self._query_generation or 0)+1
+    local generation=self._query_generation
+    if self.search_task then self.search_task:cancel()end
+    local function current()
+        return not self._left and self._query_generation==generation
+            and require("source.registry"):getCurrent()==source
+    end
+    local loading=InfoMessage:new{text=T(_("搜索【%1】…（点击取消）"),keyword)}
+    UIManager:show(loading,"ui");UIManager:forceRePaint()
+    local page,sort=self.current_page,self.current_sort
+    self.search_task=LoadingTask.background(loading,function()
+        if not current()then LoadingTask.close(loading);return end
+        local success,data,err=LoadingTask.call(loading,function()
+            return self.comic_api:searchComics(keyword,page,sort)
         end)
-
-        if success and search_data then
-            -- 保存搜索结果
-            self.search_results = search_data.comics
-            self.current_page = search_data.page
-            self.total_pages = search_data.pages; self.server_page_size=search_data.page_size
-            self.result_has_more=search_data.has_more
-            self.total_count = search_data.total
-
-            -- 记进搜索历史 (只记**真的搜到东西**的那次: 打错字的词不该占着历史列表)
-            --
-            -- **点调用, 不是冒号**: util/search_history 的函数签名是 `function M.add(keyword)`,
-            -- 没有 self。写成 `SearchHistory:add(kw)` 会把模块表自己当成 keyword 传进去,
-            -- normalize 判空后直接 return false —— 结果是"搜过但一条历史都不记", 而且
-            -- 不报任何错。测试里用的是点调用, 所以测试全绿而真机不记录。
-            -- (同一个约定见 util/local_favorites.lua: 调用方一律用点。)
-            SearchHistory.add(keyword)
-
-            -- 显示搜索结果
+        if not current()then return end
+        if success and data then
+            self.search_results=data.comics;self.current_page=data.page
+            self.total_pages=data.pages;self.server_page_size=data.page_size
+            self.result_has_more=data.has_more;self.total_count=data.total
             self:showSearchResults()
         else
-            -- 显示错误消息
-            UIManager:show(InfoMessage:new{
-                text = T(_("搜索失败: %1"), require("ui.common.error_message").describe(error_msg)),
-            }, "ui")
+            UIManager:show(InfoMessage:new{text=T(_("搜索失败: %1"),require("ui.common.error_message").describe(err))},"ui")
         end
-    end, {
-        on_error = function(err)
-            UIManager:show(InfoMessage:new{
-                text = T(_("搜索失败: %1"), require("ui.common.error_message").describe(err)), timeout = 3,
-            }, "ui")
+    end,{
+        is_cancelled=function()return not current()end,
+        on_cancel=function()
+            if self._query_generation==generation then self._query_generation=generation+1 end
+        end,
+        on_error=function(err)
+            if current()then UIManager:show(InfoMessage:new{
+                text=T(_("搜索失败: %1"),require("ui.common.error_message").describe(err)),timeout=3},"ui")end
         end,
     })
 end
@@ -483,6 +429,7 @@ end
 function Search:showComicDetail(comic, navigation)
     if logger.enabled then logger.info("Picayomi", "显示漫画详情: " .. comic.title) end
     self.navigating_to_detail = true
+    local generation = self._query_generation
 
     -- **不销毁结果列表** —— 详情页盖在它上面, 返回时原样露出来, 页码与已加载的
     -- 缓冲都在。以前这里 close + 置 nil, 返回时只能重新 showSearchResults():
@@ -506,6 +453,7 @@ function Search:showComicDetail(comic, navigation)
             comic = comic,
         },
         on_back = function()
+            if self._left or self._query_generation ~= generation then return end
             self.navigating_to_detail = false
             self.detail_menu = nil
             -- 列表还在窗口栈里就什么都不用做 (关掉详情页它自己就露出来了);
@@ -515,13 +463,14 @@ function Search:showComicDetail(comic, navigation)
             end
         end,
         on_return_from_reader = function()
+            if self._left or self._query_generation ~= generation then return end
             -- 读完一话回来: 详情页**没有被关掉** (api/comic.lua 现在故意留着它,
             -- 它就是返回目标), 结果列表还在它下面 —— 什么都不用做, 栈顶就是详情页。
             -- 保留 self.detail_menu 引用 (页面还活着, 置 nil 是自欺)。
             self.navigating_to_detail = false
             if not WidgetSweep.isInStack(self.result_menu)
                and not WidgetSweep.isInStack(self.detail_menu) then
-                self:show(self.return_callback)
+                self:leave()
             end
         end,
     }

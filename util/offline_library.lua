@@ -300,6 +300,24 @@ function M.updateChapter(source_id, comic_id, order, patch, opts)
     return ch,saved
 end
 
+-- Stop a whole queue with one atomic save; retain completed files and counters.
+function M.stopChapters(jobs,reason)
+    local touched={}
+    for _,job in ipairs(jobs)do
+        local entry=entry_of(job.source_id,job.comic_id,false)
+        local ch=entry and entry.chapters and entry.chapters[chapter_key(job.order)]
+        if ch and ch.state~="done"then
+            ch.state="partial";ch.error=reason or "已停止下载";ch.updated_at=os.time()
+            touched[entry]=true
+        end
+    end
+    local changed=false
+    for entry in pairs(touched)do
+        entry.state=M.deriveState(entry);entry.updated_at=os.time();changed=true
+    end
+    return not changed or M.save(true)
+end
+
 -- Persist only replayable processing data, never request headers or signed URLs.
 -- This is committed before downloading the first page, so interrupted jobs and
 -- completed jobs share the same replay semantics.
@@ -446,13 +464,15 @@ end
 
 local function chapter_stats(entry)
     local targets = entry.targets or {}
-    local total, done = 0, 0
+    local total,done,failed,pending,retryable=0,0,0,0,0
     for _k, t in pairs(targets) do
         total = total + 1
         local ch = (entry.chapters or {})[chapter_key(t.order)]
-        if ch and ch.state == "done" then done = done + 1 end
+        if ch and ch.state=="done"then done=done+1
+        elseif ch and(ch.state=="queued"or ch.state=="preparing"or ch.state=="downloading")then pending=pending+1
+        else retryable=retryable+1;if ch and ch.state=="failed"then failed=failed+1 end end
     end
-    return done, total
+    return done,total,failed,pending,retryable
 end
 
 --- 磁盘上这一章的图片 (按页码排序); 没有则返回空表
@@ -521,12 +541,12 @@ end
 
 --- 已完整下载的章节 (详情页离线模式 / 已下载列表用)
 -- @return { {order=, title=, pages=}, ... } 按 order 升序
-function M.completedChapters(source_id, comic_id)
+function M.completedChapters(source_id, comic_id, options)
     local entry = entry_of(source_id, comic_id, false)
     if not entry then return {} end
     local out = {}
     for _k, ch in pairs(entry.chapters or {}) do
-        if ch.state == "done" and M.isChapterComplete(source_id, comic_id, ch.order) then
+        if ch.state == "done" and (options and options.verify==false or M.isChapterComplete(source_id, comic_id, ch.order)) then
             out[#out + 1] = { id=ch.id, order = ch.order, title = ch.title, pages = ch.total, sort_index = ch.sort_index }
         end
     end
@@ -583,6 +603,43 @@ function M.downloadedChapterCount(source_id, comic_id)
     return _done
 end
 
+-- Home only needs a bounded selection of metadata. Do not traverse every
+-- chapter/target or build progress summaries just to show a few thumbnails.
+function M.preview(content_type, limit)
+    limit=math.max(0,math.floor(tonumber(limit)or 0))
+    if limit==0 then return {}end
+    local selected={}
+    local function newer(a,b)
+        local at,bt=tonumber(a.entry.updated_at)or 0,tonumber(b.entry.updated_at)or 0
+        if at~=bt then return at>bt end
+        if a.sid~=b.sid then return a.sid<b.sid end
+        return a.cid<b.cid
+    end
+    for sid,bucket in pairs(M.load().comics or {})do
+        for cid,entry in pairs(bucket)do
+            local kind=entry.comic and entry.comic.content_type=="novel"and "novel"or "comic"
+            if kind==content_type then
+                local candidate={sid=tostring(sid),cid=tostring(cid),entry=entry}
+                if #selected<limit or newer(candidate,selected[#selected])then
+                    local index=#selected+1
+                    while index>1 and newer(candidate,selected[index-1])do index=index-1 end
+                    table.insert(selected,index,candidate)
+                    if #selected>limit then table.remove(selected)end
+                end
+            end
+        end
+    end
+    local result={}
+    for _,item in ipairs(selected)do
+        local comic={}
+        for k,v in pairs(item.entry.comic or {})do comic[k]=v end
+        comic._id=item.cid;comic.source_id=item.sid
+        comic.download_updated_at=item.entry.updated_at
+        result[#result+1]=comic
+    end
+    return result
+end
+
 --- 全部已下载漫画 (跨源), 最新下载的排在最前
 -- @return { comic, ... } 每个 comic 带 download_* 字段
 function M.list(source_id)
@@ -591,7 +648,7 @@ function M.list(source_id)
     for sid, bucket in pairs(data.comics or {}) do
         if not source_id or tostring(sid) == tostring(source_id) then
             for cid, entry in pairs(bucket) do
-                local done, total = chapter_stats(entry)
+                local done,total,failed,pending,retryable = chapter_stats(entry)
                 local state = M.deriveState(entry)
                 local comic = {}
                 for k, v in pairs(entry.comic or {}) do comic[k] = v end
@@ -599,11 +656,21 @@ function M.list(source_id)
                 comic.source_id = tostring(sid)
                 comic.download_state = state
                 for _,chapter in pairs(entry.chapters or {}) do
-                    if chapter.state=="preparing" then comic.download_preparing=true;break end
+                    if chapter.state=="preparing" then
+                        comic.download_preparing=true
+                        comic.download_prepare_stage=chapter.prepare_stage
+                        comic.download_prepare_current=chapter.prepare_current
+                        comic.download_prepare_total=chapter.prepare_total
+                        break
+                    end
+                    if chapter.state=="queued"and(tonumber(chapter.wait_until)or 0)>require("socket").gettime()then
+                        comic.download_wait_message=chapter.wait_message
+                    end
                 end
                 comic.download_progress = M.progress(entry)
                 comic.download_done = done
                 comic.download_total = total
+                comic.download_failed=failed;comic.download_pending=pending;comic.download_retryable=retryable
                 comic.download_chapters = entry.chapters
                 comic.download_updated_at = entry.updated_at
                 out[#out + 1] = comic

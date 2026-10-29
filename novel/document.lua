@@ -107,6 +107,10 @@ function M.prepare(session,options)
             if session.imageRequest then request=session:imageRequest(url,options.call) end
             local response,download_error=options.http(request,math.min(timeout,request.timeout or timeout),options.call,stage.."/"..asset.path..".download")
             guard(options.call)
+            if require("source.contract").isError(download_error)then
+                download_error.message=string.format("第 %d/%d 张插图加载失败，请重试。",image_number,image_count)
+                error(download_error,0)
+            end
             assert(response and response.status==200 and type(response.body)=="string" and #response.body<=4*1024*1024,"illustration download failed: "..tostring(download_error or "invalid response"))
             local w,h,format=require("util.image_size").from_data(response.body)
             assert(w and (format=="png" or format=="jpeg" or format=="webp"),"unsupported illustration")

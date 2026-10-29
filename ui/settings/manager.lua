@@ -199,6 +199,9 @@ function SettingsManager:close()
     end
     self.menu_stack = {}
     UIManager:close(self, "ui")
+    -- Storage/account settings can change the data shown by the already-open
+    -- dashboard. Revealing that window alone would retain its old previews.
+    require("ui.home").refreshShownAccountState()
     require("source.extensions.updater").schedule()
 end
 

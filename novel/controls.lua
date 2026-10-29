@@ -10,7 +10,15 @@ function Controls:actions() return self.options.navigation(self.ui) end
 function Controls:returnToDetails()
     if not self:current() or self.returning then return end
     self.returning=true
-    UI:nextTick(function()if self:current() then self:actions()[1].callback() end end)
+    self.ui._picayomi_return_notice=require("ui.common.loading_task").showReturning()
+    self.return_task=function()
+        self.return_task=nil
+        if self:current()then
+            local ok,err=pcall(self:actions()[1].callback)
+            if not ok then self.returning=false;require("ui.common.loading_task").showFailure(err)end
+        end
+    end
+    UI:scheduleIn(.01,self.return_task)
 end
 function Controls:addToMainMenu(items)
     if not self:current() then return end
@@ -48,6 +56,7 @@ function Controls:onEndOfBook()
 end
 function Controls:onCloseDocument()
     self.closed=true
+    if self.return_task then UI:unschedule(self.return_task);self.return_task=nil end
     if self.end_dialog then UI:close(self.end_dialog,"ui");self.end_dialog=nil end
     self.ui._picayomi_novel_controls=nil
     if self.ui.handleEvent==self.event_handler then self.ui.handleEvent=self.original_event_handler end

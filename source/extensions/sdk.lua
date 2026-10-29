@@ -64,7 +64,9 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
                 local args={...}
                 local at=({get=3,post=4,request=5,requestWithRetry=5,requestOnce=5,httpsRequest=5,download=4})[name]
                 if at then
+                    if call and call.before_request then call.before_request()end
                     local limit=call and call.deadline and call.deadline-require("socket").gettime() or 60
+                    assert(limit>0,"操作超时")
                     local requested=args[at] or 20
                     assert(type(requested)=="number" and requested==requested and requested>0,"HTTP 超时无效")
                     args[at]=math.min(requested,60,limit)

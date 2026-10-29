@@ -152,6 +152,7 @@ function Runtime.new(source,manifest,digest,extension_context)
         local was_logged=account_change and logged()
         local ok,data,err=call(native,args,context)
         if account_change and (ok or was_logged~=logged()) then invalidate_sessions() end
+        if not account_change and not ok and type(err)=="table"and err.code=="auth_expired"then invalidate_sessions()end
         if not ok then return false,nil,err end
         return Contract.protect(method,function()
             if method=="getChapterContent" then

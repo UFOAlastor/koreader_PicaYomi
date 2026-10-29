@@ -12,6 +12,15 @@ function Async.active()
     return not in_worker and co and tasks[co] ~= nil
 end
 
+-- Yield a continuation without sleeping the UI thread or starting a worker.
+function Async.wait(seconds)
+    assert(Async.active(),"等待需要后台任务")
+    assert(type(seconds)=="number" and seconds>=0 and seconds<=300,"无效的等待时间")
+    if seconds==0 then return end
+    local ok,err=coroutine.yield({wait=seconds})
+    if not ok then error(err,0)end
+end
+
 function Async.await(fn, request)
     if not Async.active() then return fn() end
     local ok, value, err = coroutine.yield(request and { fetch = fn, request = request } or fn)
@@ -46,6 +55,7 @@ function Async.run(fn, opts)
     end
     local function release(keep_session)
         if task.poll then UIManager:unschedule(task.poll) end
+        if task.wait_timer then UIManager:unschedule(task.wait_timer);task.wait_timer=nil end
         if task.session and not keep_session then
             pcall(function()
                 if task.nonblocking and task.session.terminate then task.session:terminate()
@@ -151,11 +161,22 @@ function Async.run(fn, opts)
     co = coroutine.create(fn)
     tasks[co] = task
     resume = function(...)
+        if task.done then return end
         if deadline and socket.gettime()>=deadline then fail("加载超时，请重试"); return end
         local ok, yielded = coroutine.resume(co, ...)
         if task.done then return end
         if not ok then fail(yielded); return end
         if coroutine.status(co) == "dead" then finish(); return end
+        if type(yielded)=="table" and type(yielded.wait)=="number" then
+            task.wait_timer=function()
+                task.wait_timer=nil
+                if task.done then return end
+                if opts.is_cancelled and opts.is_cancelled()then task:cancel();return end
+                resume(true)
+            end
+            UIManager:scheduleIn(math.max(0,math.min(yielded.wait,deadline and deadline-socket.gettime()or yielded.wait)),task.wait_timer)
+            return
+        end
         if type(yielded) ~= "function" and not (type(yielded) == "table"
             and type(yielded.fetch) == "function" and type(yielded.request) == "table") then
             fail("无效的后台任务"); return

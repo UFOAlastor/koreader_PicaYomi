@@ -49,19 +49,28 @@ local function default_transport(source)
 end
 
 --- 默认失败提示 (只在单例里启用; 单元测试用 Queue.new{} 不会弹窗)
+local error_notice
 local function default_error_notifier(job, msg)
     local ok, UIManager = pcall(require, "ui/uimanager")
     if not ok or not UIManager then return end
+    local top=UIManager._window_stack[#UIManager._window_stack]
+    if not top or not top.widget.is_picayomi_page then return false end
+    if error_notice then return false end
     local ok2, InfoMessage = pcall(require, "ui/widget/infomessage")
     if not ok2 or not InfoMessage then return end
     local name = (job and (job.title or (job.order and ("第" .. tostring(job.order) .. (job.source and job.source.content_type=="novel" and "章" or "话")))))
         or "章节"
-    pcall(function()
-        UIManager:show(InfoMessage:new{
-            text = string.format("「%s」下载失败：%s", tostring(name), require("ui.common.error_message").describe(msg)),
+    local shown=pcall(function()
+        error_notice=InfoMessage:new{
+            is_picayomi_page=true,
+            text = string.format("「%s」下载失败：%s\n\n失败章节可在下载页查看并重试。", tostring(name), require("ui.common.error_message").describe(msg)),
             timeout = 5,
-        }, "ui")
+            dismiss_callback=function()error_notice=nil end,
+        }
+        UIManager:show(error_notice, "ui")
     end)
+    if not shown then error_notice=nil end
+    return shown
 end
 
 local function default_get_images(source, comic_id, order, context)
@@ -104,7 +113,25 @@ function Queue.new(opts)
     -- 失败必须让用户看见: 选择页关闭后队列在后台跑, 没有提示的话
     -- "点了没反应"和"下载失败"在界面上完全一样。
     self.on_error = opts.on_error
+    self.clock=opts.clock or require("socket").gettime
+    self.wait=opts.wait or require("network.async_task").wait
+    self.novel_request_interval=opts.novel_request_interval or 1
+    self.novel_chapter_interval=opts.novel_chapter_interval or 2
+    self.novel_policies={}
     return self
+end
+
+function Queue:novelPolicy(job)
+    if job.source.content_type~="novel"then return end
+    local policy=self.novel_policies[job.source_id]
+    if not policy then policy={request_at=0,chapter_at=0,failures=0};self.novel_policies[job.source_id]=policy end
+    return policy
+end
+
+function Queue:waitForSite(job,until_time,message)
+    job.phase="waiting";job.wait_until=until_time
+    OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
+        {state="queued",wait_until=until_time,wait_message=message},{force=true})
 end
 
 local function job_key(source_id, comic_id, order)
@@ -140,15 +167,20 @@ function Queue:pause(reason)
     if first then
         self._tick_id = (self._tick_id or 0) + 1
         self.scheduled = false
+        if self._tick_callback then
+            local ok,UI=pcall(require,"ui/uimanager")
+            if ok then UI:unschedule(self._tick_callback)end
+            self._tick_callback=nil
+        end
         local job = self.active
-        local preparing=self:_stop_prepare(job)
+        local preparing=self:_stop_prepare(job,true)
         if preparing then
             job.phase="paused"
             OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
                 {state="partial",done=job.done,total=job.total},{force=true})
         end
         if job and job.transport then
-            job.transport:close()
+            if job.transport.terminate then job.transport:terminate()else job.transport:cancel_all(true)end
             job.transport = nil
             job.phase = "paused"
             OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
@@ -163,6 +195,7 @@ function Queue:pause(reason)
     return function()
         if released then return end
         released = true
+        if not self.pauses[token]then return end
         self.pauses[token] = nil
         if next(self.pauses) == nil then self:_schedule() end
     end
@@ -177,6 +210,7 @@ function Queue:enqueue(source, comic, chapters)
     if not (source and comic and comic._id and type(chapters) == "table") then
         return 0, 0
     end
+    if not self:is_active()then self._error_notified=nil end
     local source_id = source.identifier or "unknown"
     if source.content_type=="novel" then
         comic=require("source.contract").copy(comic)
@@ -328,24 +362,30 @@ function Queue:cancelComic(source_id, comic_id, reason)
 end
 
 --- 退出应用: 杀掉子进程但不等待 (与 StreamSession:shutdown 同一约定)
-function Queue:shutdown()
-    if self.active then
-        local job = self.active
+function Queue:shutdown(reason)
+    local job=self.active
+    local jobs=self.jobs
+    if job then jobs[#jobs+1]=job end
+    self.active=nil;self.jobs={};self.running=false;self.pauses={}
+    self.scheduled=false;self._tick_id=(self._tick_id or 0)+1
+    if self._tick_callback then
+        local ok,UI=pcall(require,"ui/uimanager")
+        if ok then UI:unschedule(self._tick_callback)end
+        self._tick_callback=nil
+    end
+    if job then
         self:_stop_prepare(job,true)
         if job.transport and job.transport.terminate then
             pcall(function() job.transport:terminate() end)
         elseif job.transport then
             pcall(function() job.transport:cancel_all(true) end)
         end
-        OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
-            state = "partial",
-            done = job.done,
-            total = job.total,
-        }, { force = true })
     end
-    self.active = nil
-    self.jobs = {}
-    self.running = false
+    if error_notice then
+        local notice=error_notice;error_notice=nil
+        pcall(function()require("ui/uimanager"):close(notice,"ui")end)
+    end
+    return OfflineLibrary.stopChapters(jobs,reason)
 end
 
 --- 把一页已经落盘的文件算进进度 (重下/断点续传时跳过)
@@ -360,7 +400,11 @@ end
 
 --- 为当前章取图片列表并起 transport
 function Queue:_notify_error(job, msg)
-    if self.on_error then pcall(self.on_error, job, msg) end
+    if self.on_error==default_error_notifier and self._error_notified then return end
+    if self.on_error then
+        local ok,shown=pcall(self.on_error, job, msg)
+        if self.on_error==default_error_notifier and ok and shown then self._error_notified=true end
+    end
 end
 
 function Queue:_stop_prepare(job,nonblocking)
@@ -377,12 +421,18 @@ function Queue:_stop_prepare(job,nonblocking)
 end
 
 function Queue:_prepare(job)
+    local policy=self:novelPolicy(job)
+    if policy and self.clock()<policy.chapter_at then
+        self:waitForSite(job,policy.chapter_at,"等待站点请求间隔…")
+        return true
+    end
     job.phase = "preparing"
     OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
         state = "preparing",
         title = job.title,
         total = job.pages or 0,
         done = 0,
+        wait_until=0,wait_message="",prepare_stage="body",prepare_current=0,prepare_total=0,
     }, { force = true })
 
     local token={}
@@ -403,7 +453,17 @@ function Queue:_prepare(job)
         job.prepare_token=nil;job.prepare_task=nil
         changed();self:_schedule()
     end
-    local context={deadline=require("socket").gettime()+60,isCancelled=cancelled}
+    local budget=policy and 180 or 60
+    local context={deadline=require("socket").gettime()+budget,isCancelled=cancelled}
+    if policy then
+        context.before_request=function()
+            if cancelled()then error("请求已取消",0)end
+            local delay=policy.request_at-self.clock()
+            if delay>0 then self.wait(delay)end
+            if cancelled()then error("请求已取消",0)end
+            policy.request_at=self.clock()+self.novel_request_interval
+        end
+    end
     local task=self.prepare_runner(function()
         if job.source.content_type=="novel" then
             local session=require("novel.native").session(job.source,tostring(job.comic_id),tostring(job.chapter_id))
@@ -411,16 +471,28 @@ function Queue:_prepare(job)
                 root=require("util.cache").BASE_DIR.."/novels/downloads",
                 book=tostring(job.comic_id),chapter=tostring(job.chapter_id),title=job.title,call=context,
                 on_cleanup=function(fn)job.prepare_cleanup=fn end,
-                http=function(request,timeout)
-                    local r=require("network.http_client"):get(request.url,request.headers,timeout)
-                    return r and {status=r.status_code,body=r.body}
+                on_progress=function(progress)
+                    if cancelled()then return end
+                    OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,{
+                        prepare_stage=progress.stage,prepare_current=progress.current,prepare_total=progress.total})
+                end,
+                http=function(request,timeout,call,destination)
+                    if context.before_request then context.before_request()end
+                    local r,reason=require("network.novel_http").image(request,timeout,destination,call and call.deadline)
+                    if not r and type(reason)=="string"then
+                        local code=reason:match("HTTP%s+429")and "rate_limited"
+                            or reason:match("timeout$")and "timeout"
+                            or reason:match("closed$")and "network"
+                        if code then reason=require("source.contract").error(code,"插图连接失败",nil,nil,true)end
+                    end
+                    return r and {status=r.status_code,body=r.body},reason
                 end,
             })
             job.prepare_cleanup=nil
-            finish(ok and document or nil,err and err.message)
+            finish(ok and document or nil,err)
         else finish(self.get_images(job.source,job.comic_id,job.order,context)) end
     end,{
-        timeout=60,is_cancelled=cancelled,
+        timeout=budget,is_cancelled=cancelled,
         on_error=function(err) finish(nil,err) end,
         on_cancel=function()
             if job.prepare_cleanup then job.prepare_cleanup();job.prepare_cleanup=nil end
@@ -437,19 +509,45 @@ function Queue:_prepare(job)
 end
 
 function Queue:_apply_preparation(job,images,err)
+    local policy=self:novelPolicy(job)
     if not images then
         job.phase = "failed"
+        local novel=job.source.content_type=="novel"
+        local message=type(err)=="table"and err.message or tostring(err or (novel and "小说章节下载失败" or "获取章节图片失败"))
+        local retryable=type(err)=="table"and err.retryable==true
+            or novel and type(err)=="string"and (err:find("超时",1,true)or err:lower():find("timeout",1,true))
+        if policy then
+            policy.failures=retryable and policy.failures+1 or 0
+            if retryable then
+                local limited=type(err)=="table"and err.code=="rate_limited"
+                local delay=math.min(180,limited and 60*2^(policy.failures-1)or 5*3^(policy.failures-1))
+                policy.chapter_at=self.clock()+delay
+                if policy.failures<3 then
+                    self:waitForSite(job,policy.chapter_at,limited and "站点限流，等待后重试…"or "连接失败，等待后重试…")
+                    logger.warn("Picayomi novel download waiting",policy.failures,delay,message)
+                    return false
+                end
+                -- Stop this provider after repeated failures; retain all queued
+                -- chapters for an explicit retry instead of hammering the site.
+                local keep,stopped={},{}
+                for _,pending in ipairs(self.jobs)do
+                    if pending.source_id==job.source_id then stopped[#stopped+1]=pending else keep[#keep+1]=pending end
+                end
+                self.jobs=keep;OfflineLibrary.stopChapters(stopped,"站点连续失败，已暂停此源下载，请稍后重试")
+            else policy.chapter_at=self.clock()+self.novel_chapter_interval end
+        end
         OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
             state = "failed",
-            error = tostring(err or "获取章节图片失败"),
+            error = message,
         }, { force = true })
         logger.warn("Picayomi DownloadQueue: 第 " .. tostring(job.order)
-            .. " 章取图片列表失败: " .. tostring(err))
-        self:_notify_error(job, tostring(err or "获取章节图片失败"))
+            .. (novel and " 章小说下载失败: " or " 章取图片列表失败: ") .. message)
+        self:_notify_error(job, message)
         return false
     end
 
     if job.source.content_type=="novel" then
+        policy.failures=0;policy.chapter_at=self.clock()+self.novel_chapter_interval
         local bytes=0;for _,file in ipairs(images.manifest.files) do bytes=bytes+file.bytes end
         OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,{
             document={key=images.key,generation=images.generation},state="done",bytes=bytes,
@@ -589,6 +687,11 @@ function Queue:step()
 
     local job = self.active
 
+    if job.phase=="waiting"then
+        if self.clock()>=job.wait_until then return self:_prepare(job)end
+        return true
+    end
+
     if job.phase=="preparing" then return true end
 
     if job.phase == "paused" then
@@ -672,6 +775,7 @@ end
 --- @param id 排期号: 挂起恢复后旧 timer 仍可能被触发, 只认最新那一拍
 function Queue:_tick(id)
     if id and id ~= self._tick_id then return end
+    self._tick_callback=nil
     self.scheduled = false
     if not self.running and not self.active and #self.jobs == 0 then
         return
@@ -711,9 +815,16 @@ function Queue:_schedule()
     self.scheduled = true
     self._tick_id = (self._tick_id or 0) + 1
     local id = self._tick_id
-    if not self.schedule(function() self:_tick(id) end, self.tick) then
+    if self._tick_callback then
+        local ok,UI=pcall(require,"ui/uimanager")
+        if ok then UI:unschedule(self._tick_callback)end
+    end
+    self._tick_callback=function()self:_tick(id)end
+    local delay=self.active and self.active.phase=="waiting"and math.max(self.tick,self.active.wait_until-self.clock())or self.tick
+    if not self.schedule(self._tick_callback, delay) then
         -- 无 UI 环境 (纯逻辑测试): 不自动泵, 由调用方 step()
         self.scheduled = false
+        self._tick_callback=nil
     end
 end
 

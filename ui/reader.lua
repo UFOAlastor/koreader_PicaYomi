@@ -1149,13 +1149,14 @@ function PicaReader:onReturn(reason_text)
     end
 
     self:closeReaderUi(function()
+        local ok,err=pcall(function()
+            if self.on_return_callback then self.on_return_callback()end
+        end)
         if self._return_info then
             pcall(function() UIManager:close(self._return_info, "ui") end)
             self._return_info = nil
         end
-        if self.on_return_callback then
-            self.on_return_callback()
-        end
+        if not ok then error(err,0)end
     end)
 end
 
@@ -1543,6 +1544,10 @@ function PicaReader:open(comic, episode, episodes_list, return_callback, detail_
     comic_api:getAndOpenComic(comic._id, tostring(episode.order), episode._id,
         detail_menu_to_close, context, function(ok, err, episodes)
             if not ok then
+                if detail_menu_to_close then
+                    detail_menu_to_close.opening_reader=false
+                    if detail_menu_to_close.revealQuickEntry then detail_menu_to_close:revealQuickEntry()end
+                end
                 -- err == nil 表示用户自己按了「中止」: 界面已经清干净, 不该再弹错误。
                 -- 真正的失败 (取列表失败 / 打开异常) 由 getAndOpenComic 弹提示。
                 if err then

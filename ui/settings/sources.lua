@@ -379,16 +379,22 @@ function Sources:updateRepositories()
     if #urls==0 then return true,"还没有订阅，请到源管理中添加订阅" end
     local updated,failed,skipped,repo_failed=0,0,0,0
     local lines={}
+    local unchanged={}
     for _,url in ipairs(urls) do
         local name=m.state.repositories[url].name or "订阅"
         local ok,result,message,_,stats=pcall(self.updateRepository,self,url)
         if ok and result then
             updated=updated+stats.updated;failed=failed+stats.failed;skipped=skipped+stats.skipped
-            lines[#lines+1]=name.."："..message
+            if stats.updated==0 and stats.failed==0 and stats.skipped==0 and message=="源已是最新，无需更新" then
+                unchanged[#unchanged+1]=name
+            else lines[#lines+1]=name.."："..message end
         else
             repo_failed=repo_failed+1
             lines[#lines+1]=name.."：检查失败 — "..require("ui.common.error_message").describe(ok and message or result)
         end
+    end
+    if #unchanged>0 then
+        lines[#lines+1]=(#unchanged==1 and unchanged[1].."：" or #unchanged.." 个订阅均：").."源已是最新，无需更新"
     end
     local summary="已检查 "..#urls.." 个订阅，更新 "..updated.." 个源"
     if failed>0 then summary=summary.."，更新失败 "..failed.." 个源" end

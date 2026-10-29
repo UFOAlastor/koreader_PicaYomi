@@ -78,6 +78,9 @@ function Style.Button:init()
 end
 Style.Button.disable=disable
 
+-- Flow labels use the same native geometry on categories and the home page.
+Style.CloudButton=NativeButton:extend{radius=Style.RADIUS,text_font_bold=false}
+
 local function label_width(text,height)
     local probe=Style.Button:new{text=text,height=height}
     local width=probe:getSize().w
@@ -120,14 +123,15 @@ function Style.footerWidths(width,specs,height)
     return widths
 end
 
-function Style.footer(width,specs)
-    local padding=Screen:scaleBySize(4)
-    local height=Screen:scaleBySize(40)
+function Style.footer(width,specs,opts)
+    opts=opts or {}
+    local padding=opts.padding or Screen:scaleBySize(4)
+    local height=opts.height or Screen:scaleBySize(40)
     local widths=Style.footerWidths(width-2*(padding+Size.border.thin),specs,height)
     local buttons={}
     for i,spec in ipairs(specs) do
         buttons[i]=Style.Button:new{text=spec.text,width=widths[i],height=height,
-            enabled=spec.enabled~=false,callback=spec.callback}
+            enabled=spec.enabled~=false,callback=spec.callback,text_font_size=opts.font_size}
     end
     local group=require("ui/widget/horizontalgroup"):new(buttons)
     return Frame:new{padding=padding,margin=0,bordersize=Size.border.thin,

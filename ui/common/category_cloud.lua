@@ -1,8 +1,8 @@
 -- Category labels flow across rows in source order. Only the visible page
 -- owns buttons; the remaining pages keep lightweight layout descriptions.
 local Blitbuffer = require("ffi/blitbuffer")
-local Button = require("ui/widget/button")
 local ActionStyle = require("ui.common.action_style")
+local Button = ActionStyle.CloudButton
 local Device = require("device")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")

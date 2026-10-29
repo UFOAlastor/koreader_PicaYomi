@@ -320,14 +320,7 @@ end
 
 --- 退出前收掉离线下载队列 (与流式会话同一约定: 杀子进程, 不等待)
 function Picayomi:_shutdownDownloads()
-    require("source.extensions.updater").cancel()
-    require("network.async_task").cancelAll(true)
-    local ok, err = pcall(function()
-        require("util.download_queue").instance():shutdown()
-    end)
-    if not ok then
-        logger.warn("Picayomi: 下载队列清理失败: " .. tostring(err))
-    end
+    require("util.widget_sweep").shutdownTasks()
 end
 
 -- KOReader 用 `UIManager:broadcastEvent` 广播这些事件

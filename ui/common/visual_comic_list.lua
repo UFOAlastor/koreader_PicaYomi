@@ -70,7 +70,7 @@ end
 
 function CoverPlaceholder:paintTo(bb, x, y)
     self.dimen = Geom:new{ x = x, y = y, w = self.width, h = self.height }
-    bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_GRAY_E)
+    bb:paintRect(x, y, self.width, self.height, self.background or Blitbuffer.COLOR_WHITE)
     bb:paintBorder(x, y, self.width, self.height, Size.border.thin, Blitbuffer.COLOR_DARK_GRAY)
 
     local text = TextWidget:new{
@@ -162,12 +162,14 @@ function ComicListItem:coverWidget()
             width = self.cover_w,
             height = self.cover_h,
             scale_factor = nil,
+            alpha = true,
         }
     end
 
     return CoverPlaceholder:new{
         width = self.cover_w,
         height = self.cover_h,
+        background = self.background,
         text = self.cover_error or ((self.comic and self.comic.thumb and self.comic.thumb ~= ""
             or self.list_ui and self.list_ui.resolve_cover) and _("加载中") or _("无封面")),
     }
@@ -252,9 +254,17 @@ function ComicListItem:buildContent()
     end
     if download_state == "done" then
         append_meta(T(comic.content_type=="novel" and _("已下载 %1 章") or _("已下载 %1 话"), comic.download_total or 0))
+        append_meta(_("全部完成"))
     elseif download_state == "partial" then
         append_meta(T(comic.content_type=="novel" and _("已下载 %1/%2 章 · 部分未完成") or _("已下载 %1/%2 话 · 部分未完成"),
             comic.download_done or 0, comic.download_total or 0))
+    end
+    if (comic.download_failed or 0)>0 then append_meta(T(_("失败 %1"),comic.download_failed))
+    elseif (comic.download_retryable or 0)>0 then append_meta(T(_("待重试 %1"),comic.download_retryable))end
+    local function phase_summary(phase)
+        local text=T(comic.content_type=="novel"and _("%1/%2 章")or _("%1/%2 话"),comic.download_done or 0,comic.download_total or 0)
+        if(comic.download_failed or 0)>0 then text=text.." · "..T(_("失败 %1"),comic.download_failed)end
+        return text.." · "..phase
     end
 
     -- 记下来供测试/排查 (列表与详情必须显示同一行)
@@ -263,9 +273,20 @@ function ComicListItem:buildContent()
 
     --- 第三行 (下载中 = 进度条, 否则统计文本)。宽度随文字列宽度变化。
     local function makeThird(w)
+        if comic.download_wait_message and comic.download_wait_message~=""then
+            return TextBoxWidget:new{text=phase_summary(comic.download_wait_message),face=Theme.face("info"),
+                width=w,height=Screen:scaleBySize(30),bgcolor=self.background,height_overflow_show_ellipsis=true}
+        end
         if comic.download_preparing then
-            return TextBoxWidget:new{text=_("正在获取章节信息…"),face=Theme.face("info"),
-                width=w,height=Screen:scaleBySize(30),height_overflow_show_ellipsis=true}
+            local phase=_("获取图片…")
+            if comic.content_type=="novel"then
+                phase=_("获取正文…")
+                if comic.download_prepare_stage=="images"then
+                    phase=T(_("插图 %1/%2"),comic.download_prepare_current or 0,comic.download_prepare_total or 0)
+                elseif comic.download_prepare_stage=="commit"or comic.download_prepare_stage=="ready"then phase=_("保存章节…")end
+            end
+            return TextBoxWidget:new{text=phase_summary(phase),face=Theme.face("info"),
+                width=w,height=Screen:scaleBySize(30),bgcolor=self.background,height_overflow_show_ellipsis=true}
         end
         if downloading then
             local pct = math.max(0, math.min(1, tonumber(comic.download_progress) or 0))
@@ -278,6 +299,7 @@ function ComicListItem:buildContent()
                     margin_v = Screen:scaleBySize(7),
                     margin_h = Screen:scaleBySize(2),
                     percentage = pct,
+                    bgcolor = self.background,
                 },
                 HorizontalSpan:new{ width = Screen:scaleBySize(8) },
                 TextBoxWidget:new{
@@ -288,6 +310,7 @@ function ComicListItem:buildContent()
                     face = Theme.face("info"),
                     width = label_w,
                     height = Screen:scaleBySize(24),
+                    bgcolor = self.background,
                     height_overflow_show_ellipsis = true,
                 },
             }
@@ -297,6 +320,7 @@ function ComicListItem:buildContent()
             face = Theme.face("info"),
             width = w,
             height = Screen:scaleBySize(24),
+            bgcolor = self.background,
             height_overflow_show_ellipsis = true,
         }
     end
@@ -309,6 +333,7 @@ function ComicListItem:buildContent()
             text = title,
             face = Theme.face("list_title"),
             bold = true,
+            bgcolor = self.background,
             width = w - (resumable and button_w + Screen:scaleBySize(4) or 0),
             height = Screen:scaleBySize(48),
             height_overflow_show_ellipsis = true,
@@ -319,6 +344,7 @@ function ComicListItem:buildContent()
                 text = _("继续阅读"), width = button_w,
                 height = Screen:scaleBySize(32), padding = 0,
                 text_font_size = 18,
+                background = self.background,
                 callback = function() self:onContinueReading() end,
                 hold_callback = function() end, -- 不把按钮长按传给历史条目的删除操作。
             }
@@ -336,6 +362,7 @@ function ComicListItem:buildContent()
                 face = Theme.face("info"),
                 width = w,
                 height = Screen:scaleBySize(30),
+                bgcolor = self.background,
                 height_overflow_show_ellipsis = true,
             },
             makeThird(w),
@@ -1295,14 +1322,15 @@ function VisualComicList:updatePageText()
     if not self.page_text then return end
     local cur = self:absScreen()
     local loaded = #(self.buffer or {})
-    local total, _exact, items = self:totalScreens()
+    local total, exact, items = self:totalScreens()
 
     if total and items then
         -- 页数与条数都可信: 都显示, 用户才知道能跳到哪、一共多少
         self.page_text:setText(T(_("第 %1/%2 页 · 共 %3 项"), cur, total, items))
     elseif total then
-        -- 只知道总页数 (源 C): 如实说能翻到第几页, 不编总条数
-        self.page_text:setText(T(_("第 %1/%2 页"), cur, total))
+        -- A server-page bound cannot reveal the last page's item count.
+        self.page_text:setText(exact and T(_("第 %1/%2 页"), cur, total)
+            or T(_("第 %1 页 · 最多 %2 页"), cur, total))
     else
         -- 服务端没给出可信总量: 只如实说已加载了多少条, 不编总屏数
         self.page_text:setText(T(_("第 %1 页 · 总页数未知 · 已加载 %2 项"), cur, loaded))
@@ -1319,9 +1347,10 @@ function VisualComicList:jumpToScreen(n)
         return false, _("请输入 1 以上的整数页码")
     end
 
-    local total = self:totalScreens()
+    local total,exact,items = self:totalScreens()
     if total and n > total then
-        return false, T(_("超出范围：共 %1 页"), total)
+        return false, (exact or items) and T(_("超出范围：共 %1 页"), total)
+            or T(_("超出范围：最多 %1 页"), total)
     end
 
     if self.fetch_task then self.fetch_task:cancel() end
@@ -1427,11 +1456,12 @@ end
 -- 弹窗本体在 ui/common/page_jump.lua (与详情页共用); 这里只负责"说明文案 + 跳转"。
 function VisualComicList:showJumpDialog()
     local cur = self:absScreen()
-    local total = self:totalScreens()
+    local total,exact,items = self:totalScreens()
     local tip
     if total then
         -- 有可信总量: 明确给出起止点
-        tip = T(_("共 %1 页，请输入要跳转的页码"), total)
+        tip = (exact or items) and T(_("共 %1 页，请输入要跳转的页码"), total)
+            or T(_("最多 %1 页，请输入要跳转的页码"), total)
     else
         -- 服务端没给可信总量: 说明只能给到已加载范围, 但更大的屏号照样能跳
         tip = T(_("已加载至第 %1 页；更大的页码会自动加载"),

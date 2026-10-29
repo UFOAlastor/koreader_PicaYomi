@@ -46,6 +46,7 @@ function Favorites:init()
 end
 
 function Favorites:show(return_callback)
+    self._home_preview_data=nil
     -- 保存返回回调
     self.return_callback = return_callback or function()
         -- 默认返回：关闭当前界面（会回到KOReader）
@@ -204,6 +205,13 @@ end
 function Favorites:loadRemoteFavorites()
     local source = self:currentSource()
     if not require("ui.common.source_access").check(require("source.registry"):getCurrent(),"favorites") then return end
+    if self._cache_source~=source then self.current_page=1;self._cache_source=source end
+    local scope=FavoriteActions.onlineScope(source)
+    local cached=self.current_page==1 and FavoriteActions.cachedOnline(source)
+    if cached then
+        self.current_page=cached.page or 1;self.total_pages=cached.pages
+        self:showFavoritesList(cached);return
+    end
     -- 显示加载消息
     if logger.enabled then logger.info("Picayomi", "开始加载收藏漫画...") end
     local loading = InfoMessage:new{
@@ -226,6 +234,7 @@ function Favorites:loadRemoteFavorites()
         now_seconds() - t0, self.current_page or 1)) end
 
     if success and favorites_data then
+        if self.current_page==1 then FavoriteActions.rememberOnline(source,favorites_data,scope)end
         if logger.enabled then logger.info("Picayomi", "成功获取收藏漫画数据，数量: " .. #(favorites_data.comics or {})) end
 
         -- 更新分页信息
@@ -237,7 +246,10 @@ function Favorites:loadRemoteFavorites()
     else
         logger.warn("Picayomi", "获取收藏漫画失败: " .. (error_msg or "未知错误"))
         -- 会话过期也会以 401 出现, 同样引导去登录
-        if tostring(error_msg or ""):find("401", 1, true) then
+        local message=tostring(error_msg or "")
+        if message:find("401",1,true)or message:find("请先登录",1,true)
+            or message:find("登录状态已失效",1,true)or message:find("登录已过期",1,true)then
+            require("ui.home").refreshShownAccountState()
             self:promptLogin()
         else
             UIManager:show(InfoMessage:new{
@@ -342,12 +354,15 @@ function Favorites:showComicDetail(comic, navigation)
         on_back = function()
             self.navigating_to_detail = false
             self.detail_menu = nil
+            local preview_data=self._home_preview_data;self._home_preview_data=nil
             if self.favorites_dirty then
                 self.favorites_dirty = false
                 self:loadFavorites()
             elseif not WidgetSweep.isInStack(self.favorites_menu) then
                 -- 列表真的不在 (理论上不该发生) 才重建, 免得用户对着空屏
-                self:loadFavorites()
+                if preview_data then
+                    self:showFavoritesList(preview_data)
+                else self:loadFavorites()end
             end
             -- 其余情况什么都不做: 关掉详情页, 下面的收藏列表自己就露出来了
         end,

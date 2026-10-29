@@ -33,6 +33,7 @@ function M.open(detail,episode,options)
         if detail._novel_task then detail._novel_task:cancel() end
         if state.loading then Loading.close(state.loading);state.loading=nil end
         detail._novel_task=nil;detail.opening_reader=false;detail._novel_session=nil
+        if detail.revealQuickEntry then detail:revealQuickEntry()end
         release()
         if not detail._closed then detail.resume_episode_order=nil;detail:refresh() end
     end
@@ -54,7 +55,11 @@ function M.open(detail,episode,options)
         local ch=entry and entry.chapters and entry.chapters[tostring(ep.order)]
         if ch and ch.document then
             local ok,doc=pcall(Document.load,base.."/downloads",ch.document.key,ch.document.generation)
-            if ok then return doc end
+            if ok and doc then return doc end
+        end
+        if ch and detail.offline then
+            Library.updateChapter(detail.source_id,book,ep.order,
+                {state="partial",error="下载内容缺失或损坏，请重新下载此章"},{force=true})
         end
     end
     local function prepare(ep,progress,cleanup)
@@ -168,9 +173,12 @@ function M.open(detail,episode,options)
                 return
             end
             prepared.progress_root=base.."/progress"
-            state.switching=true
+            state.switching=switching
             local opened,failure=pcall(require("novel.reader").open,prepared,{
                 source=source,from_beginning=from_beginning,is_switching=function()return state.switching end,
+                on_closing=function()
+                    if detail.revealQuickEntry then detail:revealQuickEntry()end
+                end,
                 ready=function(reader)
                     state.reader=reader;state.episode=ep;state.switching=false
                     record(ep,reader)

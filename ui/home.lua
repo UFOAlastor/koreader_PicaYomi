@@ -62,16 +62,11 @@ function Home:init()
     self._uis = {}
 
     self:createMainMenu()
-    -- 供"别处切换了源"的路径 (如「已下载」跨源打开) 找回主页实例并重建菜单。
-    -- 不这样做的话, 返回主页时菜单仍显示旧源的能力与名称。
+    -- Settings and explicit source selection can locate the visible owner.
     Home.instance = self
 end
 
---- 把主页的源对齐到注册表 (注册表是唯一真相)
---
--- 别处会切换当前源: 「已下载」里打开**别的源**的条目时会 switch 过去 (阅读链路
--- 走的是"当前源")。主页若不跟着变, 就会出现"菜单写着源 A, 点进分类/收藏却是
--- 源 C 的数据" —— 真机反馈的正是这个。
+--- Align home with explicit source selection in the registry.
 --
 -- @return 是否真的换了源
 function Home:ensureCurrentSource()
@@ -233,6 +228,7 @@ function Home:createMainMenu()
     local function leave_home()
         if self._leaving then return end
         self._leaving = true
+        WidgetSweep.shutdownTasks()
         local ok, sweep = pcall(require, "util.widget_sweep")
         if ok and sweep then
             pcall(function() sweep.closeAll() end)
@@ -246,54 +242,36 @@ function Home:createMainMenu()
         end
     end
 
-    local navigation_actions={source_action,self.account_item,settings_action,{text=_("退出"),callback=leave_home}}
-
-    -- 标题栏走 MenuStyle: 去掉右上角那个与「返回」做同一件事的 ✕
-    -- (理由见 ui/common/menu_style.lua)
-    local title_bar = MenuStyle.titleBar{ title = _("Picayomi") .. " · " .. (source and source.name or _("无")) }
-    self.main_menu = Menu:new{
-        navigation_actions=navigation_actions,
-        is_picayomi_page = true, -- 退出 Picayomi 时由 util/widget_sweep 清扫
-        -- 标记: 供 Home.findShownMenu 判断"主页菜单是否已在窗口栈里"
-        is_picayomi_home_menu = true,
-        title = title_bar.title,
-        custom_title_bar = title_bar,
-        item_table = item_table,
-        width = Screen:getWidth(),
-        height = Screen:getHeight(),
-        full_width = true,
-        -- 必须显式声明"这是整屏菜单, 不是浮动小菜单":
-        --   Menu 的类默认值是 is_popout = true, 那会给整屏菜单画一个 radius = w/20
-        --   的大圆角 —— 四个角于是露出**下层的文件浏览器**, 点到那里就穿透过去,
-        --   正好压在某个文件上就把它打开了 (用户看到的是"点了却进了阅读")。
-        --   同时 tap_guard 只给非弹出式菜单加兜底消费, 声明对了它才生效。
-        is_popout = false,
-        -- 整屏页面: 不再绘制下层 ReaderUI (否则阅读器顶部状态栏的时间会透出来)
-        covers_fullscreen = true,
-        _picayomi_home_owner = self,
-        close_callback = function()
-            -- 选中条目走不到这里 (见下面 disableSelectAutoClose), 剩下的就是返回键:
-            -- onCloseAllMenus 先 UIManager:close(self) 再调本回调 (menu.lua:1503-1506)
-            -- —— 菜单已经不在栈里 = 用户真的要退出。
-            -- 退出动作本身会清空整个栈, 用 _leaving 防止重入 (Home 可被再次 show)。
-            if self._leaving then return end
-            leave_home()
-        end,
+    local sections={}
+    local by_text={}
+    for _,item in ipairs(item_table)do by_text[item.text]=item end
+    local favorite=self.favorites_item or {text=_("我的收藏 (本地)"),enabled=false}
+    sections[1]={id="favorites",label=_("收藏"),text=favorite.text,enabled=favorite.enabled,callback=favorite.callback}
+    sections[2]={id="history",label=_("历史"),text=_("浏览历史"),callback=function()self:showHistory()end}
+    sections[3]={id="downloads",label=_("已下载"),text=_("已下载"),callback=function()self:showDownloads()end}
+    local novel=source and source.content_type=="novel"
+    local bubbles={}
+    for _,entry in ipairs({
+        {novel and _("最新小说") or _("最新漫画"),_("最新")},
+        {novel and _("推荐小说") or _("推荐漫画"),_("推荐")},
+        {_("排行榜"),_("排行榜")},{_("分类浏览"),_("分类")},
+    })do
+        local item=by_text[entry[1]]
+        if item then bubbles[#bubbles+1]={text=item.text,label=entry[2],callback=item.callback}end
+    end
+    source_action.label=(novel and _("小说源: ") or _("漫画源: "))..(source and source.name or _("选择内容源")).."  ›"
+    source_action.align="left"
+    self.account_item.label=has("login") and not (source.isLoggedIn and source:isLoggedIn()) and _("登录") or _("账号")
+    local search=by_text[novel and _("搜索小说") or _("搜索漫画")]
+    local search_action={text=_("搜索"),enabled=search~=nil,callback=search and search.callback}
+    local exit={text=_("退出"),callback=leave_home}
+    self.main_menu=require("ui.common.home_dashboard"):new{
+        owner=self,_picayomi_home_owner=self,source=source,
+        title=_("Picayomi").." · "..(source and source.name or _("无")),
+        item_table=item_table,section_specs=sections,bubble_specs=bubbles,
+        source_spec=source_action,account_spec=self.account_item,
+        footer_specs={settings_action,search_action,exit},close_callback=leave_home,
     }
-    -- 点条目 (排行榜/搜索/设置...) 不能顺手把主页退掉
-    MenuStyle.disableSelectAutoClose(self.main_menu)
-
-    -- 全屏菜单的缝隙也要吃掉落空的 tap: 菜单项之间有缝隙, 缝隙里的 tap 没人消费
-    -- 就会继续往下层窗口传 (见 tap_guard 的注释)。
-    TapGuard.install(self.main_menu)
-    -- 顶部下滑打开 KOReader 菜单; 其他滑动不退出主页。
-    --
-    -- 真机反馈 (2026-10-18): 主页右滑/边缘滑直接退出 Picayomi 回到 KOReader,
-    -- 稍微滑一下就掉出插件, 代价太大且不好回来。退出是**破坏性**动作, 只能走
-    -- 明确入口: 菜单里的「退出」项, 或返回键。
-    -- 不传 on_back: 第一页右滑 (含边缘往中间滑) 什么都不做, 事件照样被吃掉,
-    -- 不会穿透到下层。
-    MenuSwipe.attach(self.main_menu)
 end
 
 --- 在窗口栈里找已经打开的主页菜单 (没有则 nil)
@@ -329,8 +307,15 @@ function Home:refreshFavoritesLabel()
     if self.account_item then
         local label=_("账号管理")
         if self.account_item.text~=label then self.account_item.text=label;changed=true end
+        local account_label=self.account_item.enabled and not (self.source and self.source.isLoggedIn and self.source:isLoggedIn()) and _("登录") or _("账号")
+        if self.account_item.label~=account_label then self.account_item.label=account_label;changed=true end
     end
-    if changed then self.main_menu:updateItems() end
+    if changed then
+        if self.main_menu.is_picayomi_dashboard then
+            self.main_menu.section_specs[1].text=self.favorites_item and self.favorites_item.text or _("我的收藏 (本地)")
+            self.main_menu:refreshData(true)
+        else self.main_menu:updateItems()end
+    end
     return changed
 end
 
@@ -345,6 +330,7 @@ function Home.refreshShownAccountState()
     Home.instance=owner
     local source_changed=owner:ensureCurrentSource()
     local labels_changed=owner:refreshFavoritesLabel()
+    if not labels_changed and owner.main_menu.is_picayomi_dashboard then owner.main_menu:refreshData(false)end
     if source_changed or labels_changed then UIManager:setDirty(owner.main_menu,"ui") end
     return source_changed or labels_changed
 end
@@ -372,10 +358,11 @@ function Home:show(return_callback)
     -- 退出标记只对一次退出有效: Home 实例可能被再次 show (例如重新进入插件)
     self._leaving = nil
 
-    -- 别处可能切换过源 (已下载里打开跨源条目就会), 每次显示主页先对齐 ——
-    -- 菜单上的源名与实际取数的源必须是同一个。
+    -- Keep the title and browsing actions aligned after explicit source changes.
     self:ensureCurrentSource()
+    if self.main_menu._closed then self:createMainMenu() end
     self:refreshFavoritesLabel()
+    if self.main_menu.refreshData then self.main_menu:refreshData(self.main_menu.online_error~=nil)end
 
     -- The home menu also owns source switching, settings and offline data.
     -- Keep it available without an account; online actions recheck access in
@@ -817,6 +804,7 @@ function Home:showComicDetail(comic, episodes_data, navigation)
         },
         on_back = function()
             self.detail_menu = nil
+            if navigation and navigation.origin_home then self:show() end
         end,
         on_return_from_reader = function()
             -- 读完一话回来: 详情页这次**没有被关掉** (见 api/comic.lua 的说明),
@@ -963,6 +951,21 @@ function Home:showCategories()
     if not SourceAccess.check(self.source, "categories") then return end
     local return_callback = function() self:show() end
     self:_getUI("categories"):show(return_callback)
+end
+
+-- A book opens reading through a retained detail page; back follows its origin.
+function Home:openHomePreview(kind,comic,online_data)
+    if self.source~=SourceRegistry:getCurrent()then self:ensureCurrentSource();return end
+    local navigation={open_reading=true,origin_home=self.main_menu,
+        source_id=comic.source_id or self.source and self.source.identifier,
+        on_back=function()self:show()end}
+    if kind=="downloads"then
+        local downloads=self:_getUI("downloads")
+        downloads:openComic(comic,navigation)
+    else
+        if kind=="favorites"then comic.isFavourite=true end
+        self:showComicDetail(comic,nil,navigation)
+    end
 end
 
 function Home:showFavorites()

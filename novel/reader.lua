@@ -27,17 +27,30 @@ function M.open(prepared,options)
             end
         end
         local close=ui.onClose
+        local document_closed=false
+        local returned=false
         ui.onClose=function(reader,...)
-            if reader._picayomi_novel_closing then return true end
+            if returned or reader._picayomi_novel_closing then return true end
             reader._picayomi_novel_closing=true
             local UI=require("ui/uimanager")
-            local notice
-            if not (options.is_switching and options.is_switching()) then
+            local switching=options.is_switching and options.is_switching()
+            local notice=reader._picayomi_return_notice
+            if not switching and not notice then
                 notice=require("ui.common.loading_task").showReturning()
             end
             local started=require("socket").gettime()
-            local ok,result=pcall(close,reader,...)
+            local args={n=select("#",...),...}
+            local ok,result=pcall(function()
+                if not switching and options.on_closing then options.on_closing(reader)end
+                local result=close(reader,unpack(args,1,args.n))
+                returned=document_closed
+                -- Restore details in the same frame, while the notice still
+                -- covers teardown. No home frame or extra input is needed.
+                if document_closed and not switching and options.on_close then options.on_close(reader)end
+                return result
+            end)
             if notice then UI:close(notice,"ui")end
+            reader._picayomi_return_notice=nil
             reader._picayomi_novel_closing=nil
             if Diag.enabled then Diag.mark(string.format("novel close %.3fs",require("socket").gettime()-started))end
             if not ok then error(result,0)end
@@ -65,9 +78,7 @@ function M.open(prepared,options)
         function Listener:onSuspend() save() end
         function Listener:onCloseDocument()
             save()
-            if options.on_close and not (options.is_switching and options.is_switching()) then
-                require("ui/uimanager"):nextTick(function() options.on_close(ui) end)
-            end
+            document_closed=true
         end
         local listener=Listener:new{}
         ui:registerModule("picayomi_novel_position",listener)

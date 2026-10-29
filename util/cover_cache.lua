@@ -48,6 +48,25 @@ local inflight = {}
 -- 共享下载通道: { source =, transport =, jobs = { id -> { dest, finish } }, next_id =, driving = }
 local channel = nil
 local pauses = {}
+local release_channel
+
+-- Unsubscribe a page without cancelling other pages waiting for the same file.
+local function unsubscribe(base,callback,expected)
+    return function()
+        local entry=inflight[base]
+        if not entry or entry~=expected or not callback then return end
+        for i=#entry.callbacks,1,-1 do
+            if entry.callbacks[i]==callback then table.remove(entry.callbacks,i) end
+        end
+        if #entry.callbacks==0 and entry.channel then
+            local ch=entry.channel
+            ch.jobs[entry.id]=nil
+            inflight[base]=nil
+            if ch.transport then pcall(ch.transport.cancel,ch.transport,entry.id) end
+            if next(ch.jobs)==nil then release_channel(ch) end
+        end
+    end
+end
 
 local function new_transport(source)
     return TransportWorker.new{source=source,fix_extension=function(path)
@@ -95,15 +114,19 @@ local IDLE_CLOSE_DELAY = 5
 -- 前向声明: schedule_idle_close 里要调用它, 而它定义在后面。
 -- 不声明的话那里解析成**全局** release_channel (nil), 定时器真到点时才炸 ——
 -- 而且是在事件循环里炸, 通道从此再也不关。
-local release_channel
 local pump
 local kick
 
 local function schedule_pump(ch)
     local transport=ch.transport
-    UIManager:scheduleIn(TICK,function()
+    if ch.pump_task then UIManager:unschedule(ch.pump_task)end
+    local task
+    task=function()
+        if ch.pump_task==task then ch.pump_task=nil end
         if ch.transport==transport and channel==ch then pump(ch) end
-    end)
+    end
+    ch.pump_task=task
+    UIManager:scheduleIn(TICK,task)
 end
 
 --- 排一次"稍后再关"。到点时若又有了活动, 就再等一轮 (不能直接放弃,
@@ -144,6 +167,7 @@ end
 -- 会让它的子进程和 inflight 条目都漏掉。只有"把 channel 置空"这一步才需要判等。
 function release_channel(ch)
     if channel == ch then channel = nil end
+    if ch.pump_task then UIManager:unschedule(ch.pump_task);ch.pump_task=nil end
     if ch.idle_task then
         pcall(function() UIManager:unschedule(ch.idle_task) end)
         ch.idle_task = nil
@@ -237,6 +261,7 @@ function CoverCache.pause()
     pauses[token]=true
     if first and channel then
         local ch=channel
+        if ch.pump_task then UIManager:unschedule(ch.pump_task);ch.pump_task=nil end
         if ch.idle_task then UIManager:unschedule(ch.idle_task);ch.idle_task=nil end
         if ch.transport then ch.transport:close();ch.transport=nil end
         ch.driving=false
@@ -244,7 +269,9 @@ function CoverCache.pause()
     local released=false
     return function()
         if released then return end
-        released=true;pauses[token]=nil
+        released=true
+        if not pauses[token]then return end
+        pauses[token]=nil
         local ch=channel
         if next(pauses) or not ch then return end
         if not next(ch.jobs) then release_channel(ch);return end
@@ -254,6 +281,23 @@ function CoverCache.pause()
         table.sort(ids)
         for _,id in ipairs(ids) do ch.transport:start(ch.jobs[id].request) end
         kick(ch)
+    end
+end
+
+-- Plugin exit abandons subscribers, not cached files. Do not wake closed pages.
+function CoverCache.shutdown()
+    local ch=channel
+    channel=nil;inflight={};pauses={}
+    if not ch then return end
+    for _,key in ipairs{"pump_task","idle_task"}do
+        if ch[key] then UIManager:unschedule(ch[key]);ch[key]=nil end
+    end
+    ch.jobs={};ch.driving=false
+    local transport=ch.transport;ch.transport=nil
+    if transport then
+        if transport.terminate then transport:terminate()
+        elseif transport.cancel_all then transport:cancel_all(true)
+        else transport:close()end
     end
 end
 
@@ -294,14 +338,17 @@ function CoverCache.ensure(source, source_id, comic, on_done)
     local pending = inflight[base]
     if pending then
         if on_done then table.insert(pending.callbacks, on_done) end
-        return
+        return unsubscribe(base,on_done,pending)
     end
 
-    inflight[base] = { callbacks = on_done and { on_done } or {} }
+    local entry={ callbacks = on_done and { on_done } or {} }
+    inflight[base] = entry
 
     local ch = get_channel(source)
     ch.next_id = ch.next_id + 1
     local id = ch.next_id
+    inflight[base].channel=ch
+    inflight[base].id=id
 
     ch.jobs[id] = {
         title = comic.title,
@@ -309,7 +356,7 @@ function CoverCache.ensure(source, source_id, comic, on_done)
         -- finish 是唯一会清 inflight[base] 的地方, 所以它必须在**每一条**路径上
         -- 被调用一次 (成功 / 失败 / 通道异常)。
         finish = function(path)
-            local entry = inflight[base]
+            if inflight[base]~=entry then return end
             inflight[base] = nil
             for _idx, cb in ipairs(entry and entry.callbacks or {}) do
                 pcall(cb, path)
@@ -324,6 +371,7 @@ function CoverCache.ensure(source, source_id, comic, on_done)
     end
     if ch.transport then ch.transport:start(ch.jobs[id].request) end
     kick(ch)
+    return unsubscribe(base,on_done,entry)
 end
 
 return CoverCache

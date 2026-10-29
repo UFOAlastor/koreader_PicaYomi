@@ -5,6 +5,39 @@ local LocalFavorites = require("util.local_favorites")
 local logger = require("util.logger")
 
 local M = {}
+local revisions={}
+local online_cache=setmetatable({},{__mode="k"})
+function M.onlineScope(source)
+    if not source or type(source.sessionGeneration)~="function"or M.backend(source)~="online"then return end
+    return {generation=source:sessionGeneration(),revision=M.revision(source.identifier)}
+end
+function M.cachedOnline(source)
+    local scope=M.onlineScope(source);local entry=online_cache[source]
+    if not scope or not entry then return end
+    local age=require("socket").gettime()-entry.at
+    if scope.generation~=entry.generation or scope.revision~=entry.revision or age<0 or age>=300 then
+        online_cache[source]=nil;return
+    end
+    return require("source.contract").copy(entry.data)
+end
+function M.forgetOnline(source)if source then online_cache[source]=nil end end
+function M.rememberOnline(source,data,scope)
+    local current=M.onlineScope(source)
+    if not scope or not current or scope.generation~=current.generation or scope.revision~=current.revision
+        or type(data)~="table"or type(data.comics)~="table"or(tonumber(data.page)or 1)~=1 then return false end
+    local raw=require("rapidjson").encode(data)
+    if #raw>262144 then return false end
+    local count,oldest,at=0,nil,math.huge
+    for owner,entry in pairs(online_cache)do count=count+1;if entry.at<at then oldest,at=owner,entry.at end end
+    if count>=8 and not online_cache[source]then online_cache[oldest]=nil end
+    online_cache[source]={generation=current.generation,revision=current.revision,at=require("socket").gettime(),
+        data=require("source.contract").copy(M.markAll(data))}
+    return true
+end
+function M.revision(source_id)return revisions[source_id] or 0 end
+function M.changed(source_id)
+    revisions[source_id]=(revisions[source_id] or 0)+1
+end
 
 --- 把收藏列表里的一批漫画标记为"已收藏"
 --
@@ -115,6 +148,7 @@ function M.buildAction(opts)
     end
 
     action.after_success = function(view)
+        M.changed(source_id)
         -- 只翻转状态; **不要**顺手改 fa.label —— ComicDetail:runFavoriteAction 之后会调
         -- syncFavoriteLabel(), 它靠"label 变了"来决定是否 refresh()。这里先改了,
         -- 那边就会以为文案没变而跳过刷新, 屏幕上的按钮文字就停在旧文案上。
@@ -174,6 +208,7 @@ function M.syncLocal(source,context)
             else stats.failed=stats.failed+1;stats.error=err end
         end
     end
+    if stats.uploaded>0 then M.changed(source.identifier) end
     return true,stats
 end
 

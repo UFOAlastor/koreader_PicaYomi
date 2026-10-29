@@ -166,7 +166,8 @@ function History:showHistoryList()
         -- 历史记录全部在本地, 没有可补的下一页
         has_more = false,
         on_select = function(comic, navigation)
-            self:showHistoryDetail(comic._history or { id = comic._id, title = comic.title }, navigation)
+            self:showHistoryDetail(comic._history or { id = comic._id, title = comic.title }, navigation,
+                navigation and navigation.continue_reading and comic or nil)
         end,
         -- 删除是**列表**的操作 (只对"这条记录"有意义), 所以放在长按里,
         -- 不塞进详情页 —— 详情页该显示的是漫画本身的信息。
@@ -193,7 +194,9 @@ function History:showHistoryList()
     WidgetSweep.replace_page(old_list, self.history_menu)
 end
 
-function History:showHistoryDetail(history, navigation)
+function History:showHistoryDetail(history, navigation, preview_comic)
+    local comic_detail=preview_comic
+    if not comic_detail then
     local loading = InfoMessage:new{
         text = _("加载作品信息..."),
     }
@@ -202,15 +205,17 @@ function History:showHistoryDetail(history, navigation)
     -- 不等这一下的话事件循环没机会重绘, 提示等于没显示
     UIManager:forceRePaint()
 
-    local success, comic_detail, error_msg = LoadingTask.call(loading, function()
+    local success, data, error_msg = LoadingTask.call(loading, function()
         return self.comic_api:getComicDetail(history.id)
     end)
 
-    if not success or not comic_detail then
+    if not success or not data then
         UIManager:show(InfoMessage:new{
             text = T(_("获取作品信息失败: %1"), require("ui.common.error_message").describe(error_msg)),
         }, "ui")
         return
+    end
+    comic_detail=data
     end
 
     -- 用列表构建时记下的源: 详情页必须与列表同源, 否则会拿这个源的 id 去问另一个源
@@ -238,6 +243,7 @@ function History:showHistoryDetail(history, navigation)
         -- 弹删除 (见 showHistoryList 的 on_hold); 从头看用详情页自己的「开始」。
         on_back = function()
             self.detail_menu = nil
+            if self._home_preview then self._home_preview=nil;self:show(self.return_callback)end
         end,
         on_return_from_reader = function()
             -- 读完一话回来: 详情页**没有被关掉** (api/comic.lua 现在故意留着它,

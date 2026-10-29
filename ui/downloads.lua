@@ -83,6 +83,7 @@ function Downloads:entries()
 end
 
 function Downloads:show(return_callback)
+    self._home_preview=nil
     self.content_type=self.content_type or "comic"
     local section=self.content_type=="novel" and _("小说下载") or _("漫画下载")
     self.return_callback = return_callback
@@ -198,6 +199,11 @@ function Downloads:syncProgress()
         if e then
             local pct = e.download_progress or 0
             if e.download_state ~= comic.download_state
+                or e.download_done ~= comic.download_done or e.download_failed ~= comic.download_failed
+                or e.download_retryable ~= comic.download_retryable or e.download_pending ~= comic.download_pending
+                or e.download_wait_message ~= comic.download_wait_message
+                or e.download_prepare_stage~=comic.download_prepare_stage
+                or e.download_prepare_current~=comic.download_prepare_current
                 or e.download_preparing ~= comic.download_preparing
                 or math.abs(pct - (comic.download_progress or 0)) >= 0.005 then
                 changed = true
@@ -205,9 +211,14 @@ function Downloads:syncProgress()
             end
             comic.download_state = e.download_state
             comic.download_preparing = e.download_preparing
+            comic.download_prepare_stage=e.download_prepare_stage
+            comic.download_prepare_current=e.download_prepare_current
+            comic.download_prepare_total=e.download_prepare_total
+            comic.download_wait_message=e.download_wait_message
             comic.download_progress = pct
             comic.download_done = e.download_done
             comic.download_total = e.download_total
+            comic.download_failed=e.download_failed;comic.download_retryable=e.download_retryable;comic.download_pending=e.download_pending
             self.list.buffer[i] = comic
         end
     end
@@ -277,36 +288,47 @@ end
 --- 把指定章节重新加入下载队列 (不弹提示, 供单个/批量复用)
 -- @return queued, err
 function Downloads:_enqueueRetry(comic, chapters)
-    if not chapters or #chapters == 0 then return 0, "没有需要重试的章节" end
+    if not chapters or #chapters == 0 then return 0 end
     local sid = comic.source_id or "unknown"
     local source = self:sourceFor(sid)
     if not source then
         return 0, T(_("找不到源 %1"), sid)
     end
     local queue = self.queue or DownloadQueue.instance()
-    local ok, queued = pcall(queue.enqueue, queue, source, comic, chapters)
+    local ok,queued,skipped = pcall(queue.enqueue, queue, source, comic, chapters)
     if not ok then
         return 0, tostring(queued)
     end
-    return tonumber(queued) or 0
+    return tonumber(queued) or 0,nil,tonumber(skipped)or 0
+end
+
+-- Use the current manifest after enqueue: stale buttons may refer to chapters
+-- that completed or entered the queue while a dialog was open.
+function Downloads:retryStatusMessage(err, skipped, comic)
+    if err then return require("ui.common.error_message").describe(err, _("重新下载失败")) end
+    if (skipped or 0)>0 then return _("这些章节已完成或已在队列中，无需重复加入。") end
+    local pending, unfinished = 0, 0
+    for _,entry in ipairs(self:entries()) do
+        if not comic or entry.source_id==comic.source_id and entry._id==comic._id then
+            pending=pending+(entry.download_pending or 0)
+            unfinished=unfinished+math.max(0,(entry.download_total or 0)-(entry.download_done or 0))
+        end
+    end
+    if pending>0 then return _("其余章节正在排队或下载，当前没有需要重试的章节。") end
+    if unfinished==0 then return _("全部章节已下载完成。") end
+    return _("下载状态已变化，请刷新后重试。")
 end
 
 --- 重新下载一部漫画的失败章节 (详情页/整行入口)
 function Downloads:retryChapters(comic, chapters)
-    local queued, err = self:_enqueueRetry(comic, chapters)
-    if queued <= 0 then
-        UIManager:show(InfoMessage:new{
-            text = T(_("重新下载失败：%1"), require("ui.common.error_message").describe(err, _("没有可重试的章节"))),
-            timeout = 4,
-        }, "ui")
-        return 0
-    end
-    UIManager:show(InfoMessage:new{
-        text = T(_("已重新加入 %1 %2下载"), queued,chapter_unit(comic)),
-        timeout = 3,
-    }, "ui")
+    local queued,err,skipped = self:_enqueueRetry(comic, chapters)
     self:repaintAfterRetry()
     self:startTimer()
+    UIManager:show(InfoMessage:new{
+        text = queued>0 and T(_("已重新加入 %1 %2下载"), queued,chapter_unit(comic))
+            or self:retryStatusMessage(err, skipped, comic),
+        timeout = queued>0 and 3 or 4,
+    }, "ui")
     return queued
 end
 
@@ -320,25 +342,27 @@ function Downloads:retryAllFailed()
             plans[#plans + 1] = { comic = to_comic(e), chapters = chapters }
         end
     end
-    local total, first_err = 0, nil
+    local total,first_err,skipped=0,nil,0
     for _i, p in ipairs(plans) do
-        local queued, err = self:_enqueueRetry(p.comic, p.chapters)
+        local queued,err,already = self:_enqueueRetry(p.comic, p.chapters)
         total = total + queued
+        skipped=skipped+(already or 0)
         if queued <= 0 and not first_err then first_err = err end
     end
     if total <= 0 then
+        local message=self:retryStatusMessage(first_err, skipped)
+        self:repaintAfterRetry();self:startTimer()
         UIManager:show(InfoMessage:new{
-            text = T(_("没有可重试的章节：%1"), require("ui.common.error_message").describe(first_err, _("已全部完成"))),
+            text = message,
             timeout = 4,
         }, "ui")
         return 0
     end
+    self:repaintAfterRetry();self:startTimer()
     UIManager:show(InfoMessage:new{
         text = T(_("已重新加入 %1 个章节下载"), total),
         timeout = 3,
     }, "ui")
-    self:repaintAfterRetry()
-    self:startTimer()
     return total
 end
 
@@ -369,7 +393,9 @@ end
 -- 只会走到网络请求, 然后失败 —— 那不如不显示。
 function Downloads:openComic(comic, navigation)
     local sid = comic.source_id or "unknown"
-    local chapters = OfflineLibrary.completedChapters(sid, comic._id)
+    -- A novel catalogue uses committed metadata. Verify only the chapter the
+    -- user opens, rather than hashing every chapter and illustration here.
+    local chapters = OfflineLibrary.completedChapters(sid, comic._id,{verify=comic.content_type~="novel"})
     local failed = OfflineLibrary.failedChapters(sid, comic._id)
     if #chapters == 0 then
         if #failed > 0 then
@@ -413,13 +439,8 @@ function Downloads:openComic(comic, navigation)
         source = require("source.offline").new(sid)
     end
     if comic.content_type=="novel" then source.content_type="novel" end
-    -- 阅读链路 (api/comic) 走的是"当前源"; 跨源条目先切过去,
-    -- 否则会拿 A 源的 id 去问 B 源。
-    local current = SourceRegistry:getCurrent()
-    if not current or current.identifier ~= sid then
-        SourceRegistry:switch(sid)
-        if logger.enabled then logger.info("Picayomi Downloads: 打开跨源条目, 已切换到 " .. tostring(sid)) end
-    end
+    -- Detail and reader carry source_id explicitly. Opening a downloaded work
+    -- must not change the source selected for browsing on the home page.
 
     local episodes = {}
     for _i, ch in ipairs(chapters) do
@@ -457,6 +478,8 @@ function Downloads:openComic(comic, navigation)
         },
         offline = true,
         extra_actions = extra_actions,
+        on_back = navigation and navigation.on_back,
+        on_return_from_reader = function() end,
     }, "ui")
 end
 

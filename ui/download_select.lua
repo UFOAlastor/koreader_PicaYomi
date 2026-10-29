@@ -85,7 +85,11 @@ function DownloadSelect:chapterLabel(ep)
 end
 
 function DownloadSelect:chapterUnit()
-    return (self.source and self.source.content_type=="novel" or self.comic and self.comic.content_type=="novel") and _("章") or _("话")
+    return self:contentType()=="novel" and _("章") or _("话")
+end
+
+function DownloadSelect:contentType()
+    return (self.source and self.source.content_type=="novel" or self.comic and self.comic.content_type=="novel") and "novel" or "comic"
 end
 
 function DownloadSelect:selectedCount()
@@ -195,7 +199,12 @@ end
 function DownloadSelect:downloadsLabel()
     local n = 0
     -- 清单读取是纯本地 JSON; 失败也不能让按钮消失 (下载页自己会给空提示)
-    pcall(function() n = #OfflineLibrary.list() end)
+    pcall(function()
+        for _,entry in ipairs(OfflineLibrary.list())do
+            local kind=entry.content_type=="novel" and "novel" or "comic"
+            if kind==self:contentType()then n=n+1 end
+        end
+    end)
     if n > 0 then
         return T(_("查看已下载（%1 部）"), n)
     end
@@ -358,7 +367,7 @@ end
 function DownloadSelect:showDownloads()
     self:goBack()
     local ok, err = pcall(function()
-        require("ui.downloads"):new{ queue = self.queue }:show(nil)
+        require("ui.downloads"):new{ queue = self.queue, content_type=self:contentType() }:show(nil)
     end)
     if not ok then
         logger.warn("Picayomi DownloadSelect: 打开已下载页失败: " .. tostring(err))

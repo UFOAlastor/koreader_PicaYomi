@@ -263,7 +263,9 @@ function ComicDetail:init()
         self.source:init()
     end
     self.source_id = self.source_id or (self.source and self.source.identifier) or "unknown"
-    self.auto_continue = self.navigation and self.navigation.continue_reading == true
+    self.auto_continue = self.navigation and (self.navigation.continue_reading == true or self.navigation.open_reading == true)
+    self._quick_entry=self.auto_continue==true
+    self.covers_fullscreen=not self._quick_entry
     self.offline = self.offline or (self.source and self.source._offline) or false
     self.comic = normalizeComic(self.comic or {})
     if self:isNovel() then self.comic.content_type="novel" end
@@ -332,6 +334,7 @@ function ComicDetail:init()
         local function guarded(label, fn)
             local ok, err = pcall(fn)
             if not ok then
+                self:revealQuickEntry()
                 logger.warn("Picayomi ComicDetail: 首拍任务 " .. label .. " 失败: " .. tostring(err))
             end
         end
@@ -380,23 +383,44 @@ function ComicDetail:loadDetails()
     end,{
         delay=.05,timeout=60,
         is_cancelled=function()return self._closed or self.opening_reader end,
-        on_cancel=function()reset();self.auto_continue=nil end,
+        on_cancel=function()reset();self.auto_continue=nil;self:revealQuickEntry()end,
         on_error=function(err)
             reset();self._detail_error=err
+            self:revealQuickEntry()
             if not self._closed then self:refresh();LoadingTask.showFailure(err);self:loadMissingNovelChapters() end
         end,
     })
 end
 
 -- 列表快捷入口先保留真实详情页作为返回目标, 只消费一次续读意图。
+function ComicDetail:revealQuickEntry()
+    if not self._quick_entry then return end
+    self._quick_entry=nil;self.covers_fullscreen=true
+    if not self._closed then UIManager:setDirty(self,"ui")end
+end
+
+function ComicDetail:paintTo(bb,x,y)
+    if self._quick_entry then return end
+    return InputContainer.paintTo(self,bb,x,y)
+end
+
+function ComicDetail:handleEvent(event)
+    if self._quick_entry and event.handler=="onGesture" then return true end
+    return InputContainer.handleEvent(self,event)
+end
+
 function ComicDetail:tryAutoContinue()
     if not self.auto_continue or not self.episodes_data then return end
     local stack = UIManager._window_stack or {}
     if self._closed or self.opening_reader or not stack[#stack] or stack[#stack].widget ~= self then return end
     self.auto_continue = nil
-    if self.navigation and self.navigation.source_id ~= self.source_id then return end
+    if self.navigation and self.navigation.source_id ~= self.source_id then self:revealQuickEntry();return end
     local ok, history = pcall(self.comic_model.getHistoryItem, self.comic_model, self.comic._id, self.source_id)
     local order = ok and history and (history.episode or history.last_page)
+    if ok and order==nil and self.navigation.open_reading then
+        self:startReadingFromBeginning()
+        return
+    end
     for _, episode in ipairs(self.episodes_data.episodes or {}) do
         if order ~= nil and tostring(episode.order) == tostring(order) then
             self.resume_episode_order = order
@@ -404,6 +428,7 @@ function ComicDetail:tryAutoContinue()
             return
         end
     end
+    self:revealQuickEntry()
     UIManager:show(InfoMessage:new{
         text = _("上次阅读的章节暂不可用，请在详情页选择章节。"), timeout = 3,
     }, "ui")
@@ -717,13 +742,13 @@ function ComicDetail:buildWindow()
         local cells = spec.cells
         if not cells and spec.pair then cells = { spec.left, spec.right } end
         if cells then
-            -- 等分宽度, 最后一格吃掉除不尽的余数 —— 三格时 1236/3=412 整除,
-            -- 但别的屏幕不一定, 宽度少 1px 会让 HorizontalGroup 右边空一条。
+            -- 未指定宽度的格子共享剩余空间, 逐格分摊整数余数。
+            -- 全行恰好填满, 任意等分格之间最多相差一个像素。
             local n = #cells
             local group = HorizontalGroup:new{}
             local x = 0
             for ci, cell in ipairs(cells) do
-                local w = (ci == n) and (self.width - x) or cell.width or math.floor(self.width / n)
+                local w = (ci == n) and (self.width - x) or cell.width or math.floor((self.width - x) / (n - ci + 1))
                 table.insert(group, DetailRow:new{
                     width = w,
                     height = spec.height or ROW_H,
@@ -1268,9 +1293,10 @@ end
 -- 必经关口)。理由: 同一话有两种文档 (流式 .stream / 离线 .cbz) 各有 sidecar,
 -- 路径只有 download_manager 知道; 而且放在"打开前最后一步"才最可靠。
 function ComicDetail:startReading()
-    if not self.offline and not require("ui.common.source_access").check(self.source) then return end
+    if not self.offline and not require("ui.common.source_access").check(self.source) then self:revealQuickEntry();return end
     local episode = self:findInitialEpisode()
     if not episode then
+        self:revealQuickEntry()
         UIManager:show(InfoMessage:new{ text = self:isNovel() and _("该小说没有可阅读的章节") or _("该漫画没有可阅读的章节"), timeout = 2 }, "ui")
         return
     end
@@ -1319,6 +1345,7 @@ function ComicDetail:openReader(episode, opts)
     local self_ = self
     local function return_callback()
         self_.opening_reader=false
+        self_:revealQuickEntry()
         self_.resume_episode_order=nil -- Prefer the progress saved during this read.
         -- 读完一话回来: 页脚必须**重算一次**。
         --
@@ -1432,6 +1459,7 @@ function ComicDetail:loadChapters(page,force)
         else
             self._chapter_error=err or true
             self.auto_continue = nil
+            self:revealQuickEntry()
             if manual and self.episodes_data then self:refresh() end
             UIManager:show(InfoMessage:new{
                 text=T(manual and _("刷新章节失败: %1") or _("获取章节列表失败: %1"),require("ui.common.error_message").describe(err))
@@ -1461,6 +1489,7 @@ function ComicDetail:loadChapters(page,force)
     end
     local function on_cancel()
         self.auto_continue = nil
+        self:revealQuickEntry()
         local manual=self._chapter_refresh_manual
         self._chapter_refresh_manual=nil
         self.loading_chapters=false

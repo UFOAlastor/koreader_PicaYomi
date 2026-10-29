@@ -16,6 +16,19 @@ local logger = require("util.logger")
 
 local M = {}
 
+function M.shutdownTasks()
+    local actions={
+        function()require("source.extensions.updater").cancel()end,
+        function()require("util.download_queue").instance():shutdown("已退出 PicaYomi，可在下载页重试")end,
+        function()require("network.async_task").cancelAll(true)end,
+        function()require("util.cover_cache").shutdown()end,
+    }
+    for _,action in ipairs(actions)do
+        local ok,err=pcall(action)
+        if not ok then logger.warn("Picayomi: 退出任务清理失败: "..tostring(err))end
+    end
+end
+
 --- 用新页面替换旧页面: **先 show 新的, 再关旧的**
 --
 -- 反过来写 (先 close 再 show) 在真机上一眼就能看见: 取数是同步的 1~2 秒,

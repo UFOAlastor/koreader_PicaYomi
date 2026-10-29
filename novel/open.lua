@@ -41,6 +41,18 @@ function M.open(detail,episode,options)
         if detail.revealQuickEntry then detail:revealQuickEntry()end
         release()
         if not detail._closed then
+            UI:nextTick(function()
+                local Sweep=require("util.widget_sweep")
+                if detail._closed or detail.opening_reader or not Sweep.isInStack(detail)
+                    or require("apps/reader/readerui").instance then return end
+                -- KOReader closed FileManager when opening the book. Its
+                -- screensaver requires ReaderUI or FileManager, even while a
+                -- plugin page is visible. Restore the native base underneath
+                -- the plugin page, never during chapter switches. Defer until
+                -- native onHome has had a chance to restore its own manager.
+                local ok,err=pcall(Sweep.ensureBase)
+                if not ok then require("util.logger").warn("Picayomi: 恢复原生底层失败: "..tostring(err))end
+            end)
             detail.resume_episode_order=nil;detail:refresh()
             if restore_details or detail._resume_direct then
                 UI:scheduleIn(.05,function()

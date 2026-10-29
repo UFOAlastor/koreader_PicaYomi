@@ -39,14 +39,20 @@ function M.open(prepared,options)
                 notice=require("ui.common.loading_task").showReturning()
             end
             local started=require("socket").gettime()
+            local function mark(stage)
+                if Diag.enabled then Diag.mark(string.format("novel close stage=%s elapsed=%.3fs",stage,require("socket").gettime()-started))end
+            end
             local args={n=select("#",...),...}
             local ok,result=pcall(function()
                 if not switching and options.on_closing then options.on_closing(reader)end
+                mark("before_native")
                 local result=close(reader,unpack(args,1,args.n))
+                mark("after_native")
                 returned=document_closed
                 -- Restore details in the same frame, while the notice still
                 -- covers teardown. No home frame or extra input is needed.
                 if document_closed and not switching and options.on_close then options.on_close(reader)end
+                mark("after_restore")
                 return result
             end)
             if notice then UI:close(notice,"ui")end

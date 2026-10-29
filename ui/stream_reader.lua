@@ -1123,8 +1123,8 @@ local function too_large_text(info)
     elseif reason == "scale_failed" then
         return _("图片过大，缩小解码失败")
     elseif reason == "memory_budget" then
-        local dims = info.w and info.h and ("（" .. info.w .. "×" .. info.h .. "）") or ""
-        return _("可用内存不足，暂时无法显示") .. dims
+        -- The existing bounded recovery redraws this page automatically.
+        return _("加载中…")
     end
     -- format_unsupported (以及任何未知原因): 说清尺寸, 这是"不能缩"的依据
     if info and info.w and info.h then

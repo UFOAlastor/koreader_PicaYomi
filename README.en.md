@@ -14,7 +14,6 @@ A manga and novel reader plugin for [KOReader](https://github.com/koreader/korea
 |---|---|---|---|
 | ![Home](docs/screenshots/home.png) | ![Manga details](docs/screenshots/detail.png) | ![Novel details](docs/screenshots/novel-detail.png) | ![Novel reading](docs/screenshots/novel-reader.png) |
 
-The home preview uses sample titles and covers.
 
 ## Installation
 
@@ -34,6 +33,8 @@ The home page places source selection and account access at the top, with Settin
 Sources are managed under 设置 → 源管理 (Settings → Source management). The default subscription is already configured. Automatic source update checks are disabled by default; when enabled, downloading an update still requires confirmation. Source changes take effect after restarting KOReader.
 
 Search, History, and Cancel close the search input. Returning from search history or results goes back to the calling page. Every nonempty submitted keyword is saved to search history, including failed requests, timeouts, and searches with no results.
+
+Long-press an illustration, tap **保存插图 (Save illustration)** in the image viewer, and choose a folder to save it.
 
 Novels support illustrated novel reading, chapter navigation, typography settings, resume, offline downloads, and configurable chapter preloading. Install **Wenku8** or **BiliNovel** from Settings → Source Management → Update Sources (all subscriptions), then restart KOReader. If the plugin version is incompatible, update the plugin from [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest) first. Wenku8 browsing requires a personal account; BiliNovel search may be blocked by site verification and its online bookshelf is unavailable. Local favorites remain available.
 

@@ -61,6 +61,7 @@ function Controls:onEndOfBook()
 end
 function Controls:onCloseDocument()
     self.closed=true
+    if self.illustration then self.illustration:close();self.illustration=nil end
     if self.return_task then UI:unschedule(self.return_task);self.return_task=nil end
     if self.end_dialog then UI:close(self.end_dialog,"ui");self.end_dialog=nil end
     self.ui._picayomi_novel_controls=nil
@@ -71,6 +72,7 @@ end
 function M.install(ui,options)
     if not options.navigation then return end
     local self=Controls:new{ui=ui,options=options,sync_undo={}}
+    self.illustration=require("novel.illustration").install(ui,options.title)
     ui:registerModule("picayomi_novel_controls",self)
     -- ReaderUI paints its first child (ReaderView). Preserve that order and
     -- route only EndOfBook before the host's generic file-browser dialog.

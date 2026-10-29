@@ -74,20 +74,10 @@ local function processed(info, target)
     if not ok then error(failure, 0) end
 end
 
-function M.save(doc, page, directory)
-    if not (doc and doc.isComic and doc:isComic()) then return nil, "当前不是漫画阅读" end
+local function save_file(directory,stem,extension,write)
     if type(directory) ~= "string" or lfs.attributes(directory, "mode") ~= "directory" then
         return nil, "保存目录不存在或不可访问，请重新选择"
     end
-    local info, err = doc:getPageImageInfo(page)
-    if not info then return nil, err end
-    local extensions = { ["jpeg"] = "jpg", ["jpg"] = "jpg", ["png"] = "png", ["webp"] = "webp", ["gif"] = "gif", ["bmp"] = "bmp" }
-    local extension = info.processing and "png" or extensions[info.format]
-    if not extension then return nil, "不支持保存此图片格式" end
-    local session = doc.session
-    local episode = session.context and session.context.episode
-    local stem = component(session.title) .. "_" .. component(episode and episode.title or session.order)
-        .. string.format("_p%04d", page)
     -- Reserve a staging directory atomically. Failed writes stay out of the
     -- final filename, and the page cache is never moved or modified.
     local staging
@@ -100,7 +90,7 @@ function M.save(doc, page, directory)
     local temp = staging .. "/image." .. extension
     local target
     local ok, failure = pcall(function()
-        if info.processing then processed(info, temp) else copy(info.path, temp) end
+        write(temp)
         assert((lfs.attributes(temp, "size") or 0) > 0, "原图文件为空，未保存图片")
         for index = 0, 9999 do
             local suffix = index == 0 and "" or "_" .. index
@@ -118,6 +108,33 @@ function M.save(doc, page, directory)
         return nil, message
     end
     return target
+end
+
+function M.save(doc,page,directory)
+    if not (doc and doc.isComic and doc:isComic())then return nil,"当前不是漫画阅读"end
+    local info,err=doc:getPageImageInfo(page)
+    if not info then return nil,err end
+    local extensions={["jpeg"]="jpg",["jpg"]="jpg",["png"]="png",["webp"]="webp",["gif"]="gif",["bmp"]="bmp"}
+    local extension=info.processing and "png" or extensions[info.format]
+    if not extension then return nil,"不支持保存此图片格式"end
+    local session=doc.session;local episode=session.context and session.context.episode
+    local stem=component(session.title).."_"..component(episode and episode.title or session.order)..string.format("_p%04d",page)
+    return save_file(directory,stem,extension,function(temp)
+        if info.processing then processed(info,temp)else copy(info.path,temp)end
+    end)
+end
+
+-- Prepared novel illustrations are already bounded PNG/JPEG resources. Copy
+-- their encoded bytes without decoding or claiming they are source originals.
+function M.saveIllustration(bytes,title,directory)
+    if type(bytes)~="string"or #bytes>4*1024*1024 then return nil,"插图数据超过保存限制"end
+    local w,h,format=require("util.image_size").from_data(bytes)
+    if not w or (format~="png"and format~="jpeg")then return nil,"无法读取此插图"end
+    return save_file(directory,component(title or "小说").."_插图",format=="jpeg"and "jpg"or "png",function(temp)
+        local file=assert(io.open(temp,"wb"),"无法写入所选目录")
+        local written=file:write(bytes);local closed=file:close()
+        assert(written and closed,"保存插图失败，请检查存储空间")
+    end)
 end
 
 return M

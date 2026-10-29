@@ -232,6 +232,7 @@ function M.open(detail,episode,options)
             prepared.progress_root=base.."/progress"
             state.switching=switching
             local opened,failure=pcall(require("novel.reader").open,prepared,{
+                title=detail.comic.title,
                 source=source,from_beginning=from_beginning,is_switching=function()return state.switching end,
                 on_closing=function()
                     if detail.revealQuickEntry then detail:revealQuickEntry()end

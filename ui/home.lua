@@ -399,7 +399,7 @@ function Home:closeAboveMainMenu()
     local doomed = {}
     for i = #stack, idx + 1, -1 do
         local w = stack[i] and stack[i].widget
-        if type(w) == "table" and w.is_picayomi_page then
+        if type(w) == "table" and w.is_picayomi_page and not w._closed then
             doomed[#doomed + 1] = w
         end
     end

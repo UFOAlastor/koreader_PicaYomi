@@ -44,8 +44,9 @@ ConfigDefaults.defaults = {
     max_cache_size = 500,       -- 最大缓存容量(MB): util/cache.lua 等读取
 
     -- 操作与手势: ui/common/swipe_rules.lua 读取 (每次判定现读, 改完立刻生效)
-    --   边缘返回开关 / 允许哪一侧 / 边缘宽度 (narrow 5% / normal 8% / wide 12%)
+    --   边缘返回开关 / 允许哪一侧 / 边缘宽度 (narrow 3% / normal 5% / wide 8%)
     swipe_edge_back = true,
+    native_reader_edge_back = false,
     swipe_edge_side = "both",
     swipe_edge_width = "normal",
 }
@@ -81,6 +82,8 @@ ConfigDefaults.validators = {
         return value == "auto" or value == "always" or value == "never"
     end,
 
+    native_reader_edge_back = function(value)return type(value)=="boolean"end,
+
     swipe_edge_back = function(value)
         return type(value) == "boolean"
     end,
@@ -104,6 +107,7 @@ ConfigDefaults.descriptions = {
     refresh_on_page_turn = _("翻页刷新"),
     webtoon_scroll = _("条漫滚动阅读"),
     swipe_edge_back = _("边缘滑动返回"),
+    native_reader_edge_back = _("原生 Reader 边缘返回"),
     swipe_edge_side = _("允许返回的边缘"),
     swipe_edge_width = _("边缘宽度"),
 }

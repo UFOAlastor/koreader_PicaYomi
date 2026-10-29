@@ -48,6 +48,7 @@ function Runtime.new(source,manifest,digest,extension_context)
     local generation,listeners=0,{}
     local cache_session = tostring({}) -- Fallback for sources without a stable credential.
     function handle:sessionGeneration() return generation end
+    function handle:releaseMemory() orders,legacy_orders,order_keys={},{},{} end
     function handle:watchSession(callback)
         local key={};listeners[key]=callback
         return function() listeners[key]=nil end
@@ -256,6 +257,34 @@ function Runtime.new(source,manifest,digest,extension_context)
         end
         return Contract.serialize({source=manifest.id,digest=digest,version=manifest.version,
             manga=tostring(manga_id),scope=scope,settings=require("ffi/sha2").sha256(Contract.serialize(settings))})
+    end
+    function handle:novelResumeScope(book)
+        if legacy or handle.content_type~="novel"or manifest.identity_policy~="stable"then return end
+        local key=chapter_cache_key(book)
+        return key and require("ffi/sha2").sha256(key)
+    end
+    function handle:makeNovelResume(book,chapter)
+        if type(chapter)~="table"then return end
+        local scope=self:novelResumeScope(book);if not scope then return end
+        local id=chapter._id or chapter.id
+        if type(id)~="string"or #id==0 or #id>8192 or id:find("%c")then return end
+        local expected=require("source.identity").chapterOrder(manifest,{id=id})
+        if tostring(chapter.order)~=tostring(expected)then return end
+        local title=type(chapter.title)=="string"and chapter.title:sub(1,4096)or ""
+        return {version=1,scope=scope,source=manifest.id,book=tostring(book),chapter={id=id,order=expected,title=title}}
+    end
+    function handle:restoreNovelResume(book,record,order)
+        if type(record)~="table"or record.version~=1 or record.source~=manifest.id or record.book~=tostring(book)
+            or record.scope~=self:novelResumeScope(book)or type(record.chapter)~="table"then return end
+        local valid=self:makeNovelResume(book,record.chapter)
+        if not valid or valid.scope~=record.scope or tostring(order)~=tostring(valid.chapter.order)then return end
+        return project(valid.chapter,"chapter")
+    end
+    function handle:favoriteCacheKey()
+        if not logged()then return end
+        -- Reuse the credential-scoped directory identity; no account aliases
+        -- or raw credentials are written to the cache filename or payload.
+        return require("ffi/sha2").sha256(chapter_cache_key("home-favorites"))
     end
     local function chapter_view(data)
         local result={episodes={},page=1,pages=1,total=#data.items}

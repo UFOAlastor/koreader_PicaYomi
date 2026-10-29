@@ -37,9 +37,22 @@ local function chapter_unit(comic)
     return comic and comic.content_type=="novel" and _("章") or _("话")
 end
 
+local instances=setmetatable({},{__mode="k"})
 function Downloads:init()
+    instances[self]=true
     self.width = Screen:getWidth()
     self.height = Screen:getHeight()
+end
+
+function Downloads:shutdown()
+    self._closed=true
+    if self._timer_callback then UIManager:unschedule(self._timer_callback)end
+    self._timer_callback=nil;self._timer=false
+    if type(self._delete_task)=="table"then self._delete_task:cancel()end
+    self._delete_task=nil
+end
+function Downloads.shutdownAll()
+    for instance in pairs(instances)do instance:shutdown()end
 end
 
 local function key_of(comic)
@@ -161,7 +174,7 @@ function Downloads:show(return_callback)
             if retryable > 0 then
                 extras[#extras + 1] = {
                     -- 只在真的存在失败/未完成章节时出现 (空按钮比没有更糟)
-                    text = _("重试失败"),
+                    text = _("继续下载"),
                     callback = function() self:retryAllFailed() end,
                 }
             end
@@ -204,6 +217,8 @@ function Downloads:syncProgress()
                 or e.download_wait_message ~= comic.download_wait_message
                 or e.download_prepare_stage~=comic.download_prepare_stage
                 or e.download_prepare_current~=comic.download_prepare_current
+                or e.download_prepare_total~=comic.download_prepare_total
+                or e.download_total~=comic.download_total
                 or e.download_preparing ~= comic.download_preparing
                 or math.abs(pct - (comic.download_progress or 0)) >= 0.005 then
                 changed = true
@@ -257,7 +272,10 @@ end
 function Downloads:startTimer()
     if self._timer or self._closed then return end
     self._timer = true
-    UIManager:scheduleIn(self.refresh_interval, function()
+    local callback
+    callback=function()
+        if self._timer_callback~=callback then return end
+        self._timer_callback=nil
         self._timer = false
         if self._closed or not self.list or self.list._closed then return end
         if not self:isTop() then
@@ -274,7 +292,9 @@ function Downloads:startTimer()
             -- 队列刚结束: 再对一次账, 让最后一条从"下载中"变成普通样式
             self:refreshList()
         end
-    end)
+    end
+    self._timer_callback=callback
+    UIManager:scheduleIn(self.refresh_interval,callback)
 end
 
 --- 按源的 identifier 找源实例
@@ -332,7 +352,7 @@ function Downloads:retryChapters(comic, chapters)
     return queued
 end
 
---- 列表页脚「重试失败」: 把所有漫画的失败章节一起重新排队
+--- 列表页脚「继续下载」: 把所有漫画的失败章节一起重新排队
 function Downloads:retryAllFailed()
     local entries = self:entries()
     local plans = {}
@@ -542,9 +562,6 @@ function Downloads:showDeleteMenu()
             end
         end,
         on_back = function() self:closeDeleteMenu() end,
-        extra_buttons = {
-            { text = _("返回"), callback = function() self:closeDeleteMenu() end },
-        },
     }
     UIManager:show(self.delete_menu, "ui")
 end
@@ -574,14 +591,51 @@ function Downloads:confirmDelete(entry)
         ok_text = _("删除"),
         cancel_text = _("取消"),
         ok_callback = function()
-            self:deleteDownload(entry)
+            self:startDeleteDownload(entry)
         end,
     }, "ui")
 end
 
+function Downloads:startDeleteDownload(entry)
+    if self._delete_task then return false end
+    local Loading=require("ui.common.loading_task")
+    local Async=require("network.async_task")
+    local notice=require("ui.common.loading_progress"):new{
+        title=_("删除下载"),progress={message=_("正在停止下载…")}}
+    self._delete_task=true
+    UIManager:show(notice,"ui");UIManager:forceRePaint()
+    local ticks,last_update=0,0
+    local function progress(done,total)
+        ticks=ticks+1
+        local now=require("socket").gettime()
+        if now-last_update>=.25 or done==total then
+            notice:update{message=_("正在删除章节文件…"),completed=done,total=total}
+            last_update=now
+        end
+        if ticks%16==0 or done==total then Async.wait(.001)end
+    end
+    local function finish(rebuild)
+        self._delete_task=nil
+        if not self._closed then
+            if rebuild and self.delete_menu then
+                self:closeDeleteMenu();self:reloadPage()
+                if self.list and not self._closed then self:showDeleteMenu()end
+            else self:refreshList(nil,true)end
+        end
+    end
+    self._delete_task=Loading.background(notice,function()
+        self:deleteDownload(entry,progress)
+        Loading.close(notice);finish()
+    end,{delay=.05,timeout=600,is_cancelled=function()return self._closed end,
+        on_cancel=function()finish(true)end,on_error=function(err)
+            finish(true);if not self._closed then Loading.showFailure(err)end
+        end})
+    return true
+end
+
 --- 真正删除: 先取消队列, 再删文件与清单条目
 -- @return 是否删掉了清单条目
-function Downloads:deleteDownload(entry)
+function Downloads:deleteDownload(entry,progress)
     if type(entry) ~= "table" then return false end
     local sid = entry.source_id or "unknown"
     local cid = entry._id
@@ -601,7 +655,7 @@ function Downloads:deleteDownload(entry)
     end
 
     -- 2) 删图片 + 清单
-    local ok,remove_error = OfflineLibrary.remove(sid, cid)
+    local ok,remove_error = OfflineLibrary.remove(sid, cid,progress)
     if not ok then
         UIManager:show(InfoMessage:new{
             text = T(_("删除未能完成：%1"),require("ui.common.error_message").describe(remove_error,_("该作品不在下载清单中。"))),
@@ -629,7 +683,7 @@ function Downloads:deleteDownload(entry)
 end
 
 function Downloads:onClose()
-    self._closed = true
+    self:shutdown()
     if self.list then
         UIManager:close(self.list, "ui")
         self.list = nil

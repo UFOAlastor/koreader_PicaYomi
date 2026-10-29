@@ -136,8 +136,11 @@ function Dashboard:button(spec,width,height)
     return button
 end
 function Dashboard:init()
-    local cached=require("util.favorites").cachedOnline(self.source)
+    local Favorites=require("util.favorites")
+    local cached=Favorites.cachedOnline(self.source,true)
     if cached then self.online_data=cached;self.online=cached.comics end
+    self._online_scope=Favorites.onlineScope(self.source)
+    self._refresh_online=Favorites.backend(self.source)=="online"
     self.width=self.width or Screen:getWidth();self.height=self.height or Screen:getHeight()
     self.dimen=Geom:new{x=0,y=0,w=self.width,h=self.height}
     self._epoch=0
@@ -162,15 +165,25 @@ function Dashboard:onPrevPage()return true end
 function Dashboard:getSize()return Geom:new{w=self.width,h=self.height}end
 function Dashboard:refreshData(reset_online)
     self:suspend()
-    local revision=require("util.favorites").revision(self.source and self.source.identifier)
+    local Favorites=require("util.favorites")
+    local scope=Favorites.onlineScope(self.source)
+    local old=self._online_scope
+    local identity_changed=old and(not scope or scope.generation~=old.generation or scope.key~=old.key)
+    local revision=Favorites.revision(self.source and self.source.identifier)
     if self._favorites_revision~=nil and self._favorites_revision~=revision then reset_online=true end
     self._favorites_revision=revision
-    if reset_online then
-        require("util.favorites").forgetOnline(self.source)
+    if identity_changed or reset_online and not scope then
         self.online=nil;self.online_data=nil;self.online_error=nil
+    end
+    self._online_scope=scope
+    if reset_online or identity_changed then self._refresh_online=true;self.online_error=nil end
+    if not self.online and scope then
+        local cached=Favorites.cachedOnline(self.source,true)
+        if cached then self.online_data=cached;self.online=cached.comics end
     end
     local count=math.ceil(self.width/math.max(1,Screen:scaleBySize(106)))+1
     self.snapshot=Data.snapshot(self.source,self.owner.comic_model,math.min(count,16),self.online)
+    if self.snapshot.backend~="online"then self._refresh_online=false end
     self:updateItems()
     if self:isTop()then self:startPreviews();UI:setDirty(self,"ui")end
 end
@@ -237,7 +250,7 @@ function Dashboard:updateItems()
         if r.id=="favorites" then
             note=self.snapshot.backend=="online" and _("线上") or self.snapshot.backend=="local" and _("本地") or _("不可用")
             if self.online_error then note=note.._(" · 重试")
-            elseif self.snapshot.pending and r.preview then note=note.._(" · 加载中")end
+            elseif (self._refresh_online or self.snapshot.pending)and r.preview then note=note.._(" · 刷新中")end
         end
         local link=Link:new{text=text,note=note,note_face=self:face(14),note_gap=px(8),
             width=r.w,height=r.header_height,face=header_face,arrow_width=px(28),enabled=spec.enabled,
@@ -326,25 +339,29 @@ function Dashboard:startPreviews()
         end
         next_cover()
     end
-    if self.snapshot.pending and self.shelves.favorites and not self.layout.hidden.favorites
+    if (self._refresh_online or self.snapshot.pending)and self.shelves.favorites and not self.layout.hidden.favorites
         and require("ui.common.source_access").check(source,"favorites",true)then
         local scope=require("util.favorites").onlineScope(source)
         self._remote=require("ui.common.loading_task").background(nil,function()
             if not alive()then return end
             local ok,data,err=source:getFavorites(1)
             if not alive()then return end
+            local current=require("util.favorites").onlineScope(source)
+            if scope and(not current or current.generation~=scope.generation or current.key~=scope.key or current.revision~=scope.revision)then return end
+            self._refresh_online=false
             if ok and type(data)=="table" and type(data.comics)=="table"then
                 require("util.favorites").markAll(data)
                 require("util.favorites").rememberOnline(source,data,scope)
                 self.online=data.comics;self.online_data=data;self.online_error=nil
-            else self.online={};self.online_error=err or true end
+            else self.online=self.online or {};self.online_error=err or true end
             self.snapshot=nil;self:refreshData(false);UI:setDirty(self,"ui")
         end,{delay=.1,timeout=15,is_cancelled=function()return not alive()end,
             on_error=function(err)
                 if not alive()then return end
-                self.online={};self.online_error=err;self.snapshot=nil;self:refreshData(false);UI:setDirty(self,"ui")
+                self._refresh_online=false;self.online=self.online or {};self.online_error=err;self.snapshot=nil;self:refreshData(false);UI:setDirty(self,"ui")
             end})
-    else covers()end
+    end
+    covers()
 end
 function Dashboard:onShow()
     self._closed=nil

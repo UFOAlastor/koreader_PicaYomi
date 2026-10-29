@@ -21,19 +21,6 @@ local function to_mb(bytes)
 end
 
 function CacheSettings:show()
-    -- 一次遍历出全部数字。原来是 5 个 get*Size() = 5 遍全树递归扫描
-    -- (而且 covers 被算了两遍), 缓存里页数上千时打开这页就是几千次同步 stat。
-    local sizes = self.cache:getSizeBreakdown() or {}
-    local total = sizes.total or 0
-    local cover_size = sizes.covers or 0
-    local reading_size = sizes.reading or 0
-    -- images 桶已排除 covers (见 getSizeBreakdown), 不用再扣
-    local image_size = sizes.images or 0
-    local data_size = sizes.data or 0
-    local download_size = sizes.downloads or 0
-    local temp_size = sizes.temp or 0
-    local other_size = sizes.others or 0
-
     local Screen=require("device").screen
     local Geom=require("ui/geometry")
     local Input=require("ui/widget/container/inputcontainer")
@@ -48,13 +35,9 @@ function CacheSettings:show()
         _settings_module=self,dimen=Geom:new{x=0,y=0,w=Screen:getWidth(),h=Screen:getHeight()}}
     local body=Vertical:new{align="left"}
     body[#body+1]=require("ui.common.menu_style").titleBar{title=_("存储管理"),width=width}
-    local summary={
-        T(_("总占用 %1 MB · 缓存 %2 MB"),to_mb(total),to_mb(total-download_size)),
-        T(_("漫画阅读 %1 MB · 小说阅读 %2 MB"),to_mb(reading_size+image_size),to_mb(sizes.novel_reading)),
-        T(_("共享封面 %1 MB · 数据及其他 %2 MB"),to_mb(cover_size),to_mb(data_size+temp_size+other_size)),
-        T(_("漫画下载 %1 MB · 小说下载 %2 MB"),to_mb(download_size-(sizes.novel_downloads or 0)),to_mb(sizes.novel_downloads)),
-    }
-    body[#body+1]=Text:new{text=table.concat(summary,"\n"),width=width,face=Theme.face("info")}
+    page.summary=Text:new{text=_("正在统计存储占用…"),width=width,height=Screen:scaleBySize(132),
+        face=Theme.face("info"),height_overflow_show_ellipsis=true}
+    body[#body+1]=page.summary
     body[#body+1]=require("ui/widget/verticalspan"):new{width=pad}
     local rows={
         {{text=T(_("缓存上限：%1 MB（不含下载）"),self:safeConfigGet("max_cache_size",500)),callback=function()self:setMaxCacheSize()end}},
@@ -64,7 +47,8 @@ function CacheSettings:show()
          {text=_("删除小说下载"),callback=function()self:clearDownloads("novel")end}},
         {{text=_("清除全部缓存"),callback=function()self:clearAllCache()end},
          {text=_("清空全部下载"),callback=function()self:clearDownloads()end}},
-        {{text=_("返回"),callback=function()self:goBack()end}},
+        {{text=_("重新统计"),callback=function()page:startScan()end},
+         {text=_("返回"),callback=function()self:goBack()end}},
     }
     local footer,footer_buttons=require("ui.common.action_style").footer(Screen:getWidth(),rows[#rows])
     rows[#rows]=footer_buttons
@@ -95,7 +79,56 @@ function CacheSettings:show()
     page.updateItems=function()self:refresh()end
     require("ui.common.tap_guard").install(page,page.dimen)
     require("ui.common.menu_swipe").attach(page,function()self:goBack()end)
+    local owner=self
+    local function cleanupScan()
+        if page._scan_cleanup then page._scan_cleanup();page._scan_cleanup=nil end
+    end
+    function page:onCloseWidget()
+        self._closed=true
+        if self._scan_task then self._scan_task:cancel();self._scan_task=nil end
+        cleanupScan()
+    end
+    function page:startScan()
+        if self._closed then return end
+        if self._scan_task then self._scan_task:cancel();self._scan_task=nil end
+        cleanupScan()
+        local function alive()return not self._closed end
+        local function paint(text)
+            if not alive()or self.summary.text==text then return end
+            local bounds=self.summary.dimen and self.summary.dimen:copy()
+            self.summary:setText(text)
+            local stack=UIManager._window_stack
+            if stack and stack[#stack]and stack[#stack].widget==self and bounds and bounds.w>0 and bounds.h>0 then
+                Screen.bb:paintRect(bounds.x,bounds.y,bounds.w,bounds.h,require("ffi/blitbuffer").COLOR_WHITE)
+                UIManager:widgetRepaint(self.summary,bounds.x,bounds.y)
+                UIManager:setDirty(nil,"ui",bounds)
+            end
+        end
+        paint(_("正在统计存储占用…"))
+        self._scan_task=require("ui.common.loading_task").background(nil,function()
+            local Async=require("network.async_task");local socket=require("socket")
+            local yielded=socket.gettime()
+            local updated=yielded
+            local sizes=assert(owner.cache:getSizeBreakdown(function(count)
+                local now=socket.gettime()
+                if now-updated>=1 then paint(T(_("正在统计存储占用…\n已检查 %1 个项目"),count));updated=socket.gettime()end
+                if count%256==0 or now-yielded>=.025 then Async.wait(.001);yielded=socket.gettime()end
+            end,function(cleanup)self._scan_cleanup=cleanup end),"存储统计结果为空")
+            if not alive()then return end
+            local total,downloads=sizes.total or 0,sizes.downloads or 0
+            paint(table.concat({
+                T(_("总占用 %1 MB · 缓存 %2 MB"),to_mb(total),to_mb(total-downloads)),
+                T(_("漫画阅读 %1 MB · 小说阅读 %2 MB"),to_mb((sizes.reading or 0)+(sizes.images or 0)),to_mb(sizes.novel_reading)),
+                T(_("共享封面 %1 MB · 数据及其他 %2 MB"),to_mb(sizes.covers),to_mb((sizes.data or 0)+(sizes.temp or 0)+(sizes.others or 0))),
+                T(_("漫画下载 %1 MB · 小说下载 %2 MB"),to_mb(downloads-(sizes.novel_downloads or 0)),to_mb(sizes.novel_downloads)),
+            },"\n"))
+            cleanupScan();self._scan_task=nil
+        end,{delay=.05,timeout=600,is_cancelled=function()return not alive()end,
+            on_cancel=cleanupScan,on_error=function()cleanupScan();self._scan_task=nil;paint(_("存储统计失败，请点击重新统计。"))end})
+    end
     self:showMenu(page)
+    UIManager:forceRePaint()
+    page:startScan()
 end
 
 function CacheSettings:setMaxCacheSize()

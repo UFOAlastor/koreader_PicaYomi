@@ -20,24 +20,6 @@ local function checkLabel(selected, text)
 end
 
 function ReadingSettings:show()
-    local source=require("source.registry"):getCurrent()
-    if source and source.content_type=="novel" then
-        self:showMenu(self:createMenu(_("阅读设置"), {
-            {text=_("小说阅读沿用 KOReader 设置"),enabled=false,select_enabled=false},
-            {text=_("阅读时打开顶部菜单调整字体与排版"),enabled=false,select_enabled=false},
-            {
-                text=_("提前加载章节数"),
-                mandatory_func=function()
-                    local n=self:safeConfigGet("novel_prefetch_chapters",1)
-                    return n==0 and _("关闭") or T(_("%1 章"),n)
-                end,
-                callback=function()self:setNovelPrefetch()end,
-            },
-            {text=_("固定文案过滤"),callback=function()require("ui.settings.sources"):filters(source.identifier)end},
-            self:createBackButton(),
-        }))
-        return
-    end
     local items = {
         {
             text = _("图片模式"),
@@ -82,6 +64,12 @@ function ReadingSettings:show()
                 self:setLandscapeRotation()
             end,
         },
+        {text=_("小说阅读沿用 KOReader 设置"),enabled=false,select_enabled=false},
+        {text=_("阅读时打开顶部菜单调整字体与排版"),enabled=false,select_enabled=false},
+        {text=_("提前加载章节数"),mandatory_func=function()
+            local n=self:safeConfigGet("novel_prefetch_chapters",1)
+            return n==0 and _("关闭")or T(_("%1 章"),n)
+        end,callback=function()self:setNovelPrefetch()end},
         self:createBackButton(),
     }
 

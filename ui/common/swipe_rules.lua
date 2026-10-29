@@ -69,8 +69,9 @@ end
 -- northeast/southeast (gesturedetector.lua 的 getPath), 而拇指在边缘划一下
 -- 很容易带点上下分量 —— 真机反馈"边缘右滑偶尔有用、偶尔没用", 这是其中一类。
 -- 只要**水平分量占优** (|dx| >= |dy|) 斜划也算返回; 竖向为主的仍然不算。
-function M.isBackSwipe(ges)
-    if not M.isEnabled() then return false end
+function M.isBackSwipe(ges,enabled)
+    if enabled==nil then enabled=M.isEnabled()end
+    if not enabled then return false end
     local edge = M.edgeOf(ges)
     if not edge or not M.edgeAllowed(edge) then return false end
     local direction = ges and ges.direction
@@ -162,8 +163,9 @@ end
 -- —— 页面的 onSwipe 根本不会被调用。真机上"慢一点就一定没用"就是这条。
 --
 -- pan 事件带 start_pos (按下点) 与 pos (当前点), 用同一套边缘规则判定。
-function M.isBackPan(ges)
-    if not M.isEnabled() then return false end
+function M.isBackPan(ges,enabled)
+    if enabled==nil then enabled=M.isEnabled()end
+    if not enabled then return false end
     local start = ges and ges.start_pos
     local cur = ges and ges.pos
     if not (start and cur and start.x and cur.x) then return false end

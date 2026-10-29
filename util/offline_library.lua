@@ -275,8 +275,8 @@ function M.begin(source_id, comic, chapters)
         }
     end
 
-    M.save(true)
-    return entry
+    local saved=M.save(true)
+    return entry,saved
 end
 
 --- 更新某一章的状态/进度 (增量字段)
@@ -388,7 +388,7 @@ function M.setTargetsDone(source_id, comic_id)
     if not entry then return end
     entry.state = M.deriveState(entry)
     entry.updated_at = os.time()
-    M.save(true)
+    return M.save(true)
 end
 
 -- ============================================================================
@@ -689,13 +689,22 @@ function M.entry(source_id, comic_id)
 end
 
 --- 删除一部漫画的全部下载 (图片 + 清单)
-function M.remove(source_id, comic_id)
+function M.remove(source_id, comic_id,progress)
     local entry = entry_of(source_id, comic_id, false)
     if entry then
+        local done,total=0,0
+        for _,ch in pairs(entry.chapters or {})do
+            total=total+1
+            if progress then ch.state="partial";ch.error="删除未完成，可重试删除或下载"end
+        end
+        if progress and not M.save(true)then return false,"清单保存失败，未删除文件"end
+        local function step()if progress then progress(done,total)end end
+        step()
         if entry.comic and entry.comic.content_type=="novel" then
             local ok=pcall(function()
                 for _,ch in pairs(entry.chapters or {}) do
-                    if ch.document then require("novel.document").remove(Cache.BASE_DIR.."/novels/downloads",ch.document.key) end
+                    if ch.document then require("novel.document").remove(Cache.BASE_DIR.."/novels/downloads",ch.document.key,step) end
+                    done=done+1;step()
                 end
             end)
             if not ok then return false,"部分小说文件未能删除，请重试" end
@@ -706,10 +715,12 @@ function M.remove(source_id, comic_id)
                 for name in lfs.dir(dir) do
                     if name ~= "." and name ~= ".." then
                         os.remove(dir .. "/" .. name)
+                        step()
                     end
                 end
                 lfs.rmdir(dir)
             end)
+            if not(entry.comic and entry.comic.content_type=="novel")then done=done+1;step()end
         end
         pcall(function()
             for name in lfs.dir(M.comicDir(source_id, comic_id)) do

@@ -115,8 +115,8 @@ function Queue.new(opts)
     self.on_error = opts.on_error
     self.clock=opts.clock or require("socket").gettime
     self.wait=opts.wait or require("network.async_task").wait
-    self.novel_request_interval=opts.novel_request_interval or 1
-    self.novel_chapter_interval=opts.novel_chapter_interval or 2
+    self.novel_request_interval=opts.novel_request_interval or 3
+    self.novel_chapter_interval=opts.novel_chapter_interval or 5
     self.novel_policies={}
     return self
 end
@@ -124,8 +124,16 @@ end
 function Queue:novelPolicy(job)
     if job.source.content_type~="novel"then return end
     local policy=self.novel_policies[job.source_id]
-    if not policy then policy={request_at=0,chapter_at=0,failures=0};self.novel_policies[job.source_id]=policy end
+    if not policy then
+        policy={request_at=0,chapter_at=0,failures=0,rate_hits=0,stable_chapters=0}
+        self.novel_policies[job.source_id]=policy
+    end
     return policy
+end
+
+function Queue:novelInterval(policy,chapter)
+    local base=chapter and self.novel_chapter_interval or self.novel_request_interval
+    return base*2^math.min(policy.rate_hits,chapter and 3 or 2)
 end
 
 function Queue:waitForSite(job,until_time,message)
@@ -219,6 +227,7 @@ function Queue:enqueue(source, comic, chapters)
     end
 
     local accepted = {}
+    local previous_count=#self.jobs
     for _i, ch in ipairs(chapters) do
         if ch and ch.order ~= nil then
             local key = job_key(source_id, comic._id, ch.order)
@@ -248,7 +257,19 @@ function Queue:enqueue(source, comic, chapters)
 
     local skipped = #chapters - #accepted
     if #accepted > 0 then
-        OfflineLibrary.begin(source_id, comic, accepted)
+        local _,saved=OfflineLibrary.begin(source_id, comic, accepted)
+        if not saved then
+            local failed_jobs={}
+            for i=#self.jobs,previous_count+1,-1 do
+                local job=table.remove(self.jobs,i)
+                job.phase="failed"
+                failed_jobs[#failed_jobs+1]=job
+            end
+            local message="下载清单保存失败，请检查存储空间后重试"
+            OfflineLibrary.stopChapters(failed_jobs,message)
+            self:_notify_error(failed_jobs[1],message)
+            return 0,skipped
+        end
         -- 顺手把封面存进封面缓存: 「已下载」列表要能在断网/未登录时显示封面。
         -- 失败不影响下载本身 (列表会退化成占位图)。
         pcall(function()
@@ -315,6 +336,7 @@ function Queue:cancelComic(source_id, comic_id, reason)
     end
 
     local n = 0
+    local stopped={}
     if self.active and match(self.active) then
         local job = self.active
         self:_stop_prepare(job)
@@ -323,12 +345,7 @@ function Queue:cancelComic(source_id, comic_id, reason)
             -- 会在 os.remove 之后落盘
             job.transport:cancel_all()
         end
-        OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
-            state = "partial",
-            done = job.done,
-            total = job.total,
-            error = reason or "已删除",
-        }, { force = true })
+        stopped[#stopped+1]=job
         self.active = nil
         n = n + 1
     end
@@ -336,16 +353,14 @@ function Queue:cancelComic(source_id, comic_id, reason)
     local kept = {}
     for _i, job in ipairs(self.jobs) do
         if match(job) then
-            OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
-                state = "partial",
-                error = reason or "已删除",
-            }, { force = true })
+            stopped[#stopped+1]=job
             n = n + 1
         else
             kept[#kept + 1] = job
         end
     end
     self.jobs = kept
+    OfflineLibrary.stopChapters(stopped,reason or "已删除")
 
     if self.active or #self.jobs > 0 then
         self.running = true
@@ -453,7 +468,10 @@ function Queue:_prepare(job)
         job.prepare_token=nil;job.prepare_task=nil
         changed();self:_schedule()
     end
-    local budget=policy and 180 or 60
+    -- Up to 64 illustrations can each need a cooperative pacing delay.
+    -- Keep a bounded deadline without making slower, polite downloads time out
+    -- solely because the former three-minute budget included every delay.
+    local budget=policy and 1200 or 60
     local context={deadline=require("socket").gettime()+budget,isCancelled=cancelled}
     if policy then
         context.before_request=function()
@@ -461,7 +479,7 @@ function Queue:_prepare(job)
             local delay=policy.request_at-self.clock()
             if delay>0 then self.wait(delay)end
             if cancelled()then error("请求已取消",0)end
-            policy.request_at=self.clock()+self.novel_request_interval
+            policy.request_at=self.clock()+self:novelInterval(policy,false)
         end
     end
     local task=self.prepare_runner(function()
@@ -520,7 +538,10 @@ function Queue:_apply_preparation(job,images,err)
             policy.failures=retryable and policy.failures+1 or 0
             if retryable then
                 local limited=type(err)=="table"and err.code=="rate_limited"
-                local delay=math.min(180,limited and 60*2^(policy.failures-1)or 5*3^(policy.failures-1))
+                policy.stable_chapters=0
+                if limited then policy.rate_hits=math.min(4,policy.rate_hits+1)end
+                local delay=limited and math.min(900,120*2^(policy.rate_hits-1))
+                    or math.min(180,5*3^(policy.failures-1))
                 policy.chapter_at=self.clock()+delay
                 if policy.failures<3 then
                     self:waitForSite(job,policy.chapter_at,limited and "站点限流，等待后重试…"or "连接失败，等待后重试…")
@@ -534,7 +555,7 @@ function Queue:_apply_preparation(job,images,err)
                     if pending.source_id==job.source_id then stopped[#stopped+1]=pending else keep[#keep+1]=pending end
                 end
                 self.jobs=keep;OfflineLibrary.stopChapters(stopped,"站点连续失败，已暂停此源下载，请稍后重试")
-            else policy.chapter_at=self.clock()+self.novel_chapter_interval end
+            else policy.chapter_at=self.clock()+self:novelInterval(policy,true) end
         end
         OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
             state = "failed",
@@ -547,13 +568,18 @@ function Queue:_apply_preparation(job,images,err)
     end
 
     if job.source.content_type=="novel" then
-        policy.failures=0;policy.chapter_at=self.clock()+self.novel_chapter_interval
+        policy.failures=0
+        policy.stable_chapters=policy.stable_chapters+1
+        if policy.stable_chapters>=20 then
+            policy.rate_hits=math.max(0,policy.rate_hits-1)
+            policy.stable_chapters=0
+        end
+        policy.chapter_at=self.clock()+self:novelInterval(policy,true)
         local bytes=0;for _,file in ipairs(images.manifest.files) do bytes=bytes+file.bytes end
-        OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,{
+        if not self:_commit_chapter(job,{
             document={key=images.key,generation=images.generation},state="done",bytes=bytes,
             done=0,total=0,error="",
-        },{force=true})
-        OfflineLibrary.setTargetsDone(job.source_id,job.comic_id)
+        })then return false end
         job.phase="done"
         return true
     end
@@ -637,6 +663,22 @@ function Queue:_fill_transport(job)
     return changed
 end
 
+-- Completed bytes are retained on disk, but failed metadata is never shown as done.
+function Queue:_manifest_failed(job)
+    local message="下载清单保存失败，请检查存储空间后重试"
+    job.phase="failed"
+    OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
+        {state="failed",error=message},{force=true})
+    self:_notify_error(job,message)
+    return false
+end
+
+function Queue:_commit_chapter(job,patch)
+    local _,saved=OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,patch,{force=true})
+    if not saved then return self:_manifest_failed(job) end
+    return true
+end
+
 --- 当前章收尾: 没失败页才算 done
 function Queue:_finish_chapter(job)
     if job.transport then
@@ -648,14 +690,13 @@ function Queue:_finish_chapter(job)
     for _p in pairs(job.failed) do failed_count = failed_count + 1 end
 
     local state = (failed_count == 0 and job.done >= job.total) and "done" or "partial"
-    OfflineLibrary.updateChapter(job.source_id, job.comic_id, job.order, {
+    if not self:_commit_chapter(job, {
         state = state,
         done = job.done,
         total = job.total,
         bytes = job.bytes,
         error = failed_count > 0 and (failed_count .. " 页下载失败") or nil,
-    }, { force = true })
-    OfflineLibrary.setTargetsDone(job.source_id, job.comic_id)
+    })then return false end
 
     if logger.enabled then logger.info(string.format("Picayomi DownloadQueue: 第 %s 章 %s (%d/%d 页)",
         tostring(job.order), state, job.done, job.total)) end

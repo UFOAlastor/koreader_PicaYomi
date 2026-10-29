@@ -219,11 +219,12 @@ function M.position(document)
         and type(p.xpointer)=="string" and #p.xpointer<=8192 then return p.xpointer end
     return nil
 end
-function M.remove(root,key)
+function M.remove(root,key,on_step)
     assert(digest(key),"invalid document identity")
     local parent=root.."/chapters/"..key
     local nodes=0
     local function remove_tree(path,depth)
+        if on_step then on_step()end
         nodes=nodes+1;assert(nodes<=1024 and depth<=8,"unexpected document directory")
         local attributes=lfs.symlinkattributes(path)
         if not attributes then return end

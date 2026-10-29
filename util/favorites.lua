@@ -7,31 +7,69 @@ local logger = require("util.logger")
 local M = {}
 local revisions={}
 local online_cache=setmetatable({},{__mode="k"})
+local function cachePath(key)
+    if type(key)~="string"or #key~=64 or not key:match("^[a-f0-9]+$")then return end
+    return require("util.cache").DATA_CACHE_DIR.."/favorites/"..key..".json"
+end
 function M.onlineScope(source)
     if not source or type(source.sessionGeneration)~="function"or M.backend(source)~="online"then return end
-    return {generation=source:sessionGeneration(),revision=M.revision(source.identifier)}
+    return {generation=source:sessionGeneration(),revision=M.revision(source.identifier),
+        key=source.favoriteCacheKey and source:favoriteCacheKey()}
 end
-function M.cachedOnline(source)
+function M.cachedOnline(source,allow_stale)
     local scope=M.onlineScope(source);local entry=online_cache[source]
-    if not scope or not entry then return end
-    local age=require("socket").gettime()-entry.at
-    if scope.generation~=entry.generation or scope.revision~=entry.revision or age<0 or age>=300 then
-        online_cache[source]=nil;return
+    if not scope then return end
+    if entry and(scope.generation~=entry.generation or scope.key~=entry.key)then entry=nil;online_cache[source]=nil end
+    if not entry and cachePath(scope.key)then
+        local ok,value=pcall(function()
+            local raw=require("source.extensions.storage").read(cachePath(scope.key),262144)
+            if not raw then return end
+            local saved=require("rapidjson").decode(raw)
+            assert(saved.format==1 and saved.key==scope.key and type(saved.at)=="number")
+            assert(type(saved.data)=="table"and type(saved.data.comics)=="table"and #saved.data.comics<=200)
+            return {at=saved.at,data=saved.data,key=scope.key,generation=scope.generation,revision=scope.revision}
+        end)
+        if ok then entry=value end
     end
-    return require("source.contract").copy(entry.data)
+    if not entry then return end
+    local age=os.time()-entry.at
+    if age<0 or age>7*86400 then return end
+    local fresh=scope.revision==entry.revision and age<300
+    if not fresh and not allow_stale then return end
+    return require("source.contract").copy(entry.data),fresh
 end
 function M.forgetOnline(source)if source then online_cache[source]=nil end end
+function M.releaseMemory()online_cache=setmetatable({},{__mode="k"})end
 function M.rememberOnline(source,data,scope)
     local current=M.onlineScope(source)
-    if not scope or not current or scope.generation~=current.generation or scope.revision~=current.revision
+    if not scope or not current or scope.generation~=current.generation or scope.key~=current.key or scope.revision~=current.revision
         or type(data)~="table"or type(data.comics)~="table"or(tonumber(data.page)or 1)~=1 then return false end
     local raw=require("rapidjson").encode(data)
     if #raw>262144 then return false end
     local count,oldest,at=0,nil,math.huge
     for owner,entry in pairs(online_cache)do count=count+1;if entry.at<at then oldest,at=owner,entry.at end end
     if count>=8 and not online_cache[source]then online_cache[oldest]=nil end
-    online_cache[source]={generation=current.generation,revision=current.revision,at=require("socket").gettime(),
+    online_cache[source]={generation=current.generation,key=current.key,revision=current.revision,at=os.time(),
         data=require("source.contract").copy(M.markAll(data))}
+    if cachePath(current.key)and #data.comics<=200 then
+        pcall(function()
+            local Storage=require("source.extensions.storage")
+            local file=cachePath(current.key)
+            local value=require("rapidjson").encode({format=1,key=current.key,at=os.time(),data=online_cache[source].data})
+            if #value>262144 then return end
+            Storage.write(file,value)
+            local lfs=require("libs/libkoreader-lfs");local dir=file:match("^(.*)/[^/]+$")
+            local files={}
+            for name in lfs.dir(dir)do
+                if name:match("^[a-f0-9]+%.json$")then
+                    local path=dir.."/"..name;local attr=lfs.attributes(path)
+                    if attr and attr.mode=="file"then files[#files+1]={path=path,at=attr.modification}end
+                end
+            end
+            table.sort(files,function(a,b)if a.path==file then return false elseif b.path==file then return true end;return a.at<b.at end)
+            for i=1,#files-8 do os.remove(files[i].path)end
+        end)
+    end
     return true
 end
 function M.revision(source_id)return revisions[source_id] or 0 end

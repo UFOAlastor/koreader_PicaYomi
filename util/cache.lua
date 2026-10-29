@@ -169,7 +169,7 @@ end
 -- (与设置页的展示口径一致)。
 --
 -- @return { total, covers, images, reading, downloads, data, temp, others }
-function Cache:getSizeBreakdown()
+function Cache:getSizeBreakdown(on_step,on_cleanup)
     local out = {
         total = 0, covers = 0, images = 0, reading = 0,
         downloads = 0, data = 0, temp = 0, others = 0, novel_reading=0, novel_downloads=0,
@@ -186,34 +186,38 @@ function Cache:getSizeBreakdown()
         { prefix = self.TEMP_DIR .. "/",            key = "temp" },
     }
 
-    local function walk(path)
-        for name in lfs.dir(path) do
-            if name ~= "." and name ~= ".." then
-                local p = path .. "/" .. name
-                local mode = lfs.attributes(p, "mode")
-                if mode == "file" then
-                    local size = self:getFileSize(p)
-                    out.total = out.total + size
-
-                    local bucket = "others"
-                    for _i, entry in ipairs(prefixes) do
-                        if p:sub(1, #entry.prefix) == entry.prefix then
-                            bucket = entry.key
-                            break
+    local checked,opened=0,{}
+    local function cleanup()
+        for dir in pairs(opened)do pcall(dir.close,dir);opened[dir]=nil end
+    end
+    if on_cleanup then on_cleanup(cleanup)end
+    local function walk(path,fixed_bucket)
+        if lfs.attributes(path,"mode")~="directory"then return end
+        local iterator,dir=lfs.dir(path);opened[dir]=true
+        for name in iterator,dir do
+            if name~="."and name~=".."then
+                local p=path.."/"..name
+                local attr=lfs.symlinkattributes(p)
+                checked=checked+1
+                if on_step then on_step(checked)end
+                if attr and attr.mode=="file"then
+                    local size=attr.size or 0
+                    local bucket=fixed_bucket or "others"
+                    if not fixed_bucket then
+                        for _,entry in ipairs(prefixes)do
+                            if p:sub(1,#entry.prefix)==entry.prefix then bucket=entry.key;break end
                         end
                     end
-                    out[bucket] = out[bucket] + size
-                elseif mode == "directory" then
-                    walk(p)
-                end
+                    out[bucket]=out[bucket]+size
+                    out.total=out.total+size
+                elseif attr and attr.mode=="directory"then walk(p,fixed_bucket)end
             end
         end
+        opened[dir]=nil;pcall(dir.close,dir)
     end
-
-    if lfs.attributes(root,"mode")=="directory" then walk(root) end
-    out.novel_reading=self:getDirSize(self.BASE_DIR.."/novels/reading")
-    out.novel_downloads=self:getDirSize(self.BASE_DIR.."/novels/downloads")
-    out.total=out.total+out.novel_reading+out.novel_downloads
+    walk(root)
+    walk(self.BASE_DIR.."/novels/reading","novel_reading")
+    walk(self.BASE_DIR.."/novels/downloads","novel_downloads")
     out.downloads=out.downloads+out.novel_downloads
     return out
 end

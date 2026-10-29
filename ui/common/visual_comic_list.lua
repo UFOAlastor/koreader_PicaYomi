@@ -163,6 +163,7 @@ function ComicListItem:coverWidget()
             height = self.cover_h,
             scale_factor = nil,
             alpha = true,
+            file_do_cache = false,
         }
     end
 
@@ -245,27 +246,39 @@ function ComicListItem:buildContent()
     -- 不一样 (真机反馈: "有些显示话数, 有些显示页数, 有些又不显示")。
     local third_line = configured_third or ComicStats.line(comic, { updated_shown = updated_on_second })
     -- 下载状态: 正在下载 -> 进度条 (与第三行同高, 不改变行高);
-    -- 已完成/部分完成 -> 第三行追加章节统计 (追加, 不覆盖: 能显示的就显示)。
+    -- 所有未完成状态均显示进度；已完成才显示作品统计与完成信息。
     -- 第三行为空时不能留下开头的 " · "。
     local download_state = comic.download_state
-    local downloading = download_state == "downloading"
+    local downloading = download_state ~= nil and download_state ~= "done"
+        or comic.download_preparing or comic.download_wait_message and comic.download_wait_message ~= ""
     local function append_meta(text)
         third_line = third_line ~= "" and (third_line .. " · " .. text) or text
     end
     if download_state == "done" then
         append_meta(T(comic.content_type=="novel" and _("已下载 %1 章") or _("已下载 %1 话"), comic.download_total or 0))
         append_meta(_("全部完成"))
-    elseif download_state == "partial" then
-        append_meta(T(comic.content_type=="novel" and _("已下载 %1/%2 章 · 部分未完成") or _("已下载 %1/%2 话 · 部分未完成"),
-            comic.download_done or 0, comic.download_total or 0))
     end
-    if (comic.download_failed or 0)>0 then append_meta(T(_("失败 %1"),comic.download_failed))
-    elseif (comic.download_retryable or 0)>0 then append_meta(T(_("待重试 %1"),comic.download_retryable))end
-    local function phase_summary(phase)
-        local text=T(comic.content_type=="novel"and _("%1/%2 章")or _("%1/%2 话"),comic.download_done or 0,comic.download_total or 0)
-        if(comic.download_failed or 0)>0 then text=text.." · "..T(_("失败 %1"),comic.download_failed)end
-        return text.." · "..phase
-    end
+    local phase
+    if comic.download_wait_message and comic.download_wait_message~=""then
+        phase=comic.download_wait_message
+    elseif comic.download_preparing then
+        phase=_("获取图片…")
+        if comic.content_type=="novel"then
+            phase=_("获取正文…")
+            if comic.download_prepare_stage=="images"then
+                phase=T(_("插图 %1/%2"),comic.download_prepare_current or 0,comic.download_prepare_total or 0)
+            elseif comic.download_prepare_stage=="commit"or comic.download_prepare_stage=="ready"then phase=_("保存章节…")end
+        end
+    elseif (comic.download_failed or 0)>0 then phase=T(_("失败 %1"),comic.download_failed)
+    elseif (comic.download_retryable or 0)>0 then phase=T(_("待重试 %1"),comic.download_retryable)
+    elseif download_state=="partial"or download_state=="failed"then phase=_("部分未完成")end
+    local total=tonumber(comic.download_total)or 0
+    local pct=math.max(0,math.min(1,tonumber(comic.download_progress)
+        or(total>0 and(tonumber(comic.download_done)or 0)/total or 0)))
+    local progress_text=T(comic.content_type=="novel"and _("%1% · %2/%3 章")or _("%1% · %2/%3 话"),
+        math.floor(pct*100+0.5),comic.download_done or 0,total)
+    if phase then progress_text=progress_text.." · "..phase end
+    if downloading then third_line=progress_text end
 
     -- 记下来供测试/排查 (列表与详情必须显示同一行)
     self.meta_text = third_line
@@ -273,24 +286,8 @@ function ComicListItem:buildContent()
 
     --- 第三行 (下载中 = 进度条, 否则统计文本)。宽度随文字列宽度变化。
     local function makeThird(w)
-        if comic.download_wait_message and comic.download_wait_message~=""then
-            return TextBoxWidget:new{text=phase_summary(comic.download_wait_message),face=Theme.face("info"),
-                width=w,height=Screen:scaleBySize(30),bgcolor=self.background,height_overflow_show_ellipsis=true}
-        end
-        if comic.download_preparing then
-            local phase=_("获取图片…")
-            if comic.content_type=="novel"then
-                phase=_("获取正文…")
-                if comic.download_prepare_stage=="images"then
-                    phase=T(_("插图 %1/%2"),comic.download_prepare_current or 0,comic.download_prepare_total or 0)
-                elseif comic.download_prepare_stage=="commit"or comic.download_prepare_stage=="ready"then phase=_("保存章节…")end
-            end
-            return TextBoxWidget:new{text=phase_summary(phase),face=Theme.face("info"),
-                width=w,height=Screen:scaleBySize(30),bgcolor=self.background,height_overflow_show_ellipsis=true}
-        end
         if downloading then
-            local pct = math.max(0, math.min(1, tonumber(comic.download_progress) or 0))
-            local bar_w = math.max(Screen:scaleBySize(80), math.floor(w * 0.5))
+            local bar_w = math.max(Screen:scaleBySize(80), math.floor(w * 0.4))
             local label_w = math.max(Screen:scaleBySize(80), w - bar_w - Screen:scaleBySize(8))
             return HorizontalGroup:new{
                 ProgressWidget:new{
@@ -303,10 +300,7 @@ function ComicListItem:buildContent()
                 },
                 HorizontalSpan:new{ width = Screen:scaleBySize(8) },
                 TextBoxWidget:new{
-                    text = T(comic.content_type=="novel" and _("%1% · %2/%3 章") or _("%1% · %2/%3 话"),
-                        math.floor(pct * 100 + 0.5),
-                        comic.download_done or 0,
-                        comic.download_total or 0),
+                    text = progress_text,
                     face = Theme.face("info"),
                     width = label_w,
                     height = Screen:scaleBySize(24),
@@ -1321,20 +1315,15 @@ end
 function VisualComicList:updatePageText()
     if not self.page_text then return end
     local cur = self:absScreen()
-    local loaded = #(self.buffer or {})
     local total, exact, items = self:totalScreens()
-
-    if total and items then
-        -- 页数与条数都可信: 都显示, 用户才知道能跳到哪、一共多少
-        self.page_text:setText(T(_("第 %1/%2 页 · 共 %3 项"), cur, total, items))
-    elseif total then
-        -- A server-page bound cannot reveal the last page's item count.
-        self.page_text:setText(exact and T(_("第 %1/%2 页"), cur, total)
-            or T(_("第 %1 页 · 最多 %2 页"), cur, total))
-    else
-        -- 服务端没给出可信总量: 只如实说已加载了多少条, 不编总屏数
-        self.page_text:setText(T(_("第 %1 页 · 总页数未知 · 已加载 %2 项"), cur, loaded))
+    if exact and items==nil then
+        items=(self.buffer_first_item or 1)-1+#(self.buffer or {})
     end
+    local pages_text=total and tostring(total)
+    if total and not exact and items==nil then pages_text="≤"..pages_text end
+    local text=pages_text and T(_("第 %1/%2 页"),cur,pages_text)or T(_("第 %1 页"),cur)
+    if items~=nil then text=text..T(_(" · 共 %1 项"),items)end
+    self.page_text:setText(text)
 end
 
 --- 跳到指定屏 (绝对屏号)

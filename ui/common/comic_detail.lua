@@ -410,13 +410,28 @@ function ComicDetail:handleEvent(event)
 end
 
 function ComicDetail:tryAutoContinue()
-    if not self.auto_continue or not self.episodes_data then return end
+    if not self.auto_continue then return end
     local stack = UIManager._window_stack or {}
     if self._closed or self.opening_reader or not stack[#stack] or stack[#stack].widget ~= self then return end
-    self.auto_continue = nil
-    if self.navigation and self.navigation.source_id ~= self.source_id then self:revealQuickEntry();return end
+    if self.navigation and self.navigation.source_id ~= self.source_id then self.auto_continue=nil;self:revealQuickEntry();return end
     local ok, history = pcall(self.comic_model.getHistoryItem, self.comic_model, self.comic._id, self.source_id)
     local order = ok and history and (history.episode or history.last_page)
+    if not self.episodes_data and self:isNovel()and order~=nil and self.source.restoreNovelResume then
+        local episode=self.source:restoreNovelResume(self.comic._id,history.novel_resume,order)
+        if not episode then
+            local entry=require("util.offline_library").entry(self.source_id,self.comic._id)
+            local target=entry and entry.targets and entry.targets[tostring(order)]
+            local record=target and self.source:makeNovelResume(self.comic._id,target)
+            episode=record and self.source:restoreNovelResume(self.comic._id,record,order)
+        end
+        if episode then
+            self.auto_continue=nil;self._resume_direct=true
+            self:openReader(episode,{from_beginning=false})
+            return
+        end
+    end
+    if not self.episodes_data then return end
+    self.auto_continue=nil
     if ok and order==nil and self.navigation.open_reading then
         self:startReadingFromBeginning()
         return
@@ -625,6 +640,8 @@ function ComicDetail:coverWidget()
             width = cover_w,
             height = cover_h,
             scale_factor = nil,
+            alpha = true,
+            file_do_cache = false,
         }
         -- 记下"当前这一屏的封面控件与图片路径": 点封面放大要用
         -- (封面控件每次重建都换新实例, 所以每次都覆盖)
@@ -868,6 +885,7 @@ function ComicDetail:createHeader(height)
                     align = "left",
                     (function()
                         local widget = TextBoxWidget:new{
+                            bgcolor = Blitbuffer.COLOR_GRAY_E,
                             text = self.comic.title or _("未知标题"),
                             face = Theme.face("detail_title"),
                             bold = true,
@@ -879,6 +897,7 @@ function ComicDetail:createHeader(height)
                         return widget
                     end)(),
                     TextBoxWidget:new{
+                            bgcolor = Blitbuffer.COLOR_GRAY_E,
                         text = T(_("作者：%1"), self.comic.author_text or _("未知作者")),
                         face = Theme.face("info"),
                         width = text_w,
@@ -886,6 +905,7 @@ function ComicDetail:createHeader(height)
                         height_overflow_show_ellipsis = true,
                     },
                     TextBoxWidget:new{
+                            bgcolor = Blitbuffer.COLOR_GRAY_E,
                         text = T(_("分类：%1"), self.comic.categories_text or _("未分类")),
                         face = Theme.face("info"),
                         width = text_w,
@@ -893,6 +913,7 @@ function ComicDetail:createHeader(height)
                         height_overflow_show_ellipsis = true,
                     },
                     TextBoxWidget:new{
+                            bgcolor = Blitbuffer.COLOR_GRAY_E,
                         text = status_text,
                         face = Theme.face("info"),
                         width = text_w,
@@ -906,6 +927,7 @@ function ComicDetail:createHeader(height)
                 -- 记下实例: tap 走本页的兜底消费者 (onTapConsume), 按绘制区命中,
                 -- 与封面放大同一套做法 (子控件先收到事件, 这里只处理落空的 tap)。
                 local widget = TextBoxWidget:new{
+                    bgcolor = Blitbuffer.COLOR_GRAY_E,
                     text = description,
                     face = Theme.face("info"),
                     width = inner_w,
@@ -2122,6 +2144,7 @@ function ComicDetail:onSwipe(_arg, ges)
 end
 
 function ComicDetail:onCloseWidget()
+    if self._closed then return end
     self._closed = true
     if self._novel_session and self._novel_session.close then self._novel_session.close() end
     if self._novel_task then self._novel_task:cancel();self._novel_task=nil end

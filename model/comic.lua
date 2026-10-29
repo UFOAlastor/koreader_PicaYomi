@@ -71,12 +71,16 @@ function ComicModel:saveHistory(comic_id, title, episode, source_id, progress)
             item.page = nil
             item.pages = nil
             item.episode_title = nil
+            item.novel_resume = nil
         end
         item.episode = episode
         if progress and type(progress.episode_title) == "string" then
             item.episode_title = progress.episode_title
         end
         if progress then
+            if progress.novel_resume~=nil then
+                item.novel_resume=type(progress.novel_resume)=="table"and require("source.contract").copy(progress.novel_resume)or nil
+            end
             if progress.content_type=="novel" then item.content_type="novel" end
             if type(progress.thumb) == "string" and progress.thumb ~= "" then item.thumb = progress.thumb end
             local p = tonumber(progress.page)

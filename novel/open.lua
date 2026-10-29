@@ -12,6 +12,9 @@ function M.open(detail,episode,options)
     local book=tostring(detail.comic._id)
     local episodes=detail.episodes_data and detail.episodes_data.episodes or {episode}
     local state={closed=false,source=source,book=book}
+    local directory_pending=detail._resume_direct==true
+    local directory_failed=false
+    local resume_scope=source.novelResumeScope and source:novelResumeScope(book)
     detail._novel_session=state
     local release=require("util.download_queue").instance():pause("novel reading")
     local function cancel_prefetch()
@@ -28,6 +31,7 @@ function M.open(detail,episode,options)
         if state.closed then return end
         state.closed=true
         cancel_prefetch()
+        if state.directory_task then state.directory_task:cancel();state.directory_task=nil end
         if state.unwatch then state.unwatch();state.unwatch=nil end
         if state.unwatch_prefetch then state.unwatch_prefetch();state.unwatch_prefetch=nil end
         if detail._novel_task then detail._novel_task:cancel() end
@@ -35,11 +39,15 @@ function M.open(detail,episode,options)
         detail._novel_task=nil;detail.opening_reader=false;detail._novel_session=nil
         if detail.revealQuickEntry then detail:revealQuickEntry()end
         release()
-        if not detail._closed then detail.resume_episode_order=nil;detail:refresh() end
+        if not detail._closed then
+            detail.resume_episode_order=nil;detail:refresh()
+            if detail._resume_direct then UI:nextTick(function()if not detail._closed then detail:loadMissingNovelChapters()end end)end
+        end
     end
     local function record(ep,reader)
         local ok,saved=pcall(detail.comic_model.saveHistory,detail.comic_model,book,detail.comic.title,ep.order,detail.source_id,{
             episode_title=ep.title,thumb=detail.comic.thumb,content_type="novel",
+            novel_resume=source.makeNovelResume and resume_scope==source:novelResumeScope(book)and source:makeNovelResume(book,ep)or false,
             page=reader.document:getPageFromXPointer(reader.document:getXPointer()),pages=reader.document:getPageCount(),
         })
         if not ok or saved==false then
@@ -120,10 +128,37 @@ function M.open(detail,episode,options)
         end
         if jobs[1]then jobs[1].timer=function()jobs[1].timer=nil;pump()end;UI:scheduleIn(.5,jobs[1].timer)end
     end
+    local function load_directory()
+        if not directory_pending or state.directory_task or state.closed then return end
+        local generation=source.sessionGeneration and source:sessionGeneration()
+        local function alive()
+            return not state.closed and not detail._closed and (not generation or source:sessionGeneration()==generation)
+                and (not source.novelResumeScope or source:novelResumeScope(book)==resume_scope)
+        end
+        state.directory_task=Loading.background(nil,function()
+            local ok,data=detail:defaultFetchChapters(book,1,{deadline=require("socket").gettime()+60,isCancelled=function()return not alive()end})
+            state.directory_task=nil
+            if not alive()then return end
+            directory_pending=false
+            local found=false
+            for _,item in ipairs(ok and data and data.episodes or {})do
+                if tostring(item.order)==tostring(state.episode.order)then found=true;break end
+            end
+            if found then
+                detail:setEpisodesData(data);episodes=detail.episodes_data.episodes;detail._resume_direct=nil
+                prefetch(state.episode)
+            else directory_failed=true end
+            if state.reader and state.reader.menu then state.reader.menu:setUpdateItemTable()end
+        end,{delay=.25,timeout=60,is_cancelled=function()return not alive()end,
+            on_cancel=function()state.directory_task=nil;directory_pending=false;directory_failed=true end,
+            on_error=function()state.directory_task=nil;directory_pending=false;directory_failed=true end})
+    end
     state.unwatch_prefetch=require("novel.prefetch").watch(function()
         if not state.closed and not detail._novel_task and state.episode then prefetch(state.episode)end
     end)
-    if source.watchSession then state.unwatch=source:watchSession(cancel_prefetch)end
+    if source.watchSession then state.unwatch=source:watchSession(function()
+        cancel_prefetch();if state.directory_task then state.directory_task:cancel();state.directory_task=nil end
+    end)end
     start=function(ep,from_beginning)
         if state.closed or detail._novel_task then return end
         local job
@@ -182,7 +217,7 @@ function M.open(detail,episode,options)
                 ready=function(reader)
                     state.reader=reader;state.episode=ep;state.switching=false
                     record(ep,reader)
-                    prefetch(ep)
+                    prefetch(ep);load_directory()
                 end,
                 on_position=function(reader) record(ep,reader) end,
                 on_close=function(reader) if state.reader==reader then finish() end end,
@@ -190,9 +225,8 @@ function M.open(detail,episode,options)
                     local i=index(ep)
                     return {
                         {text="返回小说详情",callback=function()reader:onClose() end},
-                        {text="上一章："..(i and episodes[i-1] and episodes[i-1].title or ""),enabled=i and i>1 or false,callback=function()if i and episodes[i-1] then start(episodes[i-1],true) end end},
-                        {text="下一章："..(i and episodes[i+1] and episodes[i+1].title or ""),enabled=i and i<#episodes or false,callback=function()if i and episodes[i+1] then start(episodes[i+1],true) end end},
-                        {text="章节目录",callback=function()reader:onClose() end},
+                        {text="上一章："..(i and episodes[i-1] and episodes[i-1].title or ""),enabled=not directory_pending and not directory_failed and i and i>1 or false,callback=function()if i and episodes[i-1] then start(episodes[i-1],true) end end},
+                        {text="下一章："..(i and episodes[i+1] and episodes[i+1].title or ""),pending=directory_pending and "loading"or directory_failed and "failed",enabled=not directory_pending and not directory_failed and i and i<#episodes or false,callback=function()if i and episodes[i+1] then start(episodes[i+1],true) end end},
                     }
                 end,
             })

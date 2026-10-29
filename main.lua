@@ -189,6 +189,8 @@ function Picayomi:init()
                 end
             end)
             self.ui:registerPostReaderReadyCallback(function()
+                local native_ok,native_err=pcall(function()require("ui.native_edge_back").install(self.ui)end)
+                if not native_ok then logger.warn("Picayomi: 原生边缘返回安装失败: "..tostring(native_err))end
                 local ok, err = pcall(function()
                     PicaReader:onReaderReady(self.ui)
                 end)
@@ -583,7 +585,7 @@ function Picayomi:addToMainMenu(menu_items)
     local novel=self.ui and self.ui._picayomi_novel_controls
     if novel then
         novel:addToMainMenu(menu_items)
-        promoteInToolsMenu({"picayomi_return","picayomi_prev_episode","picayomi_next_episode","picayomi_chapter_directory"})
+        promoteInToolsMenu({"picayomi_return","picayomi_prev_episode","picayomi_next_episode"})
         return
     end
 

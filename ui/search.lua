@@ -45,13 +45,21 @@ function Search:init()
     self.current_page = 1
     self.total_pages = 1
     self.total_count = nil
-    -- 默认排序取**当前源声明的第一个选项**, 不要写死某个源的取值
-    -- (源 A 是 dd, 源 B 是 mr; 写死会导致换源后排序失效)
-    local cur_source = require("source.registry"):getCurrent()
-    local sort_opts = cur_source and cur_source.getSortOptions
-        and cur_source:getSortOptions("search")
-    self.current_sort = sort_opts and sort_opts[1] and sort_opts[1].value or nil
+    self:ensureSourceSort(require("source.registry"):getCurrent())
     self.current_keyword = ""
+end
+
+-- A reused page may outlive a source switch or updated sort declarations.
+function Search:ensureSourceSort(source)
+    local options=source and source.getSortOptions and source:getSortOptions("search") or {}
+    local valid=false
+    if self._sort_source==source then
+        for _,option in ipairs(options)do
+            if option.value==self.current_sort then valid=true;break end
+        end
+    end
+    if not valid then self.current_sort=options[1] and options[1].value or nil end
+    self._sort_source=source
 end
 
 function Search:show(return_callback)
@@ -84,6 +92,7 @@ end
 
 function Search:showSearchDialog()
     self.source=require("source.registry"):getCurrent()
+    self:ensureSourceSort(self.source)
     if not require("ui.common.source_access").check(self.source,"search")then return end
     self:closeSearchDialog()
     self._left=false
@@ -319,6 +328,7 @@ function Search:performSearch()
         UIManager:show(InfoMessage:new{text=T(_("搜索历史保存失败：%1"),save_error),timeout=3},"ui")
     end
     local source=require("source.registry"):getCurrent()
+    self:ensureSourceSort(source)
     if not require("ui.common.source_access").check(source,"search")then return end
     self._left=false
     self._query_generation=(self._query_generation or 0)+1

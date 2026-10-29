@@ -27,6 +27,15 @@ local UIManager = require("ui/uimanager")
 local logger = require("util.logger")
 
 local LoadingTask = {}
+local handles=setmetatable({},{__mode="k"})
+function LoadingTask.cancelAll()
+    local pending={}
+    for handle in pairs(handles)do pending[#pending+1]=handle end
+    for _,handle in ipairs(pending)do
+        if handle.task then handle.task.nonblocking=true end
+        handle:cancel()
+    end
+end
 
 -- Shared by comic and novel return paths; paint before blocking reader cleanup.
 function LoadingTask.showReturning(reason)
@@ -54,7 +63,9 @@ end
 function LoadingTask.background(loading, fn, opts)
     opts = opts or {}
     local handle = {}
+    handles[handle]=true
     local function cleanup()
+        handles[handle]=nil
         if loading then LoadingTask.close(loading) end
     end
     local function cancelled()
@@ -74,7 +85,9 @@ function LoadingTask.background(loading, fn, opts)
     end
     handle.start = function()
         if handle.cancelled then return end
-        handle.task = require("network.async_task").run(fn, {
+        handle.task = require("network.async_task").run(function()
+            fn();handles[handle]=nil
+        end, {
             timeout = opts.timeout,
             reuse_worker = opts.reuse_worker,
             is_cancelled = opts.is_cancelled,
@@ -222,7 +235,22 @@ function LoadingTask.run(opts)
             end,
         })
     elseif opts.delay and opts.delay > 0 then
-        UIManager:scheduleIn(opts.delay, step)
+        local handle={}
+        handles[handle]=true
+        local start=function()
+            if handle.cancelled then return end
+            handles[handle]=nil
+            step()
+        end
+        function handle:cancel()
+            if self.cancelled then return end
+            self.cancelled=true;handles[self]=nil
+            UIManager:unschedule(start);LoadingTask.close(loading)
+            if opts.set_busy then opts.set_busy(false)end
+            if opts.on_cancel then opts.on_cancel()end
+        end
+        loading.dismiss_callback=function()handle:cancel()end
+        UIManager:scheduleIn(opts.delay,start)
     else
         step()
     end

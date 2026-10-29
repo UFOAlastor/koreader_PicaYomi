@@ -18,10 +18,20 @@ local M = {}
 
 function M.shutdownTasks()
     local actions={
+        function()require("ui.downloads").shutdownAll()end,
         function()require("source.extensions.updater").cancel()end,
         function()require("util.download_queue").instance():shutdown("已退出 PicaYomi，可在下载页重试")end,
+        function()require("ui.common.loading_task").cancelAll()end,
         function()require("network.async_task").cancelAll(true)end,
         function()require("util.cover_cache").shutdown()end,
+        function()require("util.favorites").releaseMemory()end,
+        function()require("util.cache"):clear()end,
+        function()
+            for _,source in pairs(require("source.registry"):getAll())do
+                if source.releaseMemory then source:releaseMemory()end
+            end
+        end,
+        function()require("ui.home").instance=nil end,
     }
     for _,action in ipairs(actions)do
         local ok,err=pcall(action)

@@ -24,7 +24,8 @@ function Controls:addToMainMenu(items)
     if not self:current() then return end
     local actions=self:actions()
     items.picayomi,items.picayomi_novel,items.picayomi_save_image=nil,nil,nil
-    local ids={"picayomi_return","picayomi_prev_episode","picayomi_next_episode","picayomi_chapter_directory"}
+    items.picayomi_chapter_directory=nil
+    local ids={"picayomi_return","picayomi_prev_episode","picayomi_next_episode"}
     for i,id in ipairs(ids) do
         local action=actions[i];items[id]=nil
         if action and action.enabled~=false then
@@ -36,6 +37,10 @@ function Controls:onEndOfBook()
     if not self:current() then return false end
     if self.returning or self.end_dialog then return true end
     local next_chapter=self:actions()[3]
+    if next_chapter and next_chapter.pending then
+        UI:show(require("ui/widget/infomessage"):new{text=next_chapter.pending=="loading"and "章节目录仍在后台加载，请稍候。"or "章节目录加载失败，请返回详情重试。",timeout=3},"ui")
+        return true
+    end
     if next_chapter and next_chapter.enabled~=false then
         self.end_dialog=require("ui.common.action_style").ConfirmBox:new{
             is_picayomi_page=true,

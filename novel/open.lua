@@ -12,6 +12,7 @@ function M.open(detail,episode,options)
     local book=tostring(detail.comic._id)
     local episodes=detail.episodes_data and detail.episodes_data.episodes or {episode}
     local state={closed=false,source=source,book=book}
+    local restore_details=detail._quick_entry==true
     local directory_pending=detail._resume_direct==true
     local directory_failed=false
     local resume_scope=source.novelResumeScope and source:novelResumeScope(book)
@@ -41,7 +42,16 @@ function M.open(detail,episode,options)
         release()
         if not detail._closed then
             detail.resume_episode_order=nil;detail:refresh()
-            if detail._resume_direct then UI:nextTick(function()if not detail._closed then detail:loadMissingNovelChapters()end end)end
+            if restore_details or detail._resume_direct then
+                UI:scheduleIn(.05,function()
+                    if detail._closed or detail.opening_reader then return end
+                    -- Quick resume deliberately skipped metadata. Fill it only
+                    -- after returning; reuse cancellable detail loading, which
+                    -- also restores a missing catalogue when necessary.
+                    if restore_details then detail:loadDetails()
+                    else detail:loadMissingNovelChapters()end
+                end)
+            end
         end
     end
     local function record(ep,reader)

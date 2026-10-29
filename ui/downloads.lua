@@ -590,8 +590,11 @@ function Downloads:confirmDelete(entry)
         text = T(_("确定删除《%1》的下载吗？\n\n可删除全部，或仅删除已读完章节；未读和半读章节会保留。删除的文件无法恢复。"), title),
         ok_text = _("删除全部"),
         cancel_text = _("取消"),
+        no_ok_button = true,
+        other_buttons_first = true,
         other_buttons = {{
             {text=_("删除已读"),callback=function()self:startDeleteDownload(entry,true)end},
+            {text=_("删除全部"),callback=function()self:startDeleteDownload(entry)end},
         }},
         ok_callback = function()
             self:startDeleteDownload(entry)

@@ -114,7 +114,8 @@ function M.prepare(session,options)
             assert(response and response.status==200 and type(response.body)=="string" and #response.body<=4*1024*1024,"illustration download failed: "..tostring(download_error or "invalid response"))
             local w,h,format=require("util.image_size").from_data(response.body)
             assert(w and (format=="png" or format=="jpeg" or format=="webp"),"unsupported illustration")
-            if w*h>4*1024*1024 then
+            local converted=false
+            if w*h>4*1024*1024 or format=="webp" then
                 -- Two-page light-novel illustrations commonly exceed 4 MP.
                 -- Reuse the comic decoder's bounded native scaling rather than
                 -- allocating the full image or dropping the complete chapter.
@@ -123,7 +124,7 @@ function M.prepare(session,options)
                 local input=stage.."/"..asset.path
                 Store.write(input,response.body)
                 local tw,th=require("util.image_guard").fit_dimensions(w,h,12*1024*1024)
-                local zoom=math.min(tw/w,th/h)
+                local zoom=math.min(1,tw/w,th/h)
                 if format=="jpeg" then
                     for _,denom in ipairs({2,4,8}) do
                         if math.ceil(w/denom)*math.ceil(h/denom)<=3*1024*1024 then zoom=1/denom;break end
@@ -134,32 +135,46 @@ function M.prepare(session,options)
                 local memory=require("util.memory_guard").instance()
                 local snapshot=memory:snapshot()
                 local budget=math.min(40*1024*1024,snapshot.available and memory:prepare_decode() or 40*1024*1024)
-                local bitmap,decode_error=require("util.scaled_decode").decode_region(input,format,0,h,true,
-                    budget,zoom,response.body)
+                local bitmap,decode_error,required
+                for attempt=1,4 do
+                    guard(options.call)
+                    bitmap,decode_error,required=require("util.scaled_decode").decode_region(input,format,0,h,true,
+                        budget,zoom,response.body)
+                    if bitmap or decode_error~="memory_budget" then break end
+                    require("util.logger").warn(string.format(
+                        "Picayomi illustration budget: format=%s size=%dx%d budget=%d required=%d scale=%.4f attempt=%d",
+                        format,w,h,budget,tonumber(required)or 0,zoom,attempt))
+                    if zoom<=1/8 then break end
+                    -- Reuse the resident compressed bytes. Smaller output does
+                    -- not remove progressive/alpha workspace requirements.
+                    zoom=math.max(1/8,zoom/2)
+                    budget=math.min(budget,memory:prepare_decode())
+                end
+                if not bitmap and decode_error=="memory_budget" then
+                    error(require("source.contract").error("resource_limit",string.format(
+                        "第 %d/%d 张插图处理所需内存不足，已尝试缩小；请关闭阅读后再继续下载。",image_number,image_count),
+                        "prepareChapter",nil,false),0)
+                end
                 assert(bitmap,"bounded illustration decode failed: "..tostring(decode_error))
                 local target=input:gsub("%.img$",".png")
-                local wrote=pcall(bitmap.writePNG,bitmap,target)
+                local wrote,write_error=pcall(function()
+                    guard(options.call)
+                    bitmap:writePNG(target)
+                end)
                 bitmap:free();os.remove(input)
-                assert(wrote,"illustration conversion failed")
+                if not wrote then error(write_error,0)end
                 response.body=assert(Store.read(target,4*1024*1024),"converted illustration too large")
                 w,h,format=require("util.image_size").from_data(response.body)
                 assert(w and w*h<=4*1024*1024 and format=="png","converted illustration exceeds limit")
-            end
-            -- Some CDNs return WebP even at a .jpg URL. Normalize it for crengine.
-            if format=="webp" then
-                local bitmap=assert(require("ui/renderimage"):renderImageData(response.body,#response.body,false),"WebP decode failed")
-                local target=stage.."/images/"..asset.path:match("(%d%d%d%d)%.img$")..".png"
-                local wrote=pcall(bitmap.writePNG,bitmap,target)
-                bitmap:free()
-                assert(wrote,"WebP conversion failed")
-                response.body=assert(Store.read(target,4*1024*1024),"converted illustration too large")
-                format="png"
+                converted=true
             end
             local image_path=asset.path:gsub("%.img$","."..format)
             cleaned.html=cleaned.html:gsub(asset.path:gsub("(%W)","%%%1"),function() return image_path end)
             save(image_path,response.body)
-            local image=require("ffi/pic").openDocument(stage.."/"..image_path)
-            assert(image,"illustration decode failed");image:close()
+            if not converted then
+                local image=require("ffi/pic").openDocument(stage.."/"..image_path)
+                assert(image,"illustration decode failed");image:close()
+            end
             progress("images",number,#cleaned.assets)
         end
         progress("commit",#cleaned.assets,#cleaned.assets)

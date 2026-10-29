@@ -10,9 +10,11 @@ A manga and novel reader plugin for [KOReader](https://github.com/koreader/korea
 
 ## Preview
 
-| Manga list | Manga details | Novel details | Novel reading |
+| Home | Manga details | Novel details | Novel reading |
 |---|---|---|---|
-| ![Manga list](docs/screenshots/comic-list.png) | ![Manga details](docs/screenshots/detail.png) | ![Novel details](docs/screenshots/novel-detail.png) | ![Novel reading](docs/screenshots/novel-reader.png) |
+| ![Home](docs/screenshots/home.png) | ![Manga details](docs/screenshots/detail.png) | ![Novel details](docs/screenshots/novel-detail.png) | ![Novel reading](docs/screenshots/novel-reader.png) |
+
+The home preview uses sample titles and covers.
 
 ## Installation
 
@@ -40,6 +42,8 @@ See [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases) and the
 To update the plugin, exit KOReader, replace the plugin folder with the new release, and restart. Keep the KOReader data directory to preserve accounts, settings, favorites, history, and downloads; back up important data first.
 
 For ordinary KOReader books, enable **设置 → 操作与手势 → 原生 Reader 边缘返回** (Native Reader edge back, off by default). Swipe inward from an allowed edge to save your reading position and return to the file browser. This switch is independent; reading inside PicaYomi still returns to the work details.
+
+Chapter selection offers **Select all chapters** and **Select unread chapters** on the same row. The download deletion dialog offers **Delete all** and **Delete read**. Partially read chapters and older history without confirmed completion are preserved by Delete read.
 
 ## Help and contribution
 

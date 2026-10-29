@@ -159,7 +159,23 @@ end
 local function decorate_menu(menu)
     for _,row in ipairs(menu.item_group or {}) do
         local entry=row.entry
-        if entry and entry.picayomi_underline then
+        if entry and entry.picayomi_actions then
+            local actions=entry.picayomi_actions
+            local group=require("ui/widget/horizontalgroup"):new{}
+            local width=math.floor(menu.item_dimen.w/#actions)
+            for i,action in ipairs(actions)do
+                group[i]=Style.row{width=i==#actions and menu.item_dimen.w-width*(i-1)or width,
+                    height=menu.item_dimen.h,text=action.text,enabled=action.enabled}
+            end
+            row[1]:free();row[1]=group
+            row.onTapSelect=function(self,_,ges)
+                if not self.dimen then return true end
+                local index=math.min(#actions,math.max(1,math.floor((ges.pos.x-self.dimen.x)/width)+1))
+                local action=actions[index]
+                if action and action.enabled~=false then action.callback()end
+                return true
+            end
+        elseif entry and entry.picayomi_underline then
             local frame=row[1]
             if not frame._picayomi_underline then
                 frame._picayomi_underline=true

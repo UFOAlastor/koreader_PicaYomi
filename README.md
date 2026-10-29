@@ -8,9 +8,11 @@
 
 ## 页面预览
 
-| 漫画列表 | 漫画详情 | 小说详情 | 小说阅读 |
+| 主页 | 漫画详情 | 小说详情 | 小说阅读 |
 |---|---|---|---|
-| ![漫画列表](docs/screenshots/comic-list.png) | ![漫画详情](docs/screenshots/detail.png) | ![小说详情](docs/screenshots/novel-detail.png) | ![小说阅读](docs/screenshots/novel-reader.png) |
+| ![主页](docs/screenshots/home.png) | ![漫画详情](docs/screenshots/detail.png) | ![小说详情](docs/screenshots/novel-detail.png) | ![小说阅读](docs/screenshots/novel-reader.png) |
+
+主页预览使用示例书目与封面。
 
 ## 安装
 
@@ -66,6 +68,8 @@ koreader/
 横屏会重新排布预览和功能入口；空间不足时依次收起已下载、历史、收藏的封面，保留文字入口，无需滚动或翻页。
 
 搜索时，点击“搜索”“历史”或“取消”都会关闭输入框；从历史页或搜索结果返回时回到原页面。提交非空关键词即保存搜索历史，失败、超时或没有结果也会保留。
+
+下载选择可使用同排的“全选章节”和“全选未读章节”；已下载内容不重复选择。在“删除下载”提示窗中，可选择“删除全部”或“删除已读”。未读和半读章节会在删除已读时保留；无法确认读完的旧历史也会保留。
 
 详情、下载和设置页统一使用圆角描边的操作入口；灰色文字表示说明或暂不可用。章节与漫画列表仍可整行点击，设置项右侧显示当前值。
 

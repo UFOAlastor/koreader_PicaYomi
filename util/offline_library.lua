@@ -689,6 +689,56 @@ function M.entry(source_id, comic_id)
 end
 
 --- 删除一部漫画的全部下载 (图片 + 清单)
+-- Remove only explicitly selected chapters; preserve book metadata and other targets.
+function M.removeChapters(source_id,comic_id,orders,progress)
+    local entry=entry_of(source_id,comic_id,false)
+    if not entry then return false,"下载记录不存在"end
+    local selected={}
+    for key,ch in pairs(entry.chapters or {})do
+        if orders[tostring(ch.order)]then selected[#selected+1]={key=key,chapter=ch}end
+    end
+    if #selected==0 then return false,"没有已读完的下载章节"end
+    for _,item in ipairs(selected)do
+        item.state,item.error=item.chapter.state,item.chapter.error
+        item.chapter.state="partial";item.chapter.error="删除未完成，可重试"
+    end
+    if not M.save(true)then
+        for _,item in ipairs(selected)do item.chapter.state,item.chapter.error=item.state,item.error end
+        return false,"清单保存失败，未删除文件"
+    end
+    local done=0
+    local function step()if progress then progress(done,#selected)end end
+    step()
+    for _,item in ipairs(selected)do
+        local ch=item.chapter
+        local ok,err=pcall(function()
+            if ch.document then require("novel.document").remove(Cache.BASE_DIR.."/novels/downloads",ch.document.key,step)end
+            local dir=M.chapterDir(source_id,comic_id,ch.order)
+            if lfs.attributes(dir,"mode")=="directory"then
+                for name in lfs.dir(dir)do
+                    if name~="."and name~=".."then assert(os.remove(dir.."/"..name));step()end
+                end
+                assert(lfs.rmdir(dir))
+            end
+        end)
+        if not ok then return false,err end
+        done=done+1;step()
+    end
+    local old_chapters,old_targets={},{}
+    for _,item in ipairs(selected)do
+        old_chapters[item.key]=entry.chapters[item.key];entry.chapters[item.key]=nil
+        local key=tostring(item.chapter.order)
+        if entry.targets then old_targets[key]=entry.targets[key];entry.targets[key]=nil end
+    end
+    if not M.save(true)then
+        for key,ch in pairs(old_chapters)do entry.chapters[key]=ch end
+        for key,target in pairs(old_targets)do entry.targets[key]=target end
+        return false,"文件已删除，但清单保存失败，请重试"
+    end
+    if not next(entry.chapters or {})and not next(entry.targets or {})then return M.remove(source_id,comic_id,progress)end
+    return true
+end
+
 function M.remove(source_id, comic_id,progress)
     local entry = entry_of(source_id, comic_id, false)
     if entry then

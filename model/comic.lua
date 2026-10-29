@@ -62,7 +62,15 @@ function ComicModel:saveHistory(comic_id, title, episode, source_id, progress)
     -- 必须在**全部**记录上改: 只拿当前源那一份回写会把别的源的记录抹掉
     local history = readAllHistory()
 
+    local function rememberCompleted(item)
+        local page,pages=tonumber(item.page),tonumber(item.pages)
+        if item.episode~=nil and page and pages and pages>0 and page>=pages then
+            item.completed_chapters=type(item.completed_chapters)=="table"and item.completed_chapters or {}
+            item.completed_chapters[tostring(item.episode)]=true
+        end
+    end
     local function apply(item)
+        rememberCompleted(item)
         item.title = title
         item.time = os.time()
         -- 换话: 旧页码属于上一话, 必须丢掉 —— 否则历史里会出现
@@ -87,6 +95,7 @@ function ComicModel:saveHistory(comic_id, title, episode, source_id, progress)
             local total = tonumber(progress.pages)
             if p and p >= 1 then item.page = p end
             if total and total >= 1 then item.pages = total end
+            rememberCompleted(item)
         end
     end
 
@@ -217,6 +226,22 @@ function ComicModel:getHistory(source_id)
 end
 
 --- 获取特定漫画的历史记录 (必须同源, 否则不同源的同名 id 会互相串)
+-- Only explicit chapter completion is actionable; never infer skipped chapters.
+function ComicModel:completedChapters(comic_id,source_id)
+    local out={}
+    for _,item in ipairs(readAllHistory())do
+        if tostring(item.id)==tostring(comic_id)and item.source==source_id then
+            for order,done in pairs(type(item.completed_chapters)=="table"and item.completed_chapters or {})do
+                if done==true then out[tostring(order)]=true end
+            end
+            local page,pages=tonumber(item.page),tonumber(item.pages)
+            if item.episode~=nil and page and pages and pages>0 and page>=pages then out[tostring(item.episode)]=true end
+            break
+        end
+    end
+    return out
+end
+
 function ComicModel:getHistoryItem(comic_id, source_id)
     if not comic_id then
         return nil

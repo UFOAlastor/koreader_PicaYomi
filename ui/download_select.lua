@@ -5,7 +5,7 @@
 --   章节可能几十上百条, 弹窗放不下; 详情页本身是"等高行分页 ListView",
 --   结构上不支持再嵌一个可滚动区域 (与评论页同一类约束)。
 --
--- 交互: 点一行切换勾选; 「全选本页」批量切换; 「开始下载」把勾选的章节
+-- 交互: 点一行切换勾选; 「全选章节」批量切换; 「开始下载」把勾选的章节
 -- 交给 util/download_queue。已下载的章节显示 ✓ 且不可重复勾选。
 local Device = require("device")
 local Menu = require("ui.common.action_style").Menu
@@ -141,12 +141,13 @@ function DownloadSelect:buildItemTable()
         select_enabled = self:selectedCount()>0,
         callback = function() self:startDownload() end,
     })
+    local all_text=self:allSelected()and _("取消全选")or _("全选章节")
     table.insert(items, {
-        text = self:allSelected()
-            and _("□ 取消全选")
-            or T(_("■ 全选本页（%1 %2可选）"), selectable,self:chapterUnit()),
-        enabled = selectable > 0,
-        callback = function() self:toggleAll() end,
+        text=all_text,enabled=selectable>0,callback=function()self:toggleAll()end,
+        picayomi_actions={
+            {text=all_text,enabled=selectable>0,callback=function()self:toggleAll()end},
+            {text=_("全选未读章节"),enabled=selectable>0,callback=function()self:selectUnread()end},
+        },
     })
     -- 说明行: 灰字 + 圆点前缀, 与可点的行区分开 (它本来也点不动)
     table.insert(items, {
@@ -257,6 +258,15 @@ end
 function DownloadSelect:toggleChapter(order)
     if self.downloaded[order] then return end
     self.selected[order] = not self.selected[order] or nil
+    self:refresh()
+end
+
+function DownloadSelect:selectUnread()
+    local completed=require("model.comic"):completedChapters(self.comic._id,self.source_id)
+    self.selected={}
+    for _,ep in ipairs(self.episodes)do
+        if not self.downloaded[ep.order]and not completed[tostring(ep.order)]then self.selected[ep.order]=true end
+    end
     self:refresh()
 end
 

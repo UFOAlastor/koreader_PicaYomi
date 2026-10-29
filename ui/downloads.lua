@@ -587,16 +587,19 @@ function Downloads:confirmDelete(entry)
     local title = entry.title or entry._id
     -- ConfirmBox 自己会在 ok_callback 之后关掉自己, 这里不要再 close 一次
     UIManager:show(ConfirmBox:new{
-        text = T(_("确定删除《%1》的全部下载吗？\n\n已下载的图片会被删掉，无法恢复。"), title),
-        ok_text = _("删除"),
+        text = T(_("确定删除《%1》的下载吗？\n\n可删除全部，或仅删除已读完章节；未读和半读章节会保留。删除的文件无法恢复。"), title),
+        ok_text = _("删除全部"),
         cancel_text = _("取消"),
+        other_buttons = {{
+            {text=_("删除已读"),callback=function()self:startDeleteDownload(entry,true)end},
+        }},
         ok_callback = function()
             self:startDeleteDownload(entry)
         end,
     }, "ui")
 end
 
-function Downloads:startDeleteDownload(entry)
+function Downloads:startDeleteDownload(entry,read_only)
     if self._delete_task then return false end
     local Loading=require("ui.common.loading_task")
     local Async=require("network.async_task")
@@ -624,7 +627,7 @@ function Downloads:startDeleteDownload(entry)
         end
     end
     self._delete_task=Loading.background(notice,function()
-        self:deleteDownload(entry,progress)
+        self:deleteDownload(entry,progress,read_only)
         Loading.close(notice);finish()
     end,{delay=.05,timeout=600,is_cancelled=function()return self._closed end,
         on_cancel=function()finish(true)end,on_error=function(err)
@@ -635,12 +638,17 @@ end
 
 --- 真正删除: 先取消队列, 再删文件与清单条目
 -- @return 是否删掉了清单条目
-function Downloads:deleteDownload(entry,progress)
+function Downloads:deleteDownload(entry,progress,read_only)
     if type(entry) ~= "table" then return false end
     local sid = entry.source_id or "unknown"
     local cid = entry._id
     if cid == nil then return false end
 
+    local orders=read_only and require("model.comic"):completedChapters(cid,sid)
+    if orders and not next(orders)then
+        UIManager:show(InfoMessage:new{text=_("没有已读完的下载章节，未删除任何文件。"),timeout=3},"ui")
+        return false
+    end
     -- 1) 停掉这一部在跑的/排队的任务 (别的漫画不受影响)
     local q = self.queue or DownloadQueue.instance()
     if q and q.cancelComic then
@@ -655,7 +663,9 @@ function Downloads:deleteDownload(entry,progress)
     end
 
     -- 2) 删图片 + 清单
-    local ok,remove_error = OfflineLibrary.remove(sid, cid,progress)
+    local ok,remove_error
+    if read_only then ok,remove_error=OfflineLibrary.removeChapters(sid,cid,orders,progress)
+    else ok,remove_error=OfflineLibrary.remove(sid,cid,progress)end
     if not ok then
         UIManager:show(InfoMessage:new{
             text = T(_("删除未能完成：%1"),require("ui.common.error_message").describe(remove_error,_("该作品不在下载清单中。"))),

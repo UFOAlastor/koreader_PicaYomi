@@ -223,6 +223,7 @@ function LoadingTask.run(opts)
     if opts.async then
         return LoadingTask.background(loading, step, {
             timeout = opts.timeout,
+            reuse_worker = opts.reuse_worker,
             delay = opts.delay,
             is_cancelled = opts.is_cancelled,
             on_cancel = function()

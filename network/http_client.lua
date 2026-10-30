@@ -186,6 +186,16 @@ end
 -- @param sink 可选: 传入时响应体**直接交给它**(如写文件), 返回值里不带 body。
 --             下载大图必须走这条 —— 否则整张图会先被拼成一个 Lua 字符串。
 -- @return: { status_code, headers, body } 或 nil, err
+function HttpClient:_httpsOncePooled(pool,method,url,headers,body,timeout)
+    if type(body)=='table' then body=json.encode(body) end
+    local response,err=pool:requestOnce(method,url,headers,body,timeout)
+    if not response then return nil,err end
+    if response.headers and (response.headers['content-encoding'] or response.headers['Content-Encoding']) then
+        return require('network.http_content').decode(response)
+    end
+    return response
+end
+
 function HttpClient:_httpsOnce(method, url, headers, body, timeout, sink)
     local https = require("ssl.https")
 

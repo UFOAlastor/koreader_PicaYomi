@@ -183,9 +183,9 @@ function Categories:onCategoryHold(category)
         table.insert(buttons[1], {
             text = _("复制链接"),
             callback = function()
-                -- 这里可以添加复制链接到剪贴板的功能
+                require("device").input.setClipboardText(category.link)
                 UIManager:show(InfoMessage:new{
-                    text = _("链接: ") .. category.link,
+                    text = _("链接已复制"),
                     timeout = 3,
                 }, "ui")
             end,

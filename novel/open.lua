@@ -12,7 +12,6 @@ function M.open(detail,episode,options)
     local book=tostring(detail.comic._id)
     local episodes=detail.episodes_data and detail.episodes_data.episodes or {episode}
     local state={closed=false,source=source,book=book}
-    local restore_details=detail._quick_entry==true
     local directory_pending=detail._resume_direct==true
     local directory_failed=false
     local resume_scope=source.novelResumeScope and source:novelResumeScope(book)
@@ -54,16 +53,7 @@ function M.open(detail,episode,options)
                 if not ok then require("util.logger").warn("Picayomi: 恢复原生底层失败: "..tostring(err))end
             end)
             detail.resume_episode_order=nil;detail:refresh()
-            if restore_details or detail._resume_direct then
-                UI:scheduleIn(.05,function()
-                    if detail._closed or detail.opening_reader then return end
-                    -- Quick resume deliberately skipped metadata. Fill it only
-                    -- after returning; reuse cancellable detail loading, which
-                    -- also restores a missing catalogue when necessary.
-                    if restore_details then detail:loadDetails()
-                    else detail:loadMissingNovelChapters()end
-                end)
-            end
+            detail:loadDetailsAfterReading()
         end
     end
     local function record(ep,reader)
@@ -171,7 +161,7 @@ function M.open(detail,episode,options)
                 prefetch(state.episode)
             else directory_failed=true end
             if state.reader and state.reader.menu then state.reader.menu:setUpdateItemTable()end
-        end,{delay=.25,timeout=60,is_cancelled=function()return not alive()end,
+        end,{delay=.25,timeout=60,reuse_worker=true,is_cancelled=function()return not alive()end,
             on_cancel=function()state.directory_task=nil;directory_pending=false;directory_failed=true end,
             on_error=function()state.directory_task=nil;directory_pending=false;directory_failed=true end})
     end

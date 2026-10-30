@@ -53,16 +53,19 @@ local function authorOf(comment)
 end
 
 --- 取评论时间。created_at 可能是 ISO 串, 也可能是 epoch 秒。
--- 两种都交给 CommentTime.format; JSON null 会退化成"未知时间"而不是打崩拼接。
+-- 缺少时间时省略该项；真实字符串或时间戳继续复用原格式化。
 local function timeOf(comment)
-    if not comment then return CommentTime.format(nil) end
+    if not comment then return end
     local raw = JN.num(comment.created_at) or JN.str(comment.created_at)
+    if raw==nil or type(raw)=='string' and (raw:match('^%s*$') or raw==_("未知时间"))then return end
     return CommentTime.format(raw)
 end
 
 --- 一行元信息: 作者 · 时间 · N 赞
 local function metaOf(comment)
-    local parts = { authorOf(comment), timeOf(comment) }
+    local parts = { authorOf(comment) }
+    local time=timeOf(comment)
+    if time then parts[#parts+1]=time end
     local likes = JN.num(comment and comment.likesCount, 0)
     if likes and likes > 0 then
         table.insert(parts, T(_("%1 赞"), likes))

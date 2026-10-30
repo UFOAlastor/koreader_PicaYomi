@@ -267,7 +267,7 @@ function History:removeFromHistory(comic_id)
         cancel_text = _("取消"),
         ok_callback = function()
             -- 只删当前源的那一条: 别的源可能有同名 id 的记录, 不能一起删掉
-            local success = self.comic_model:clearHistory(comic_id, self.source_id)
+            local success, err = self.comic_model:clearHistory(comic_id, self.source_id)
 
             if success then
                 -- 显示成功消息
@@ -277,6 +277,10 @@ function History:removeFromHistory(comic_id)
 
                 -- 重新加载历史记录
                 self:loadHistory()
+            else
+                UIManager:show(InfoMessage:new{
+                    text = T(_("历史记录保存失败：%1"), require("ui.common.error_message").describe(err)),
+                }, "ui")
             end
         end,
     }, "ui")
@@ -292,7 +296,7 @@ function History:confirmClearHistory()
         cancel_text = _("取消"),
         ok_callback = function()
             -- 只清空当前源: 这一页显示的就是这个源的历史, 顺手把别的源也清掉会莫名其妙
-            local success = self.comic_model:clearHistory(nil, self.source_id)
+            local success, err = self.comic_model:clearHistory(nil, self.source_id)
 
             if success then
                 -- 显示成功消息
@@ -302,6 +306,10 @@ function History:confirmClearHistory()
 
                 -- 重新加载历史记录
                 self:loadHistory()
+            else
+                UIManager:show(InfoMessage:new{
+                    text = T(_("历史记录保存失败：%1"), require("ui.common.error_message").describe(err)),
+                }, "ui")
             end
         end,
     }, "ui")

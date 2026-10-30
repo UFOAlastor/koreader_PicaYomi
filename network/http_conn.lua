@@ -180,20 +180,22 @@ end
 
 --- 发一个 GET 并把响应解析完 (body 交给 sink)
 -- @return { status_code, headers, parser } 或 nil, err
-function Pool:_exchange(sock, host, port, path, headers, sink)
+function Pool:_exchange(sock, host, port, path, headers, sink, method, body)
     -- 请求头: 调用方的 Connection/Host 一律改写 —— 上层 download() 为了旧路径
     -- 会显式塞 Connection: close, 原样带过去就等于"每次用完关掉", 复用无从谈起。
-    local lines = { "GET " .. path .. " HTTP/1.1" }
+    local lines = { (method or "GET") .. " " .. path .. " HTTP/1.1" }
     local host_header = (port == 80 or port == 443) and host or (host .. ":" .. port)
     lines[#lines + 1] = "Host: " .. host_header
     for k, v in pairs(headers or {}) do
         local lk = tostring(k):lower()
-        if lk ~= "connection" and lk ~= "host" then
+        assert(not tostring(k):find('[\r\n]') and not tostring(v):find('[\r\n]'), 'invalid HTTP header')
+        if lk ~= "connection" and lk ~= "host" and not (method and (lk=='content-length' or lk=='transfer-encoding')) then
             lines[#lines + 1] = tostring(k) .. ": " .. tostring(v)
         end
     end
     lines[#lines + 1] = "Connection: keep-alive"
-    local payload = table.concat(lines, "\r\n") .. "\r\n\r\n"
+    if body then lines[#lines+1]='Content-Length: '..#body end
+    local payload = table.concat(lines, "\r\n") .. "\r\n\r\n"..(body or '')
 
     local sent, serr = sock:send(payload)
     if not sent then return nil, "发送请求失败: " .. tostring(serr) end
@@ -356,6 +358,36 @@ function Pool:get(url, headers, sink)
         end
     end
     return nil, "连接不可用"
+end
+
+-- One exchange only: POST replay decisions belong to the source, which knows
+-- whether an endpoint reads data or changes an account. Never infer that here.
+function Pool:requestOnce(method,url,headers,body,timeout)
+    assert(method=='GET' or method=='POST','unsupported pooled HTTP method')
+    assert(body==nil or type(body)=='string','HTTP body must be bytes')
+    local scheme,host,port,path=Pool.parseUrl(url)
+    assert(scheme=='https' and not host:find('[%s@\r\n]') and not path:find('[\r\n]'),'invalid pooled HTTPS URL')
+    self.timeout=timeout or self.timeout
+    local sock,key,_,err=self:acquire(url)
+    if not sock then return nil,Pool.isTransientDisconnect(err) and 'closed' or err end
+    local chunks,size={},0
+    local called,response,reason=pcall(function()
+        sock:settimeout(self.timeout)
+        return self:_exchange(sock,host,port,path,headers,function(chunk)
+            if chunk then
+                size=size+#chunk;assert(size<=8*1024*1024,'HTTP response too large')
+                chunks[#chunks+1]=chunk
+            end
+            return 1
+        end,method,body or (method=='POST' and '' or nil))
+    end)
+    self:release(key,sock,called and response and response.parser:keep_alive() or false)
+    if not called then return nil,'HTTP exchange failed' end
+    if not response then
+        if Pool.isTransientDisconnect(reason) then reason='closed' end
+        return nil,reason
+    end
+    return {status_code=response.status_code,headers=response.headers,body=table.concat(chunks)}
 end
 
 --- 关掉池里所有连接 (worker 退出 / 换章节)

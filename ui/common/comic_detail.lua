@@ -35,7 +35,7 @@ local CommentList = require("ui.common.comment_list")
 local OfflineLibrary = require("util.offline_library")
 local ViewMode = require("ui.common.view_mode")
 local VisualComicList = require("ui.common.visual_comic_list")
-local Widget = require("ui/widget/widget")
+local CoverPlaceholder = require("ui.common.cover_placeholder")
 local _ = require("gettext")
 local T = require("ffi/util").template
 
@@ -132,30 +132,6 @@ local function normalizeComic(comic)
     end
 
     return processed
-end
-
-local CoverPlaceholder = Widget:extend{
-    width = nil,
-    height = nil,
-    text = nil,
-}
-
-function CoverPlaceholder:getSize()
-    return Geom:new{ w = self.width, h = self.height }
-end
-
-function CoverPlaceholder:paintTo(bb, x, y)
-    self.dimen = Geom:new{ x = x, y = y, w = self.width, h = self.height }
-    bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_GRAY_E)
-    bb:paintBorder(x, y, self.width, self.height, Size.border.thin, Blitbuffer.COLOR_DARK_GRAY)
-    local text = TextWidget:new{
-        text = self.text or _("封面"),
-        face = Theme.face("info"),
-        fgcolor = Blitbuffer.COLOR_BLACK,
-    }
-    local size = text:getSize()
-    text:paintTo(bb, x + math.floor((self.width - size.w) / 2),
-        y + math.floor((self.height - size.h) / 2))
 end
 
 local DetailRow = InputContainer:extend{
@@ -397,6 +373,19 @@ function ComicDetail:revealQuickEntry()
     if not self._quick_entry then return end
     self._quick_entry=nil;self.covers_fullscreen=true
     if not self._closed then UIManager:setDirty(self,"ui")end
+end
+
+-- Both comic and novel quick entries defer metadata. Restore it only after
+-- the reader has gone, and discard the scheduled work if the detail closes.
+function ComicDetail:loadDetailsAfterReading()
+    if self._closed or self.offline or self._return_detail_timer then return end
+    self._return_detail_timer=function()
+        self._return_detail_timer=nil
+        if self._closed or self.opening_reader or require('apps/reader/readerui').instance
+            or not require('util.widget_sweep').isInStack(self) then return end
+        self:loadDetails()
+    end
+    UIManager:scheduleIn(.05,self._return_detail_timer)
 end
 
 function ComicDetail:paintTo(bb,x,y)
@@ -655,6 +644,8 @@ function ComicDetail:coverWidget()
     return CoverPlaceholder:new{
         width = cover_w,
         height = cover_h,
+        title = self.comic.title,
+        background = Blitbuffer.COLOR_GRAY_E,
         text = self.comic.thumb and self.comic.thumb ~= "" and _("加载中") or _("无封面"),
     }
 end
@@ -1378,7 +1369,7 @@ function ComicDetail:openReader(episode, opts)
         -- (真机反馈: "新漫画刚看了一点, 回到详情, 不会刷新出继续按钮")。
         --
         -- 保留屏游标 (refresh 默认行为): 用户离开时停在第几屏, 回来还在那一屏。
-        if not self_._closed then self_:refresh() end
+        if not self_._closed then self_:refresh();self_:loadDetailsAfterReading() end
         if outer_return then outer_return() end
     end
     -- 阅读器要把进度写回**本页的源** (历史按源分桶)。opts 是调用方传进来的,
@@ -1494,7 +1485,7 @@ function ComicDetail:loadChapters(page,force)
     end
     local function fetch(progress)
         if progress then progress({message="正在获取并核对完整目录…"})end
-        local context={deadline=started+timeout,isCancelled=cancelled,
+        local context={deadline=started+timeout,isCancelled=cancelled,force_refresh=force==true,
             on_progress=progress and function(p)
                 if not cancelled() and type(p)=="table" then
                     local done,total=tonumber(p.completed),tonumber(p.total)
@@ -1527,7 +1518,7 @@ function ComicDetail:loadChapters(page,force)
     -- 所以复位交给 set_busy: 它在取数之后**无条件**执行, 不依赖任何分支。
     if background then
         self._chapter_task=LoadingTask.background(nil,function() complete(fetch()) end,{
-            delay=0.1,is_cancelled=cancelled,timeout=timeout,
+            delay=0.1,is_cancelled=cancelled,timeout=timeout,reuse_worker=true,
             on_cancel=on_cancel,
             on_error=function(err) complete(false,nil,err) end,
         })
@@ -1539,6 +1530,7 @@ function ComicDetail:loadChapters(page,force)
         message = self:isNovel() and _("加载小说章节") or _("加载漫画章节"),
         delay = 0.1,
         async = true,
+        reuse_worker = true,
         timeout = timeout,
         is_cancelled = cancelled,
         fetch = fetch,
@@ -2153,6 +2145,7 @@ function ComicDetail:onCloseWidget()
     self:cancelChapterLoad()
     if self._detail_task then self._detail_task:cancel() end
     -- 本页被任何路径关掉 (返回 / 清扫 / 换章) 时, 放大层与简介全文不能留下
+    if self._return_detail_timer then UIManager:unschedule(self._return_detail_timer);self._return_detail_timer=nil end
     self:closeCoverZoom()
     self:closeTitleViewer()
     self:closeDescriptionViewer()

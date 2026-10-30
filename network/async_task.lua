@@ -43,7 +43,7 @@ function Async.run(fn, opts)
     local socket = require("socket")
     local buffer = require("string.buffer")
     local Fork = opts.subprocess or require("network.subprocess_fork")
-    local task = { done = false }
+    local task = { done = false, session=opts.session, subprocess=opts.subprocess }
     -- The worker watchdog below is per request. This optional budget spans all
     -- requests/retries in the continuation, including source fallbacks.
     local deadline=opts.timeout and socket.gettime()+opts.timeout
@@ -58,7 +58,18 @@ function Async.run(fn, opts)
         if task.wait_timer then UIManager:unschedule(task.wait_timer);task.wait_timer=nil end
         if task.session and not keep_session then
             pcall(function()
-                if task.nonblocking and task.session.terminate then task.session:terminate()
+                if task.nonblocking and task.session.terminate then
+                    local pid=task.session.pid
+                    task.session:terminate()
+                    if pid then
+                        local util=require('ffi/util')
+                        local function reap()
+                            if not util.isSubProcessDone(pid)then UIManager:scheduleIn(.05,reap)end
+                        end
+                        -- Keep only the PID, never the cancelled coroutine or
+                        -- its source/document. WNOHANG never stalls the UI.
+                        reap()
+                    end
                 else task.session:close() end
             end)
             task.session = nil
@@ -69,6 +80,10 @@ function Async.run(fn, opts)
         if task.done then return end
         task.done = true
         tasks[co] = nil
+        for child in pairs(task.children or {})do
+            child.nonblocking=true;child:cancel()
+        end
+        task.children=nil
         release()
         -- A cancelled coroutine is still suspended, retaining its source and
         -- page stack. Drop it even if the owning page keeps the task handle.
@@ -89,7 +104,7 @@ function Async.run(fn, opts)
         if type(fetch) == "table" then request, fetch = fetch.request, fetch.fetch end
         -- A failed fork must not silently turn a background operation into
         -- blocking network I/O on a low-memory device.
-        if not opts.subprocess then
+        if not opts.subprocess and not (request and opts.reuse_worker and task.session) then
             local MG = require("util.memory_guard")
             local allowed = MG.instance():fork_allowed()
             if not allowed then
@@ -187,6 +202,61 @@ function Async.run(fn, opts)
     if opts.is_cancelled and opts.is_cancelled() then task:cancel()
     else resume() end
     return task
+end
+
+-- Source continuations stay on the UI thread; only their existing await()
+-- calls cross a process boundary. Results keep input order, completion may not.
+function Async.map(functions,concurrency)
+    assert(type(functions)=='table' and #functions<=200,'后台任务数量无效')
+    concurrency=math.max(1,math.min(3,math.floor(tonumber(concurrency)or 3),#functions))
+    local owner=tasks[coroutine.running()]
+    local results={}
+    if not owner or concurrency==1 then
+        for i,fn in ipairs(functions)do results[i]=fn()end
+        return results
+    end
+    assert(not owner.children,'不能嵌套并行任务')
+    local guard=require('util.memory_guard').instance()
+    local snapshot=guard:snapshot()
+    local borrowed=owner.persistent_session and owner.session
+    if snapshot.available then
+        local free=math.max(0,snapshot.available-snapshot.reserve)
+        concurrency=math.min(concurrency,(borrowed and 1 or 0)+math.floor(free/require('util.memory_guard').WORKER_BYTES))
+    end
+    if concurrency<=1 then
+        for i,fn in ipairs(functions)do results[i]=fn()end
+        return results
+    end
+    owner.children={}
+    if borrowed then owner.session=nil end
+    local next_index,failure=1,nil
+    local children={}
+    local function stop(reason)if failure==nil then failure=reason~=nil and reason or '后台任务失败' end end
+    for lane=1,concurrency do
+        if failure~=nil then break end
+        local child=Async.run(function()
+            while failure==nil and next_index<=#functions do
+                local i=next_index;next_index=i+1
+                local ok,value=pcall(functions[i])
+                if not ok then stop(value);return end
+                results[i]=value
+            end
+        end,{reuse_worker=true,session=lane==1 and borrowed or nil,subprocess=owner.subprocess,
+            on_error=stop})
+        children[#children+1]=child;owner.children[child]=true
+    end
+    while failure==nil do
+        local pending=false
+        for _,child in ipairs(children)do if not child.done then pending=true;break end end
+        if not pending then break end
+        Async.wait(.02)
+    end
+    for _,child in ipairs(children)do
+        child.nonblocking=true;child:cancel()
+    end
+    owner.children=nil
+    if failure~=nil then error(failure,0)end
+    return results
 end
 
 return Async

@@ -484,9 +484,9 @@ function Queue:_prepare(job)
     end
     local task=self.prepare_runner(function()
         if job.source.content_type=="novel" then
-            local session=require("novel.native").session(job.source,tostring(job.comic_id),tostring(job.chapter_id))
+            local session=require("novel.native").session(job.source,tostring(job.comic_id),tostring(job.chapter_id),"download")
             local ok,document,err=require("novel.document").prepare(session,{
-                root=require("util.cache").BASE_DIR.."/novels/downloads",
+                root=require("util.cache").BASE_DIR.."/novels/downloads",prefer_cache=true,
                 book=tostring(job.comic_id),chapter=tostring(job.chapter_id),title=job.title,call=context,
                 on_cleanup=function(fn)job.prepare_cleanup=fn end,
                 on_progress=function(progress)

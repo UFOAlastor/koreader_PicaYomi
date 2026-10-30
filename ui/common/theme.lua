@@ -38,6 +38,8 @@ local FACES = {
     detail_title = { "cfont", 22 },          -- 详情页标题 (配合 bold)
     row          = { "cfont", 18 },          -- 列表行 / 章节行
     info         = { "smallinfofont" },      -- 正文与元信息 (取 sizemap 默认 22)
+    cover_title  = { "cfont", 16 },
+    cover_status = { "cfont", 12 },
 }
 
 --- 取一个字体 face

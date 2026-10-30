@@ -12,6 +12,7 @@ local UI=require("ui/uimanager")
 local Layout=require("ui.common.home_layout")
 local Data=require("ui.common.home_data")
 local Cover=require("util.cover_cache")
+local CoverPlaceholder=require("ui.common.cover_placeholder")
 local _=require("gettext")
 
 local Link=InputContainer:extend{}
@@ -53,6 +54,7 @@ function Tile:setPath(path)
     if self.image then self.image:free();self.image=nil end
     self.path=path
     if path then
+        if self.placeholder then self.placeholder:free();self.placeholder=nil end
         self.image=Image:new{file=path,width=self.cover_width,height=self.cover_height,
             scale_factor=nil,file_do_cache=false}
     end
@@ -69,6 +71,13 @@ function Tile:paintTo(bb,x,y)
         view:free()
         if not ok then self.image:free();self.image=nil end
     end
+    if not self.image then
+        self.placeholder=self.placeholder or CoverPlaceholder:new{width=self.cover_width,height=self.height,
+            clip_width=self.width,title=self.comic and self.comic.title,background=BB.COLOR_LIGHT_GRAY,border=false}
+        -- Keep fills on the parent buffer: native full-width fills on a
+        -- strided viewport can otherwise overwrite neighbouring thumbnails.
+        self.placeholder:paintTo(bb,x,y)
+    end
 end
 function Tile:onTap()
     if not self._closed and self.callback then self.callback()end
@@ -77,6 +86,7 @@ end
 function Tile:onCloseWidget()self._closed=true;self:free()end
 function Tile:free()
     if self.image then self.image:free();self.image=nil end
+    if self.placeholder then self.placeholder:free();self.placeholder=nil end
 end
 
 local Strip=InputContainer:extend{}

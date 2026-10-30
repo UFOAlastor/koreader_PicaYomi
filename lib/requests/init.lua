@@ -5,9 +5,7 @@ local https_socket = require('ssl.https')
 local url_parser = require('socket.url')
 local ltn12 = require('ltn12')
 local json = require('rapidjson')
-local xml = require('xml')
-local hmac = require('../../util.hmac')
-local basexx = require('../../basexx')
+local basexx = require('basexx')
 
 local requests = {
     _DESCRIPTION = 'Http requests made simpler',
@@ -104,7 +102,7 @@ function _requests.make_request(request)
         return json.decode(response.text)
     end
     response.xml = function ()
-        return xml.load(response.text)
+        return require('xml').load(response.text)
     end
 
     return response

@@ -12,6 +12,7 @@ function M.open(prepared,options)
     local function ready(ui)
         assert(ui.rolling and ui.document,"HTML did not open in text reader")
         ui._picayomi_content_type="novel"
+        require('network.kosync_async').install(ui)
         local Diag=require("util.diag")
         if Diag.enabled then
             local clock=require("socket").gettime
@@ -46,7 +47,21 @@ function M.open(prepared,options)
             local ok,result=pcall(function()
                 if not switching and options.on_closing then options.on_closing(reader)end
                 mark("before_native")
-                local result=close(reader,unpack(args,1,args.n))
+                local function nativeClose()return close(reader,unpack(args,1,args.n))end
+                local result
+                if Diag.enabled then
+                    local timings={}
+                    local success,value=pcall(require("novel.close_diagnostics").run,reader,nativeClose,function(stage,elapsed,ok)
+                        timings[#timings+1]={stage,elapsed,ok}
+                    end,require("socket").gettime,require("document/doccache"),G_reader_settings)
+                    -- Flush after measurement so diagnostic writes are not
+                    -- counted inside the native methods being investigated.
+                    for _,entry in ipairs(timings)do
+                        Diag.mark(string.format("novel native close step=%s duration=%.3fs ok=%s",entry[1],entry[2],tostring(entry[3])))
+                    end
+                    if not success then error(value,0)end
+                    result=value
+                else result=nativeClose()end
                 mark("after_native")
                 returned=document_closed
                 -- Restore details in the same frame, while the notice still

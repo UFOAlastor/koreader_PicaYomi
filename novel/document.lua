@@ -70,6 +70,15 @@ function M.prepare(session,options)
             phase,image_number,image_count=stage,current or 0,total or 0
             if options.on_progress then options.on_progress({stage=stage,current=current,total=total})end
         end
+        if options.prefer_cache then
+            local cached=M.cached(root,session.metadata.id,options.book,options.chapter)
+            guard(options.call)
+            if cached then
+                local images=#cached.manifest.files-1
+                progress("ready",images,images)
+                return cached
+            end
+        end
         progress("body")
         local ok,html,err=session:invoke("parseChapter",{options.chapter},options.call)
         if not ok then error(err or "chapter unavailable",0) end
@@ -136,23 +145,38 @@ function M.prepare(session,options)
                 local snapshot=memory:snapshot()
                 local budget=math.min(40*1024*1024,snapshot.available and memory:prepare_decode() or 40*1024*1024)
                 local bitmap,decode_error,required
-                for attempt=1,4 do
+                local initial_zoom=zoom
+                local function decode()
+                    for attempt=1,4 do
+                        guard(options.call)
+                        -- Observe pressure again after each failed attempt.
+                        budget=math.min(budget,memory:snapshot().available and memory:prepare_decode() or 40*1024*1024)
+                        bitmap,decode_error,required=require("util.scaled_decode").decode_region(input,format,0,h,true,
+                            budget,zoom,response.body)
+                        if bitmap or decode_error~="memory_budget" then break end
+                        require("util.logger").warn(string.format(
+                            "Picayomi illustration budget: format=%s size=%dx%d budget=%d required=%d scale=%.4f attempt=%d",
+                            format,w,h,budget,tonumber(required)or 0,zoom,attempt))
+                        if zoom<=1/8 then break end
+                        zoom=math.max(1/8,zoom/2)
+                    end
+                end
+                decode()
+                if not bitmap and decode_error=="memory_budget" then
                     guard(options.call)
-                    bitmap,decode_error,required=require("util.scaled_decode").decode_region(input,format,0,h,true,
-                        budget,zoom,response.body)
-                    if bitmap or decode_error~="memory_budget" then break end
-                    require("util.logger").warn(string.format(
-                        "Picayomi illustration budget: format=%s size=%dx%d budget=%d required=%d scale=%.4f attempt=%d",
-                        format,w,h,budget,tonumber(required)or 0,zoom,attempt))
-                    if zoom<=1/8 then break end
-                    -- Reuse the resident compressed bytes. Smaller output does
-                    -- not remove progressive/alpha workspace requirements.
-                    zoom=math.max(1/8,zoom/2)
-                    budget=math.min(budget,memory:prepare_decode())
+                    -- This coroutine resumes between paints. Reuse the reader's
+                    -- safe cache-reclamation path once, retaining compressed
+                    -- bytes and staging files. Never raise the observed budget.
+                    local recovered=math.min(40*1024*1024,memory:reclaim_for_decode())
+                    guard(options.call)
+                    if recovered>budget then
+                        budget,zoom=recovered,initial_zoom
+                        decode()
+                    end
                 end
                 if not bitmap and decode_error=="memory_budget" then
                     error(require("source.contract").error("resource_limit",string.format(
-                        "第 %d/%d 张插图处理所需内存不足，已尝试缩小；请关闭阅读后再继续下载。",image_number,image_count),
+                        "第 %d/%d 张插图处理内存不足，自动回收与缩小后仍无法完成。",image_number,image_count),
                         "prepareChapter",nil,false),0)
                 end
                 assert(bitmap,"bounded illustration decode failed: "..tostring(decode_error))

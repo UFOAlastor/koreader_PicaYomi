@@ -17,7 +17,6 @@ local ListView = require("ui/widget/listview")
 local Menu = require("ui.common.action_style").Menu
 local PageJump = require("ui.common.page_jump")
 local ProgressWidget = require("ui/widget/progresswidget")
-local Size = require("ui/size")
 local TapGuard = require("ui.common.tap_guard")
 local MenuSwipe = require("ui.common.menu_swipe")
 local MenuStyle = require("ui.common.menu_style")
@@ -29,7 +28,7 @@ local LoadingTask = require("ui.common.loading_task")
 local Screen = Device.screen
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
-local Widget = require("ui/widget/widget")
+local CoverPlaceholder = require("ui.common.cover_placeholder")
 local _ = require("gettext")
 local T = require("ffi/util").template
 
@@ -57,31 +56,6 @@ local ComicStats = require("ui.common.comic_stats")
 local ComicMetadata = require("ui.common.comic_metadata")
 local ComicModel = require("model.comic")
 local logger = require("util.logger")
-
-local CoverPlaceholder = Widget:extend{
-    width = nil,
-    height = nil,
-    text = nil,
-}
-
-function CoverPlaceholder:getSize()
-    return Geom:new{ w = self.width, h = self.height }
-end
-
-function CoverPlaceholder:paintTo(bb, x, y)
-    self.dimen = Geom:new{ x = x, y = y, w = self.width, h = self.height }
-    bb:paintRect(x, y, self.width, self.height, self.background or Blitbuffer.COLOR_WHITE)
-    bb:paintBorder(x, y, self.width, self.height, Size.border.thin, Blitbuffer.COLOR_DARK_GRAY)
-
-    local text = TextWidget:new{
-        text = self.text or _("封面"),
-        face = Theme.face("info"),
-        fgcolor = Blitbuffer.COLOR_BLACK,
-    }
-    local size = text:getSize()
-    text:paintTo(bb, x + math.floor((self.width - size.w) / 2),
-        y + math.floor((self.height - size.h) / 2))
-end
 
 local ComicListItem = InputContainer:extend{
     width = nil,
@@ -170,6 +144,7 @@ function ComicListItem:coverWidget()
     return CoverPlaceholder:new{
         width = self.cover_w,
         height = self.cover_h,
+        title = self.comic and self.comic.title,
         background = self.background,
         text = self.cover_error or ((self.comic and self.comic.thumb and self.comic.thumb ~= ""
             or self.list_ui and self.list_ui.resolve_cover) and _("加载中") or _("无封面")),

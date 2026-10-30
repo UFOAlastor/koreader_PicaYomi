@@ -97,6 +97,32 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
         template=require("ffi/util").template}
     ctx.translate=require("gettext")
     ctx.clock={now=require("socket").gettime,timestamp=os.time}
+    ctx.tasks={map=function(functions,concurrency)
+        assert(not ctx.initializing and not processing[ctx],'当前阶段禁止后台任务')
+        local call=calls[ctx] and calls[ctx][thread()]
+        local wrapped={}
+        for i,fn in ipairs(functions)do
+            wrapped[i]=function()
+                local old=SDK.enter(ctx,call)
+                local ok,value=pcall(fn)
+                SDK.enter(ctx,old)
+                if not ok then error(value,0)end
+                return value
+            end
+        end
+        -- Download pacing is shared state. A caller with a request reservation
+        -- keeps its original serial scheduling and rate-limit semantics.
+        local ok,value=pcall(require('network.async_task').map,wrapped,call and call.before_request and 1 or concurrency)
+        if not ok then
+            if type(value)=='table'then error(value,0)end
+            local limited=tostring(value):find('内存',1,true)
+            local cancelled=tostring(value):find('已取消',1,true)
+            local expired=tostring(value):find('超时',1,true)
+            error(require('source.contract').error(limited and 'resource_limit' or cancelled and 'cancelled' or expired and 'timeout' or 'network',
+                limited and '可用内存不足，请稍后重试' or cancelled and '请求已取消' or expired and '请求超时' or '后台目录请求失败，请重试',nil,nil,not cancelled),0)
+        end
+        return value
+    end}
     ctx.redact=require("util.log_redact")
     local logger=require("util.logger")
     local function safe_log(value)

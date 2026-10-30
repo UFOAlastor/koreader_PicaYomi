@@ -67,7 +67,8 @@ function Runtime.new(source,manifest,digest,extension_context)
             local previous=ctx and sdk.processing(ctx,true)
             local called,ok,state=pcall(source.getSession,source,{})
             if ctx then sdk.processing(ctx,previous) end
-            return called and ok==true and type(state)=="table" and state.logged_in==true
+            return called and ok==true and type(state)=="table" and state.logged_in==true,
+                called and ok==true and type(state)=='table' and state or nil
         end
         local ok,value=pcall(function() return source:isLoggedIn() end)
         return ok and value==true
@@ -237,7 +238,8 @@ function Runtime.new(source,manifest,digest,extension_context)
     local function chapter_cache_key(manga_id)
         if caps.requires_login and not logged() then return end
         local scope="public"
-        if logged() then
+        local signed_in,session=logged()
+        if signed_in then
             local credential
             if not legacy then
                 local ok,data=handle:invoke("getCredential",{})
@@ -246,7 +248,9 @@ function Runtime.new(source,manifest,digest,extension_context)
                 local ok,token=pcall(source.getToken,source)
                 if ok and type(token)=="string" and token~="" then credential=token end
             end
-            scope=credential and require("ffi/sha2").sha256(credential) or cache_session..":"..generation
+            local stable=session and session.cache_scope
+            if type(stable)~='string' or #stable~=64 or not stable:match('^[a-f0-9]+$')then stable=nil end
+            scope=credential and require("ffi/sha2").sha256(credential) or stable or cache_session..":"..generation
         end
         local settings={}
         for _,setting in ipairs(manifest.settings or {}) do
@@ -313,10 +317,13 @@ function Runtime.new(source,manifest,digest,extension_context)
     end
     -- Aggregation is bounded and atomic: no partial directory escapes on error.
     function handle:directory(manga_id,context)
+        local directory_context={}
+        for k,v in pairs(context or {})do directory_context[k]=v end
+        directory_context.directory_request=true
         local request,seen,ids,items={}, {},{},{}
         for _=1,200 do
             local args={manga_id,legacy and (request.page or 1) or request}
-            local ok,result,err=self:invoke("getChapters",args,context)
+            local ok,result,err=self:invoke("getChapters",args,directory_context)
             if not ok then return false,nil,err end
             for _,ch in ipairs(result.items) do
                 if ids[ch.id] then return false,nil,Contract.error("invalid_response","章节身份重复","getChapters") end

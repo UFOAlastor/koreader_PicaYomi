@@ -27,6 +27,24 @@ function ReadingSettings:show()
             callback = function() self:setImageMode() end,
         },
         {
+            text = _("漫画细节增强"),
+            mandatory_func = function()
+                local E=require("util.image_enhance")
+                local mode=self:safeConfigGet(E.CONFIG,"off")
+                return ({sharpen=_("锐化"),denoise_sharpen=_("降噪＋锐化")})[mode] or _("关闭")
+            end,
+            callback = function() self:setDisplayEnhancement() end,
+        },
+        {
+            text=_("漫画色调调整"),
+            mandatory_func=function()
+                local E=require("util.image_enhance")
+                return ({off=_("原样"),light=_("轻度加深"),standard=_("标准加深"),contrast=_("柔和对比度")})[
+                    E.tone(self:safeConfigGet(E.CONFIG,"off"),self:safeConfigGet(E.TONE_CONFIG,"auto"))]
+            end,
+            callback=function()self:setDisplayEnhancement(true)end,
+        },
+        {
             -- 只有源 A 有这两档: 源 B/源 C 给的就是原图, 没有可切的东西。
             -- 写清楚适用范围, 免得在别的源下看起来像"这个设置没用"。
             text = _("图片质量（仅哔咔）"),
@@ -74,6 +92,46 @@ function ReadingSettings:show()
     }
 
     local menu = self:createMenu(_("阅读设置"), items)
+    self:showMenu(menu)
+end
+
+function ReadingSettings:setDisplayEnhancement(tone)
+    local E=require("util.image_enhance")
+    local menu
+    local key=tone and E.TONE_CONFIG or E.CONFIG
+    local function selected()
+        local mode=self:safeConfigGet(E.CONFIG,"off")
+        return tone and E.tone(mode,self:safeConfigGet(E.TONE_CONFIG,"auto")) or (E.spatial(mode) and mode or "off")
+    end
+    local choices=tone and {{value="off",text=_("原样（不调色调）"),description=_("保留原色调，细节增强仍生效")},
+        {value="light",text=_("轻度加深"),description=_("略微加深，适合文字偏淡")},{value="standard",text=_("标准加深"),description=_("整体加深，浅灰背景也会变暗")},
+        {value="contrast",text=_("柔和对比度"),description=_("深灰更深、浅灰更浅，适合发灰")}} or {{value="off",text=_("关闭（不处理细节）"),description=_("不降噪、不锐化，色调仍生效")},
+        {value="sharpen",text=_("锐化"),description=_("突出文字和线条边缘")},{value="denoise_sharpen",text=_("降噪＋锐化"),description=_("减少噪点，再强化边缘")}}
+    local items={
+        {text=tone and _("可与降噪、锐化叠加，保留下载原图") or _("可与色调调整叠加，保留下载原图"),enabled=false,select_enabled=false},
+        {text=_("重新打开章节后生效，小说文字不受影响"),enabled=false,select_enabled=false},
+    }
+    for _index,option in ipairs(choices)do
+        items[#items+1]={text=option.text,mandatory=option.description,text_func=function()
+            return checkLabel(selected()==option.value,option.text)
+        end,callback=function()
+            if option.value~="off" and not E.available(option.value) then
+                UIManager:show(require("ui/widget/infomessage"):new{
+                    text=_("显示增强暂不可用，请稍后重试或更新 KOReader。")},"ui")
+                return
+            end
+            -- Preserve legacy gamma before replacing the old combined key.
+            if not tone and self:safeConfigGet(E.TONE_CONFIG,"auto")=="auto" then
+                if not self:safeConfigSet(E.TONE_CONFIG,E.tone(self:safeConfigGet(E.CONFIG,"off"),"auto")) then return end
+            end
+            if self:safeConfigSet(key,option.value)then
+                menu:updateItems()
+                UIManager:setDirty(menu,"ui")
+            end
+        end}
+    end
+    items[#items+1]=self:createBackButton()
+    menu=self:createMenu(tone and _("漫画色调调整") or _("漫画细节增强"),items)
     self:showMenu(menu)
 end
 

@@ -55,6 +55,7 @@ local TransportBlocking = require("network.transport_blocking")
 local TransportWorker = require("network.transport_worker")
 local ReaderBridge = require("ui.reader_bridge")
 local ViewMode = require("ui.common.view_mode")
+local ImageEnhance = require("util.image_enhance")
 local lfs = require("libs/libkoreader-lfs")
 
 -- 预取页数的默认值与上下限
@@ -340,6 +341,10 @@ function StreamSession.new(opts)
     self.content_type = opts.content_type
     self.source = opts.source
     self.comic_id = opts.comic_id
+    self.display_enhancement = ImageEnhance.normalize(opts.display_enhancement
+        or Config:get(ImageEnhance.CONFIG,"off"))
+    self.display_tone = opts.display_tone or (opts.display_enhancement and "auto")
+        or Config:get(ImageEnhance.TONE_CONFIG,"auto")
     self.order = opts.order
     self.title = opts.title or ""
     -- 阅读上下文 { comic = ..., episodes = ... }，供阅读器内菜单使用
@@ -1385,6 +1390,20 @@ function MultiImageDoc:openPage(n)
     -- 每个返回点都必须经过它 —— 少一处就会让那一类页面在下载完成时被
     -- 误判成"已经画好了", 于是永远停在占位页。
     local function finish(page, label)
+        local mode=ImageEnhance.tone(self.session.display_enhancement,self.session.display_tone)
+        if mode~="off" and not page.is_placeholder then
+            local draw=page.draw
+            page.draw=function(p,dc,target,...)
+                draw(p,dc,target,...)
+                if not p.is_placeholder then
+                    local enhanced=ImageEnhance.apply(target,mode)
+                    if not enhanced and not self.session.enhancement_warning then
+                        self.session.enhancement_warning=true
+                        logger.warn("Picayomi: display enhancement unavailable; using original image")
+                    end
+                end
+            end
+        end
         if page.is_placeholder and (page.placeholder_state == "too_large" or page.placeholder_state == "processing_failed") then
             require("ui.reader_feedback").queue(self.session, n, "display", page.placeholder_text)
         elseif page.is_placeholder and self.session.store.failed_reason and self.session.store.failed_reason[n] then
@@ -1460,6 +1479,18 @@ function MultiImageDoc:openPage(n)
     if render_post and render_post.digest and sz and sz.w and sz.h then
         post_plan=require("source.processors").regionPlan(render_post,sz.w,sz.h)
     end
+    local function filter_source(bb)
+        if not ImageEnhance.spatial(self.session.display_enhancement)then return true end
+        local ok,reason,needed=require("util.image_filter").apply(bb,self.session.display_enhancement,decode_budget())
+        if not ok and reason~="memory_budget" then
+            if not self.session.enhancement_warning then
+                self.session.enhancement_warning=true
+                logger.warn("Picayomi: spatial filter unavailable; using original image")
+            end
+            return true
+        end
+        return ok,reason,needed
+    end
     local region_input
     local function region_decode(format,y,height,current_budget,zoom)
         local function read_piece(py,ph,remaining,pzoom)
@@ -1511,7 +1542,7 @@ function MultiImageDoc:openPage(n)
             local zoom=dc:getZoom()
             local tw,th=target:getWidth(),target:getHeight()
             local row=0
-            local halo=math.max(2,math.ceil(1/zoom)+1)
+            local halo=math.max(2,math.ceil(1/zoom)+1)+(ImageEnhance.spatial(self.session.display_enhancement)and 3 or 0)
             local function range(lines)
                 local first=math.max(0,math.floor((oy+row)/zoom)-halo)
                 local last=math.min(sz.h,math.ceil((oy+row+lines)/zoom)+halo)
@@ -1521,6 +1552,8 @@ function MultiImageDoc:openPage(n)
                 local scaled,view,canvas
                 local required_extra
                 local ok,err=pcall(function()
+                    local filtered,reason,needed=filter_source(bb)
+                    if not filtered then required_extra=needed;error(reason)end
                     local consumed=0
                     repeat
                         -- Resampling geometry must not change when the decode
@@ -1622,7 +1655,7 @@ function MultiImageDoc:openPage(n)
                 -- Each native strip restarts the codec. Start with the visible
                 -- viewport when memory permits; failed budget checks halve it.
                 -- PNG keeps its streaming/canonical 64-row extraction path.
-                local batch=format=="png" and 64 or th
+                local batch=format=="png" and (ImageEnhance.spatial(self.session.display_enhancement)and zoom<1 and 32 or 64)or th
                 local lines=math.min(batch,th-row)
                 local success,reason,required
                 repeat
@@ -1703,6 +1736,11 @@ function MultiImageDoc:openPage(n)
             local processed=apply_render_post(render_post,post_url,bb)
             if not processed then bb:free(); return finish(placeholder_page("processing_failed"),"processing_failed") end
             bb=processed
+            local filtered,reason,needed=filter_source(bb)
+            if not filtered then
+                bb:free();self.session:wait_for_memory(n,function()return decode_budget()>=needed end,needed)
+                return finish(placeholder_page("too_large",{reason=reason}),"filter_wait")
+            end
             self.current_sub = scaled_sub(bb, w, h)
             return finish(self.current_sub:openPage(1), "png")
         end
@@ -1729,6 +1767,11 @@ function MultiImageDoc:openPage(n)
             local processed=apply_render_post(render_post,post_url,bb)
             if not processed then bb:free(); return finish(placeholder_page("processing_failed"),"processing_failed") end
             bb=processed
+            local filtered,reason,needed=filter_source(bb)
+            if not filtered then
+                bb:free();self.session:wait_for_memory(n,function()return decode_budget()>=needed end,needed)
+                return finish(placeholder_page("too_large",{reason=reason}),"filter_wait")
+            end
             -- 尺寸仍按**原图**登记: 等比缩放不改宽高比, 所以排版/zoom 与不缩放时
             -- 完全一致。清晰度只降到"刚好覆盖屏幕"的那一档 (见 ImageGuard.display_target)。
             -- (store.sizes[n] 里已经是原图尺寸 —— plan 就是从它算出来的。)
@@ -1824,6 +1867,12 @@ function MultiImageDoc:openPage(n)
             image_bb = new_bb
             sub.image_bb = new_bb
             page.image_bb = new_bb
+        end
+        local filtered,reason,needed=filter_source(image_bb)
+        if not filtered then
+            sub:close();self.current_sub=nil
+            self.session:wait_for_memory(n,function()return decode_budget()>=needed end,needed)
+            return finish(placeholder_page("too_large",{reason=reason}),"filter_wait")
         end
         page.draw = function(_self, dc, target_bb, offset_x, offset_y)
             blit_scaled(image_bb, target_bb, dc, page.width or sub.width, page.height or sub.height, offset_x, offset_y)
@@ -2051,6 +2100,7 @@ function StreamDocument:getFullPageHash(pageno, zoom, rotation, gamma, saturatio
     return Document.getFullPageHash(self, pageno, zoom, rotation, gamma, saturation)
         .. "|" .. render_key(self.session, pageno)
         .. "|" .. self:size_key(pageno)
+        .. "|" .. ImageEnhance.key(self.session.display_enhancement,self.session.display_tone)
 end
 
 --- 页面尺寸指纹: 排版用的尺寸一变, 渲染缓存键就得跟着变
@@ -2071,6 +2121,7 @@ function StreamDocument:getPagePartHash(pageno, zoom, rotation, gamma, saturatio
     return Document.getPagePartHash(self, pageno, zoom, rotation, gamma, saturation, rect)
         .. "|" .. render_key(self.session, pageno)
         .. "|" .. self:size_key(pageno)
+        .. "|" .. ImageEnhance.key(self.session.display_enhancement,self.session.display_tone)
 end
 
 function StreamDocument:getDocumentProps()
@@ -2163,6 +2214,12 @@ function StreamDocument:close()
     -- 我们本来就不需要这些 tile 了, 在这里一次还清。
     pcall(function() MemoryGuard.instance():release_doc_cache() end)
     if Diag.enabled then Diag.stop() end
+    -- Native subdocument close also serves as a decode-buffer release. Only
+    -- the outer document's final close may detach the cancelled session.
+    if self._document then
+        self._document.session=nil
+        self._document.render_request=nil
+    end
     return Document.close(self)
 end
 

@@ -18,6 +18,8 @@ ConfigDefaults.defaults = {
     image_quality = "original",
     -- 默认跟随 KOReader; true 时强制灰度。保留已有用户选择。
     grayscale_images = false,
+    comic_display_enhancement = "off",
+    comic_display_tone = "auto", -- Preserve legacy gamma until explicitly changed.
     -- 提前加载页数 (0~9, 0 = 关闭): ui/stream_reader.lua 读取。
     -- 默认 3 (原为 1): 真机实测单页下载+落盘只要 ~0.1s, 真正的等待来自"翻页那一刻才开始下",
     -- 预取窗口太小就来不及 —— 翻页时看到的仍是"加载中…"。预取的代价只有磁盘
@@ -55,6 +57,12 @@ ConfigDefaults.defaults = {
 ConfigDefaults.validators = {
     grayscale_images = function(value)
         return type(value) == "boolean"
+    end,
+    comic_display_tone = function(value)
+        return value=="auto" or value=="off" or value=="light" or value=="standard" or value=="contrast"
+    end,
+    comic_display_enhancement = function(value)
+        return value=="off" or value=="light" or value=="standard" or value=="sharpen" or value=="denoise_sharpen"
     end,
     -- medium/high 是旧值: 老配置文件里还有, 一律按原图处理 (见 preferOriginal),
     -- 不拒绝 —— 拒绝会让整个配置文件校验失败, 用户的其它设置一起丢。
@@ -100,6 +108,8 @@ ConfigDefaults.validators = {
 -- 配置描述（用于生成帮助文档）
 ConfigDefaults.descriptions = {
     grayscale_images = _("图片模式"),
+    comic_display_tone = _("漫画色调调整"),
+    comic_display_enhancement = _("漫画显示增强"),
     image_quality = _("图片质量"),
     novel_prefetch_chapters = _("提前加载章节数（0~5，0 = 关闭）"),
     prefetch_pages = _("提前加载页数（0~9，0 = 关闭）"),

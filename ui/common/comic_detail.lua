@@ -327,43 +327,81 @@ function ComicDetail:init()
     end)
 end
 
-function ComicDetail:loadMissingNovelChapters()
+function ComicDetail:loadMissingNovelChapters(opts)
     if self:isNovel() and not self.offline and not self._closed and not self.opening_reader
-        and (not self.episodes_data or self._chapters_stale) then self:loadChapters(1) end
+        and (not self.episodes_data or self._chapters_stale) then self:loadChapters(1,nil,opts) end
 end
 
-function ComicDetail:loadDetails()
+-- A successful response may legitimately omit author/tags/categories. Remember
+-- that success for this page, scoped exactly like source directory snapshots.
+local function detailContext(self)
+    local source=self.source
+    if not source then return end
+    local scope
+    if source.detailCacheScope then
+        local ok,value=pcall(source.detailCacheScope,source,self.comic._id)
+        if not ok or type(value)~="string" then return end
+        scope=value
+    end
+    return {source=source,book=self.comic._id,scope=scope,
+        generation=source.sessionGeneration and source:sessionGeneration()}
+end
+
+local function sameDetailContext(a,b)
+    return a and b and a.source==b.source and a.book==b.book
+        and a.scope==b.scope and a.generation==b.generation
+end
+
+function ComicDetail:loadDetails(opts)
     if self._loading_detail or self._closed or self.opening_reader or self.offline then return end
     if not self.source or type(self.source.getComicDetail)~="function" then
-        self:loadMissingNovelChapters();return
+        self:loadMissingNovelChapters(opts);return
     end
     local need_fav,need_info=self:detailNeeds()
     if not need_fav and not need_info and not self._detail_error then
-        self:loadMissingNovelChapters();return
+        self:loadMissingNovelChapters(opts);return
     end
     self._loading_detail=true
-    local hint=require("ui.common.loading_progress"):new{title=self:isNovel() and _("加载小说详情") or _("加载漫画详情"),
-        progress={message=_("正在获取作品信息…（最多等待 60 秒）")}}
-    UIManager:show(hint,"ui");UIManager:forceRePaint()
-    local function reset() self._loading_detail=false end
+    local background=opts and opts.background==true
+    self._detail_background=background
+    local context=detailContext(self)
+    local function cancelled()
+        return self._closed or self.opening_reader
+            or context and not sameDetailContext(context,detailContext(self))
+    end
+    local hint
+    if background then self:refresh()
+    else
+        hint=require("ui.common.loading_progress"):new{title=self:isNovel() and _("加载小说详情") or _("加载漫画详情"),
+            progress={message=_("正在获取作品信息…（最多等待 60 秒）")}}
+        UIManager:show(hint,"ui");UIManager:forceRePaint()
+    end
+    local function reset() self._loading_detail=false;self._detail_background=nil end
     self._detail_task=LoadingTask.background(hint,function()
-        local ok,err=self:syncFromSource()
+        local ok,err,changed=self:syncFromSource({defer_refresh=true})
         reset();LoadingTask.close(hint)
-        if self._closed or self.opening_reader then return end
+        if cancelled() then return end
         local prior_error=self._detail_error
         self._detail_error=ok==false and err or nil
-        if self._detail_error or prior_error then self:refresh() end
+        if background or changed or self._detail_error or prior_error then self:refresh() end
         self:tryAutoContinue()
-        if ok==false then LoadingTask.showFailure(err) end
-        self:loadMissingNovelChapters()
+        if ok==false and not background then LoadingTask.showFailure(err) end
+        self:loadMissingNovelChapters(opts)
     end,{
         delay=.05,timeout=60,
-        is_cancelled=function()return self._closed or self.opening_reader end,
-        on_cancel=function()reset();self.auto_continue=nil;self:revealQuickEntry()end,
+        is_cancelled=cancelled,
+        on_cancel=function()
+            reset();self.auto_continue=nil;self:revealQuickEntry()
+            if background and not self._closed and not self.opening_reader then self:refresh()end
+        end,
         on_error=function(err)
             reset();self._detail_error=err
             self:revealQuickEntry()
-            if not self._closed then self:refresh();LoadingTask.showFailure(err);self:loadMissingNovelChapters() end
+            if not self._closed then
+                self:refresh()
+                if not background then LoadingTask.showFailure(err)end
+                self:loadMissingNovelChapters(opts)
+            end
         end,
     })
 end
@@ -383,7 +421,7 @@ function ComicDetail:loadDetailsAfterReading()
         self._return_detail_timer=nil
         if self._closed or self.opening_reader or require('apps/reader/readerui').instance
             or not require('util.widget_sweep').isInStack(self) then return end
-        self:loadDetails()
+        self:loadDetails({background=true})
     end
     UIManager:scheduleIn(.05,self._return_detail_timer)
 end
@@ -1048,6 +1086,7 @@ function ComicDetail:buildRowSpecs()
         table.insert(specs, spec)
     end
 
+    if self._loading_detail and self._detail_background then add(_("正在补充作品信息…"))end
     if self._detail_error then add(_("详情加载失败，点此重试"),function()self:loadDetails()end) end
     -- 标签: 点击弹出标签菜单, 选中即按该标签搜索
     -- (标签常有十几个且长短不一, 直接铺在页面上会挤成一团 / 放不下)
@@ -1411,7 +1450,7 @@ function ComicDetail:cancelChapterLoad()
     self._chapter_refresh_manual=nil
 end
 
-function ComicDetail:loadChapters(page,force)
+function ComicDetail:loadChapters(page,force,opts)
     if self._closed or self.opening_reader then return end
     if not self.offline and not require("ui.common.source_access").check(self.source) then return end
     if self.loading_chapters then
@@ -1433,7 +1472,7 @@ function ComicDetail:loadChapters(page,force)
     end
     self.loading_chapters = true
     self._chapter_refresh_manual=force==true
-    local background=self.episodes_data~=nil
+    local background=self.episodes_data~=nil or opts and opts.background==true
     if force and background then self:refresh();UIManager:forceRePaint() end
     local generation=source and source.sessionGeneration and source:sessionGeneration()
     local started=require("socket").gettime()
@@ -1740,6 +1779,7 @@ end
 function ComicDetail:detailNeeds()
     local c=self.comic
     local fa = self.favorite_action
+    if sameDetailContext(self._detail_snapshot,detailContext(self)) then return false,false end
     -- 本地兜底后端: 收藏状态只可能在本地, 不为它去请求源 (未登录必然 401)
     local need_fav = fa ~= nil and c.isFavourite == nil and fa.local_state == nil
     local need_info = blank(c.description) or blank(c.author_text) or blank(c.author)
@@ -1750,10 +1790,10 @@ function ComicDetail:detailNeeds()
         need_info=blank(c.description) or blank(c.author_text) or c.author_text=="未知作者"
             or c.author_text==_("未知作者") or blank(c.categories_text)
     end
-    return need_fav,need_info
+    return need_fav,need_info or self._detail_snapshot~=nil
 end
 
-function ComicDetail:syncFromSource()
+function ComicDetail:syncFromSource(opts)
     if not self.offline and not require("ui.common.source_access").check(self.source,nil,true) then return end
     local source = self.source
     local c = self.comic
@@ -1761,13 +1801,16 @@ function ComicDetail:syncFromSource()
 
     local fa = self.favorite_action
     local need_fav,need_info=self:detailNeeds()
-    if not need_fav and not need_info then return true end
+    if not need_fav and not need_info and not self._detail_error then return true end
 
+    local context=detailContext(self)
     local ok, detail, err = source:getComicDetail(c._id)
     if not ok or type(detail) ~= "table" then return false,err or detail or _("详情加载失败") end
     if self._closed or self.closing_by_back or self.opening_reader then return end
+    if context and not sameDetailContext(context,detailContext(self)) then return end
 
     local changed = self:mergeDetail(detail)
+    self._detail_snapshot=context
 
     if need_fav and detail.isFavourite ~= nil then
         c.isFavourite = detail.isFavourite
@@ -1782,8 +1825,8 @@ function ComicDetail:syncFromSource()
     end
 
     -- 一次重建就够: syncFavoriteLabel 自己也会 refresh, 合并后不要刷两遍
-    if changed and self.list_view then self:refresh() end
-    return true
+    if changed and self.list_view and not (opts and opts.defer_refresh) then self:refresh() end
+    return true,nil,changed
 end
 
 function ComicDetail:syncFavoriteLabel()

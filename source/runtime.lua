@@ -262,6 +262,10 @@ function Runtime.new(source,manifest,digest,extension_context)
         return Contract.serialize({source=manifest.id,digest=digest,version=manifest.version,
             manga=tostring(manga_id),scope=scope,settings=require("ffi/sha2").sha256(Contract.serialize(settings))})
     end
+    function handle:detailCacheScope(book)
+        local key=chapter_cache_key(book)
+        return key and require("ffi/sha2").sha256(key)
+    end
     function handle:novelResumeScope(book)
         if legacy or handle.content_type~="novel"or manifest.identity_policy~="stable"then return end
         local key=chapter_cache_key(book)

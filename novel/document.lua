@@ -169,6 +169,15 @@ function M.prepare(session,options)
                     -- bytes and staging files. Never raise the observed budget.
                     local recovered=math.min(40*1024*1024,memory:reclaim_for_decode())
                     guard(options.call)
+                    local Async=require('network.async_task')
+                    if Async.releaseIdleWorker()then
+                        -- Let the killed idle worker exit, then grant only what
+                        -- the current system measurement permits. Its connection
+                        -- is recreated by the next request, never replayed here.
+                        Async.wait(.05)
+                        guard(options.call)
+                        recovered=math.min(40*1024*1024,memory:prepare_decode())
+                    end
                     if recovered>budget then
                         budget,zoom=recovered,initial_zoom
                         decode()
@@ -181,15 +190,32 @@ function M.prepare(session,options)
                 end
                 assert(bitmap,"bounded illustration decode failed: "..tostring(decode_error))
                 local target=input:gsub("%.img$",".png")
+                local output_format='png'
                 local wrote,write_error=pcall(function()
                     guard(options.call)
                     bitmap:writePNG(target)
+                    guard(options.call)
+                    if format=='jpeg' and (lfs.attributes(target,'size')or 0)>4*1024*1024 then
+                        -- Photographic PNGs can exceed the file cap even after
+                        -- bounded scaling. Reuse this RGB bitmap, never decode
+                        -- again or change the memory/file limits. WebP alpha
+                        -- continues to use lossless PNG.
+                        os.remove(target)
+                        target=input:gsub('%.img$','.jpeg');output_format='jpeg'
+                        local encoded,reason=require('util.scaled_decode').encode_jpeg(bitmap,target,budget,4*1024*1024)
+                        if not encoded and reason=='memory_budget'then
+                            error(require('source.contract').error('resource_limit','插图编码内存不足，请关闭其他页面后重试。',
+                                'prepareChapter',nil,false),0)
+                        end
+                        assert(encoded,'bounded illustration encoding failed: '..tostring(reason))
+                        guard(options.call)
+                    end
                 end)
                 bitmap:free();os.remove(input)
                 if not wrote then error(write_error,0)end
                 response.body=assert(Store.read(target,4*1024*1024),"converted illustration too large")
                 w,h,format=require("util.image_size").from_data(response.body)
-                assert(w and w*h<=4*1024*1024 and format=="png","converted illustration exceeds limit")
+                assert(w and w*h<=4*1024*1024 and format==output_format,"converted illustration exceeds limit")
                 converted=true
             end
             local image_path=asset.path:gsub("%.img$","."..format)

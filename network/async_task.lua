@@ -4,12 +4,20 @@ local Async = {}
 local tasks = setmetatable({}, { __mode = "k" })
 local in_worker = false
 Async.TICK = 0.05
+Async.MAX_IDLE_TICK = 0.25
 Async.TIMEOUT = 90
 Async.MAX_RESULT = 8 * 1024 * 1024
 
 function Async.active()
     local co = coroutine.running()
     return not in_worker and co and tasks[co] ~= nil
+end
+
+-- A persistent HTTP worker can retain TLS/connection memory while its owner
+-- decodes an illustration. Never touch another task or an in-flight response.
+function Async.releaseIdleWorker()
+    local task=tasks[coroutine.running()]
+    return task and not task.done and task._release_idle and task._release_idle()or false
 end
 
 -- Yield a continuation without sleeping the UI thread or starting a worker.
@@ -54,10 +62,12 @@ function Async.run(fn, opts)
         if not ok then require("util.logger").warn("Picayomi async callback: " .. tostring(err)) end
     end
     local function release(keep_session)
+        local released=true
         if task.poll then UIManager:unschedule(task.poll) end
         if task.wait_timer then UIManager:unschedule(task.wait_timer);task.wait_timer=nil end
+        if task.join_cleanup then task.join_cleanup()end
         if task.session and not keep_session then
-            pcall(function()
+            released=pcall(function()
                 if task.nonblocking and task.session.terminate then
                     local pid=task.session.pid
                     task.session:terminate()
@@ -75,8 +85,17 @@ function Async.run(fn, opts)
             task.session = nil
         end
         task.chunks = nil
+        return released
     end
-    local function finish()
+    task._release_idle=function()
+        if task.done or not task.persistent_session or not task.session or task.chunks~=nil
+            or type(task.session.terminate)~='function'then return false end
+        local previous=task.nonblocking;task.nonblocking=true
+        local released=release()
+        task.nonblocking=previous;task.persistent_session=nil
+        return released
+    end
+    local function finish(callback,...)
         if task.done then return end
         task.done = true
         tasks[co] = nil
@@ -88,16 +107,24 @@ function Async.run(fn, opts)
         -- A cancelled coroutine is still suspended, retaining its source and
         -- page stack. Drop it even if the owning page keeps the task handle.
         co = nil
+        task._release_idle=nil
+        safe_callback(callback,...)
+        local notify=task._on_done;task._on_done=nil
+        safe_callback(notify)
     end
     function task:cancel()
         if self.done then return end
-        finish()
-        safe_callback(opts.on_cancel)
+        finish(opts.on_cancel)
     end
     local resume
     local function fail(err)
-        finish()
-        safe_callback(opts.on_error, tostring(err))
+        finish(opts.on_error,tostring(err))
+    end
+    local function schedule_poll()
+        local now=socket.gettime()
+        local remaining=math.max(0,task.started+Async.TIMEOUT-now)
+        if deadline then remaining=math.min(remaining,math.max(0,deadline-now))end
+        UIManager:scheduleIn(math.min(task.poll_delay,remaining),task.poll)
     end
     local function start(fetch)
         local request
@@ -114,6 +141,7 @@ function Async.run(fn, opts)
         end
         task.chunks, task.bytes = {}, 0
         task.started = socket.gettime()
+        task.poll_delay = Async.TICK
         local session, err
         if request and opts.reuse_worker and not opts.subprocess then
             if task.session then
@@ -140,7 +168,7 @@ function Async.run(fn, opts)
             return
         end
         task.session = session
-        UIManager:scheduleIn(Async.TICK, task.poll)
+        schedule_poll()
     end
     task.poll = function()
         if task.done then return end
@@ -149,6 +177,7 @@ function Async.run(fn, opts)
             if deadline and socket.gettime()>=deadline then fail("加载超时，请重试"); return end
             local frame = task.session:try_recv()
             if frame then
+                task.poll_delay=Async.TICK
                 if frame.error then fail(frame.error); return end
                 assert(type(frame.chunk) == "string", "后台响应格式错误")
                 task.bytes = task.bytes + #frame.chunk
@@ -164,12 +193,14 @@ function Async.run(fn, opts)
             elseif not task.session:alive() then
                 fail("后台请求意外退出，请重试")
                 return
+            else
+                task.poll_delay=math.min(Async.MAX_IDLE_TICK,task.poll_delay*2)
             end
             if socket.gettime() - task.started >= Async.TIMEOUT then
                 fail("请求超时，请重试")
                 return
             end
-            UIManager:scheduleIn(Async.TICK, task.poll)
+            schedule_poll()
         end)
         if not ok then fail(err) end
     end
@@ -182,6 +213,52 @@ function Async.run(fn, opts)
         if task.done then return end
         if not ok then fail(yielded); return end
         if coroutine.status(co) == "dead" then finish(); return end
+        if type(yielded)=='table' and yielded.join then
+            local wake
+            local function cleanup()
+                for _,child in ipairs(yielded.join)do
+                    if child._on_done==wake then child._on_done=nil end
+                end
+                task.join_cleanup=nil
+            end
+            local function cancelled()
+                if not opts.is_cancelled then return false end
+                local success,value=pcall(opts.is_cancelled)
+                if not success then fail(value);return true end
+                if value then task:cancel();return true end
+                return false
+            end
+            wake=function()
+                if task.done or task.join_cleanup~=cleanup or not yielded.ready()then return end
+                cleanup()
+                if task.wait_timer then UIManager:unschedule(task.wait_timer)end
+                local continuation
+                continuation=function()
+                    if task.done or task.wait_timer~=continuation then return end
+                    task.wait_timer=nil
+                    if not cancelled()then resume(true)end
+                end
+                task.wait_timer=continuation
+                -- One continuation after completion, never a periodic poll.
+                UIManager:scheduleIn(0,task.wait_timer)
+            end
+            task.join_cleanup=cleanup
+            for _,child in ipairs(yielded.join)do child._on_done=wake end
+            if deadline or opts.is_cancelled then
+                local function watch()
+                    if task.done or task.join_cleanup~=cleanup then return end
+                    task.wait_timer=nil
+                    if cancelled()then return end
+                    local delay=deadline and math.max(0,deadline-socket.gettime())or Async.MAX_IDLE_TICK
+                    if deadline and delay==0 then fail("加载超时，请重试");return end
+                    if opts.is_cancelled then delay=math.min(delay,Async.MAX_IDLE_TICK)end
+                    task.wait_timer=watch;UIManager:scheduleIn(delay,watch)
+                end
+                watch()
+            end
+            wake()
+            return
+        end
         if type(yielded)=="table" and type(yielded.wait)=="number" then
             task.wait_timer=function()
                 task.wait_timer=nil
@@ -245,12 +322,12 @@ function Async.map(functions,concurrency)
             on_error=stop})
         children[#children+1]=child;owner.children[child]=true
     end
-    while failure==nil do
-        local pending=false
-        for _,child in ipairs(children)do if not child.done then pending=true;break end end
-        if not pending then break end
-        Async.wait(.02)
+    local function ready()
+        if failure~=nil then return true end
+        for _,child in ipairs(children)do if not child.done then return false end end
+        return true
     end
+    if not ready()then coroutine.yield({join=children,ready=ready})end
     for _,child in ipairs(children)do
         child.nonblocking=true;child:cancel()
     end

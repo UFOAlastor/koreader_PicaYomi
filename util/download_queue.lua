@@ -518,7 +518,7 @@ function Queue:_prepare(job)
                 job.prepare_token=nil;job.prepare_task=nil;job.phase="failed"
                 OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
                     {state="partial",error="章节信息请求已取消"},{force=true})
-                changed()
+                changed();self:_schedule()
             end
         end,
     })
@@ -853,13 +853,17 @@ function Queue:_schedule()
     if next(self.pauses) ~= nil then return end
     if self.scheduled then return end
     if not (self.running or self.active or #self.jobs > 0) then return end
-    self.scheduled = true
-    self._tick_id = (self._tick_id or 0) + 1
-    local id = self._tick_id
     if self._tick_callback then
         local ok,UI=pcall(require,"ui/uimanager")
         if ok then UI:unschedule(self._tick_callback)end
+        self._tick_callback=nil
     end
+    -- Async preparation already owns its request/deadline timers. Its finish,
+    -- error and cancellation callbacks restart this queue; no parent polling.
+    if self.active and self.active.phase=="preparing" then return end
+    self.scheduled = true
+    self._tick_id = (self._tick_id or 0) + 1
+    local id = self._tick_id
     self._tick_callback=function()self:_tick(id)end
     local delay=self.active and self.active.phase=="waiting"and math.max(self.tick,self.active.wait_until-self.clock())or self.tick
     if not self.schedule(self._tick_callback, delay) then

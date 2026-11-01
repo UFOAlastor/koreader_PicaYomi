@@ -364,7 +364,7 @@ end
 -- 就可能与 UIManager 的计数器错位 —— 而 allowStandby 里是一个 assert (:1722)。
 function Picayomi:onSuspend()
     require("source.extensions.updater").cancel()
-    require("network.async_task").cancelAll()
+    require("network.async_task").cancelAll(true)
     pcall(function()
         local session = self:getActiveStream()
         local driver = session and session.driver

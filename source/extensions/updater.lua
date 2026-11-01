@@ -143,7 +143,7 @@ function U.cancel()
     U.stopping=true
     U.generation=U.generation+1
     if U.start then UI:unschedule(U.start);U.start=nil end
-    if U.task then U.task:cancel();U.task=nil end
+    if U.task then U.task.nonblocking=true;U.task:cancel();U.task=nil end
     if U.download then local task=U.download;U.download=nil;task:cancel() end
     U.downloading=false
     if U.prompt then UI:close(U.prompt,"ui") end

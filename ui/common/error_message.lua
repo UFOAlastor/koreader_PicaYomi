@@ -27,12 +27,14 @@ function Message.describe(err, fallback)
         return _("请求超时，请检查网络或稍后重试。")
     elseif has("证书", "certificate", "主机名校验", "hostname mismatch") then
         return _("安全连接验证失败，请检查设备时间和网络后重试。")
+    elseif has("host or service", "name or service", "nodename", "getaddrinfo", "resolve", "name resolution", "域名解析") then
+        return _("域名解析失败，请检查网络连接和 DNS 后重试。")
+    elseif has("network is unreachable", "network unreachable", "network is down", "not connected", "网络未连接") then
+        return _("网络未连接，请连接网络后重试；已下载内容仍可使用。")
     elseif has("tls", "ssl") then
         return _("安全连接建立失败，请检查网络或稍后重试。")
     elseif has("https 域名", "https 网站", "订阅地址无效", "无认证信息", "请输入 https") then
         return _("请输入有效的 HTTPS 地址，且不要包含账号、密码或空格。")
-    elseif has("host or service", "name or service", "nodename", "getaddrinfo", "resolve", "域名解析") then
-        return _("域名解析失败，请检查网络连接和 DNS 后重试。")
     elseif has("后台请求意外退出", "后台响应", "无效的后台任务", "无法启动后台", "无法创建下载子进程") then
         return _("后台请求中断，请重试；若反复发生，请重启 KOReader。")
     elseif has("可用内存不足", "out of memory", "not enough memory") then
@@ -51,8 +53,6 @@ function Message.describe(err, fallback)
         return _("请求过于频繁，请稍后重试。")
     elseif lower:find("http[s]?[^\n]-5%d%d") then
         return _("服务器暂时不可用，请稍后重试。")
-    elseif has("network is unreachable", "network unreachable", "not connected", "网络未连接") then
-        return _("网络未连接，请连接网络后重试；已下载内容仍可使用。")
     elseif has("connection refused", "connection reset", "closed", "连接失败", "https 获取失败") then
         return _("连接失败或中断，请检查网络或稍后重试。")
     elseif has("过大", "数量超限", "响应过大") then

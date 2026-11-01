@@ -3,8 +3,12 @@ local M={}
 local function pack(...)return {n=select('#',...),...}end
 function M.run(reader,callback,mark,clock,doccache,settings)
     local undo={}
+    local wrapped={}
     local function wrap(obj,key,label)
         if not obj or type(obj[key])~='function' then return end
+        wrapped[obj]=wrapped[obj]or {}
+        if wrapped[obj][key]then return end
+        wrapped[obj][key]=true
         local own,original=rawget(obj,key),obj[key]
         obj[key]=function(...)
             local started=clock()
@@ -30,6 +34,21 @@ function M.run(reader,callback,mark,clock,doccache,settings)
             end
         end
     end
+    local function registered(children,prefix)
+        for index,child in ipairs(children)do
+            if type(child)=='table' and child~=reader then
+                local name=child.name
+                if type(name)~='string' or not name:match('^[%w_]+$')then name=prefix..index end
+                for _,method in ipairs({'onCloseDocument','onSaveSettings','onCloseWidget'})do
+                    wrap(child,method,'module.'..name..'.'..method)
+                end
+            end
+        end
+    end
+    -- PluginLoader registers unnamed instances in the event array. They can
+    -- perform synchronous network work even without a named reader.ui field.
+    registered(reader,'child_')
+    registered(reader.active_widgets or {},'active_')
     local original,own=reader.handleEvent,rawget(reader,'handleEvent')
     if type(original)=='function' then
         reader.handleEvent=function(self,event,...)

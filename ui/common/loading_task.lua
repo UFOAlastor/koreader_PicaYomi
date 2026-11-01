@@ -77,7 +77,7 @@ function LoadingTask.background(loading, fn, opts)
     function handle:cancel()
         if self.cancelled or (self.task and self.task.done) then return end
         if self.start then UIManager:unschedule(self.start) end
-        if self.task then self.task:cancel() end
+        if self.task then self.task.nonblocking=true;self.task:cancel() end
         cancelled()
     end
     if loading then

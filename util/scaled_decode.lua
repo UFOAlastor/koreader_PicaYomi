@@ -50,6 +50,7 @@ ScaledDecode.FAST_DENOMS = { [2] = true, [4] = true, [8] = true }
 
 local turbojpeg_state        -- nil = 还没试; false = 试过不可用; 否则 = 库
 local turbojpeg_err
+local jpeg_encoder_ready
 local webp_state
 local webp_err
 
@@ -248,6 +249,56 @@ end
 -- JPEG 后端
 ----------------------------------------------------------------------------
 
+-- Internal recovery encoder: caller owns an RGB24 bitmap. Reserve the native
+-- output buffer, its Lua write copy and codec workspace within the SAME budget.
+-- NOREALLOC prevents an incompressible page from growing past the file cap.
+function ScaledDecode.encode_jpeg(bitmap,path,budget,file_limit)
+    local lib,err=load_turbojpeg()
+    if not lib then return nil,err end
+    local handle,buffer,file,created
+    local temporary=path..'.encoding'
+    local ok,result,why=pcall(function()
+        if bitmap:getType()~=BB.TYPE_BBRGB24 then return nil,'unsupported encoder input' end
+        local w,h=tonumber(bitmap.w),tonumber(bitmap.h)
+        if w<1 or h<1 or w*h>4*1024*1024 then return nil,'encoder dimensions exceed limit' end
+        if not jpeg_encoder_ready then
+            ffi.cdef[[unsigned char *tj3Alloc(size_t); size_t tj3JPEGBufSize(int,int,int);]]
+            jpeg_encoder_ready=true
+        end
+        local cap=math.min(4*1024*1024,math.floor(tonumber(file_limit)or 4*1024*1024),
+            tonumber(lib.tj3JPEGBufSize(w,h,lib.TJSAMP_420)))
+        if cap<1 then return nil,'invalid encoder file limit' end
+        local remaining=(tonumber(budget)or 0)-tonumber(bitmap.stride)*h-2*cap
+        if remaining<w*256+1024*1024 then return nil,'memory_budget' end
+        handle=lib.tj3Init(lib.TJINIT_COMPRESS)
+        if handle==nil then handle=nil;return nil,'encoder unavailable' end
+        for _,setting in ipairs({{lib.TJPARAM_SUBSAMP,lib.TJSAMP_420},{lib.TJPARAM_QUALITY,85},
+            {lib.TJPARAM_PROGRESSIVE,0},{lib.TJPARAM_NOREALLOC,1},
+            {lib.TJPARAM_MAXMEMORY,math.floor(remaining/1048576)}})do
+            if lib.tj3Set(handle,setting[1],setting[2])<0 then return nil,'encoder limit unavailable' end
+        end
+        buffer=lib.tj3Alloc(cap)
+        if buffer==nil then buffer=nil;return nil,'memory_budget' end
+        local dst,size=ffi.new('unsigned char*[1]',buffer),ffi.new('size_t[1]',cap)
+        if lib.tj3Compress8(handle,ffi.cast('const unsigned char*',bitmap.data),w,bitmap.stride,h,
+            lib.TJPF_RGB,dst,size)<0 then return nil,'JPEG output exceeds encoding limit' end
+        local length=tonumber(size[0])
+        if length<1 or length>cap then return nil,'JPEG output exceeds file limit' end
+        file=assert(io.open(temporary,'wb'),'cannot open encoded image');created=true
+        assert(file:write(ffi.string(buffer,length)),'cannot write encoded image')
+        assert(file:close(),'cannot close encoded image');file=nil
+        assert(os.rename(temporary,path),'cannot commit encoded image');created=false
+        return true,length
+    end)
+    if file then pcall(file.close,file)end
+    if buffer then pcall(lib.tj3Free,buffer)end
+    if handle then pcall(lib.tj3Destroy,handle)end
+    if not ok and logger.enabled then logger.warn('Picayomi JPEG encoding failed:',tostring(result))end
+    if created then os.remove(temporary)end
+    if not ok or not result then return nil,ok and why or 'JPEG encoding failed' end
+    return result,why
+end
+
 --- 缩放解码 JPEG
 -- @param path      文件路径
 -- @param target_w, target_h  目标尺寸上界 (来自 image_guard)
@@ -290,6 +341,20 @@ function ScaledDecode.decode_jpeg(path, target_w, target_h, color, budget)
             return nil, string.format("缩放结果 %dx%d 仍超出解码预算", f.ow, f.oh)
         end
 
+        -- Scaling the output does not shrink progressive coefficient arrays.
+        -- This entry point must enforce the same native limit as region decode.
+        local available=tonumber(budget)or ImageGuard.DECODE_BUDGET
+        local input_bytes=#data*2
+        local output_bytes=f.ow*f.oh*(color and 3 or 1)
+        local workspace=jw*256+1024*1024
+        if lib.tj3Get(handle,lib.TJPARAM_PROGRESSIVE)~=0 then
+            workspace=ScaledDecode.jpeg_workspace(jw,jh,lib.tj3Get(handle,lib.TJPARAM_SUBSAMP),
+                lib.tj3Get(handle,lib.TJPARAM_COLORSPACE))
+        end
+        if input_bytes+output_bytes+workspace>available then return nil,'memory_budget' end
+        local limit=math.floor((available-input_bytes-output_bytes)/1048576)
+        if limit<1 or lib.tj3Set(handle,lib.TJPARAM_MAXMEMORY,limit)<0 then return nil,'memory_budget' end
+
         local sf = ffi.new("picayomi_tjscalingfactor")
         sf.num, sf.denom = f.num, f.denom
         if lib.tj3SetScalingFactor(handle, sf) < 0 then
@@ -304,6 +369,8 @@ function ScaledDecode.decode_jpeg(path, target_w, target_h, color, budget)
             ffi.cast("unsigned char*", bb.data), bb.stride, pixfmt)
         if rc < 0 then
             bb:free()
+            local message=ffi.string(lib.tj3GetErrorStr(handle)):lower()
+            if message:find('memory',1,true)or message:find('backing store',1,true)then return nil,'memory_budget' end
             return nil, "缩放解码失败 (tj3Decompress8 < 0)"
         end
         return bb, f.ow, f.oh

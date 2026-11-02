@@ -105,7 +105,7 @@ function ReadingSettings:setDisplayEnhancement(tone)
     end
     local choices=tone and {{value="off",text=_("原样（不调色调）"),description=_("保留原色调，细节增强仍生效")},
         {value="light",text=_("轻度加深"),description=_("略微加深，适合文字偏淡")},{value="standard",text=_("标准加深"),description=_("整体加深，浅灰背景也会变暗")},
-        {value="contrast",text=_("柔和对比度"),description=_("深灰更深、浅灰更浅，适合发灰")}} or {{value="off",text=_("关闭（不处理细节）"),description=_("不降噪、不锐化，色调仍生效")},
+        {value="contrast",text=_("柔和对比度"),description=_("深灰更深、浅灰更浅，会影响整体氛围")}} or {{value="off",text=_("关闭（不处理细节）"),description=_("不降噪、不锐化，色调仍生效")},
         {value="sharpen",text=_("锐化"),description=_("突出文字和线条边缘")},{value="denoise_sharpen",text=_("降噪＋锐化"),description=_("减少噪点，再强化边缘")}}
     local items={
         {text=tone and _("可与降噪、锐化叠加，保留下载原图") or _("可与色调调整叠加，保留下载原图"),enabled=false,select_enabled=false},

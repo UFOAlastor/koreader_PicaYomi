@@ -19,6 +19,7 @@ ConfigDefaults.defaults = {
     -- 默认跟随 KOReader; true 时强制灰度。保留已有用户选择。
     grayscale_images = false,
     comic_display_enhancement = "off",
+    comic_enhancement_adaptive = true,
     comic_display_tone = "auto", -- Preserve legacy gamma until explicitly changed.
     -- 提前加载页数 (0~9, 0 = 关闭): ui/stream_reader.lua 读取。
     -- 默认 3 (原为 1): 真机实测单页下载+落盘只要 ~0.1s, 真正的等待来自"翻页那一刻才开始下",
@@ -58,6 +59,7 @@ ConfigDefaults.validators = {
     grayscale_images = function(value)
         return type(value) == "boolean"
     end,
+    comic_enhancement_adaptive = function(value)return type(value)=="boolean" end,
     comic_display_tone = function(value)
         return value=="auto" or value=="off" or value=="light" or value=="standard" or value=="contrast"
     end,
@@ -108,6 +110,7 @@ ConfigDefaults.validators = {
 -- 配置描述（用于生成帮助文档）
 ConfigDefaults.descriptions = {
     grayscale_images = _("图片模式"),
+    comic_enhancement_adaptive = _("大图自适应加速"),
     comic_display_tone = _("漫画色调调整"),
     comic_display_enhancement = _("漫画显示增强"),
     image_quality = _("图片质量"),

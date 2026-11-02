@@ -1,7 +1,7 @@
 -- Pointwise display correction. Decoder bitmaps and downloaded files stay raw.
 local ffi = require("ffi")
 local BB = require("ffi/blitbuffer")
-local M = { CONFIG = "comic_display_enhancement", TONE_CONFIG = "comic_display_tone" }
+local M = { CONFIG = "comic_display_enhancement", TONE_CONFIG = "comic_display_tone", ADAPTIVE_CONFIG = "comic_enhancement_adaptive" }
 local gamma = { light=1.12, standard=1.25 }
 local library
 local context_svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
@@ -11,7 +11,14 @@ function M.tone(mode,tone)
     if tone==nil or tone=="auto" then return gamma[mode] and mode or "off" end
     return (gamma[tone] or tone=="contrast") and tone or "off"
 end
-function M.key(mode,tone) return "display-filter-v3:"..M.normalize(mode)..":"..M.tone(mode,tone) end
+function M.key(mode,tone,adaptive)
+    return "display-filter-v7:"..M.normalize(mode)..":"..M.tone(mode,tone)..(adaptive==false and ":fixed" or ":adaptive")
+end
+-- Small images keep source-resolution filtering. At a material downscale,
+-- filter the display-resolution neighborhood instead of every source pixel.
+function M.at_display(mode,zoom,adaptive)
+    return adaptive~=false and M.spatial(mode) and type(zoom)=="number" and zoom>0 and zoom<=0.8
+end
 
 -- A bounded monotone S curve. Endpoints and mid-gray stay fixed; no extra
 -- bitmap or neighborhood is needed, so tiles and full pages agree exactly.

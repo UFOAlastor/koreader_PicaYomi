@@ -130,6 +130,15 @@ function ReadingSettings:setDisplayEnhancement(tone)
             end
         end}
     end
+    if not tone then
+        items[#items+1]={text=_("大图自适应加速"),mandatory=_("缩小显示用轻量增强，重开章节生效"),
+            text_func=function()return self:safeConfigGet(E.ADAPTIVE_CONFIG,true) and _("大图加速：开启") or _("大图加速：关闭")end,
+            callback=function()
+                if self:safeConfigSet(E.ADAPTIVE_CONFIG,not self:safeConfigGet(E.ADAPTIVE_CONFIG,true))then
+                    menu:updateItems();UIManager:setDirty(menu,"ui")
+                end
+            end}
+    end
     items[#items+1]=self:createBackButton()
     menu=self:createMenu(tone and _("漫画色调调整") or _("漫画细节增强"),items)
     self:showMenu(menu)

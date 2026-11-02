@@ -345,6 +345,8 @@ function StreamSession.new(opts)
         or Config:get(ImageEnhance.CONFIG,"off"))
     self.display_tone = opts.display_tone or (opts.display_enhancement and "auto")
         or Config:get(ImageEnhance.TONE_CONFIG,"auto")
+    self.adaptive_enhancement = opts.adaptive_enhancement
+    if self.adaptive_enhancement==nil then self.adaptive_enhancement=Config:get(ImageEnhance.ADAPTIVE_CONFIG,true)end
     self.order = opts.order
     self.title = opts.title or ""
     -- 阅读上下文 { comic = ..., episodes = ... }，供阅读器内菜单使用
@@ -1197,19 +1199,9 @@ local function placeholder_page(state, info)
     return page
 end
 
---- 把 source_bb 缩放到 target_bb 的尺寸并贴上去。
---
--- 为什么不用 page:draw 里原本的 bb:scale():
---   1) 清晰度: KOReader 自己写明它是 "very simple nearest neighbour scaling"
---      (base/ffi/blitbuffer.lua:1441)。放大 -> 块状锯齿; 缩小 -> 网点/细线上出
---      摩尔纹和噪点。漫画正是这两种情况的高发区 (源图 800px 或 2000px, 屏幕 1236px)。
---   2) 速度: bb:scale 是 Lua 逐像素循环, 每页固定 new_w*new_h 次 (1236*1648 ≈ 2M),
---      **与原图大小无关** —— 每翻一页都要付这笔固定开销, 而 Kindle 的 CPU 跑
---      LuaJIT 逐像素远不如跑 MuPDF 的 C 循环。
---   MuPDF 1.27.2 的 simple 核为 1-3x²+2x³ (0≤x<1), 缩小时扩大支撑域,
---   且 8bpp 灰度原生支持 (走 fz_device_gray, 不会转成 RGB 把内存涨上去)。
---
--- 回退: MuPDF 不可用/抛错时退回 bb:scale —— 宁可变钝, 不能整页画不出来。
+--- 显示缩放：缩小时沿用宿主原生滤波；小图放大按原像素对齐，
+-- 源尺寸保边锐化后，用受限三次插值保留细笔画。
+-- 裁片映射与低内存路径共用页面坐标；显式旧版缩放仍遵循宿主设置。
 local RenderImage  -- 懒加载: 只有真的要画一页时才 require, 不拖插件加载
 local function get_renderimage()
     if RenderImage == nil then
@@ -1217,6 +1209,19 @@ local function get_renderimage()
         RenderImage = ok and mod or false
     end
     return RenderImage or nil
+end
+
+local function resize_display(bb,w,h,mapping,budget_source)
+    local render=get_renderimage()
+    local enlarging=w>tonumber(bb.w) and h>tonumber(bb.h)
+    if not enlarging or G_reader_settings:isTrue("legacy_image_scaling")then
+        return render:scaleBlitBuffer(bb,w,h,false)
+    end
+    local function budget()return budget_source and budget_source() or MemoryGuard.instance():decode_budget()end
+    local scaled,why,needed=require("util.image_upscale").scale(bb,w,h,budget(),mapping)
+    if not scaled and why~="memory_budget"then scaled=render:scaleBlitBuffer(bb,w,h,false)end
+    if not scaled then return nil,why,needed end
+    return scaled
 end
 
 local function blit_scaled(source_bb, target_bb, dc, logical_w, logical_h, offset_x, offset_y)
@@ -1243,7 +1248,7 @@ local function blit_scaled(source_bb, target_bb, dc, logical_w, logical_h, offse
                 math.max(1,math.ceil(y1*full_h/sh)-math.floor(y0*full_h/sh))
             local ok,scaled
             if RenderImage_mod then
-                ok,scaled=pcall(RenderImage_mod.scaleBlitBuffer,RenderImage_mod,view,rw,rh,false)
+                ok,scaled=pcall(resize_display,view,rw,rh)
             end
             if not ok or not scaled then scaled=view:scale(rw,rh) end
             target_bb:blitFrom(scaled,dx,dy,0,0,rw,rh)
@@ -1255,8 +1260,7 @@ local function blit_scaled(source_bb, target_bb, dc, logical_w, logical_h, offse
     if RenderImage_mod then
         -- free_orig_bb = false: source_bb 归文档所有 (PicPage.image_bb 或 scaled_sub
         -- 的 bb), 由各自的 close 释放 —— 这里绝不能顺手 free 别人的内存。
-        local ok, scaled = pcall(RenderImage_mod.scaleBlitBuffer, RenderImage_mod,
-            source_bb, w, h, false)
+        local ok, scaled = pcall(resize_display, source_bb, w, h)
         if ok and scaled then
             target_bb:blitFullFrom(scaled, 0, 0)
             if scaled ~= source_bb then scaled:free() end
@@ -1479,9 +1483,14 @@ function MultiImageDoc:openPage(n)
     if render_post and render_post.digest and sz and sz.w and sz.h then
         post_plan=require("source.processors").regionPlan(render_post,sz.w,sz.h)
     end
-    local function filter_source(bb)
-        if not ImageEnhance.spatial(self.session.display_enhancement)then return true end
-        local ok,reason,needed=require("util.image_filter").apply(bb,self.session.display_enhancement,decode_budget())
+    local function filter_source(bb,defer,fast,upscale)
+        if defer or not ImageEnhance.spatial(self.session.display_enhancement)then return true end
+        local mode=self.session.display_enhancement
+        if upscale and not G_reader_settings:isTrue("legacy_image_scaling")then
+            if mode=="sharpen"then mode="bounded_sharpen"end
+            if mode=="denoise_sharpen"then mode="denoise_bounded_sharpen"end
+        end
+        local ok,reason,needed=require("util.image_filter").apply(bb,mode,decode_budget(),fast)
         if not ok and reason~="memory_budget" then
             if not self.session.enhancement_warning then
                 self.session.enhancement_warning=true
@@ -1495,7 +1504,9 @@ function MultiImageDoc:openPage(n)
     local function region_decode(format,y,height,current_budget,zoom)
         local function read_piece(py,ph,remaining,pzoom)
             if format=="png" then return PngDecode.decode_region(path,py,ph,color,remaining) end
-            return ScaledDecode.decode_region(path,format,py,ph,color,remaining,pzoom,region_input)
+            -- WebP region scaling depends on crop height; resample below
+            -- in page coordinates so pressure crops keep identical pixels.
+            return ScaledDecode.decode_region(path,format,py,ph,color,remaining,format=="webp" and 1 or pzoom,region_input)
         end
         if not post_plan then return read_piece(y,height,current_budget,zoom) end
         -- Assemble only the requested output strip. Source rows may be far
@@ -1529,60 +1540,67 @@ function MultiImageDoc:openPage(n)
             getUsedBBox=function() return 0.01,0.01,-0.01,-0.01 end}
         page.draw=function(_,dc,target,ox,oy)
             local started=now_seconds()
+            local zoom=dc:getZoom()
+            local display_filter=ImageEnhance.at_display(self.session.display_enhancement,zoom,self.session.adaptive_enhancement)
             local function record(reason)
                 local elapsed=(now_seconds()-started)*1000
                 if elapsed>=1000 then
                     logger.warn("Picayomi: slow page render", "page", n, "format", format,
-                        "width", sz.w, "height", sz.h, "ms", math.floor(elapsed), "result", reason)
+                        "width", sz.w, "height", sz.h, "ms", math.floor(elapsed), "result", reason, "filter_space", display_filter and "display" or "source")
                 elseif Diag.enabled then
                     Diag.mark(string.format("draw p%d %dms (%s)",n,math.floor(elapsed),format))
                 end
             end
             ox,oy=ox or 0,oy or 0
-            local zoom=dc:getZoom()
             local tw,th=target:getWidth(),target:getHeight()
             local row=0
-            local halo=math.max(2,math.ceil(1/zoom)+1)+(ImageEnhance.spatial(self.session.display_enhancement)and 3 or 0)
+            local halo=math.max(2,math.ceil(1/zoom)+1)+(display_filter and math.ceil(3/zoom) or ImageEnhance.spatial(self.session.display_enhancement)and 3 or 0)
+            local page_w,page_h=math.ceil(sz.w*zoom),math.ceil(sz.h*zoom)
             local function range(lines)
-                local first=math.max(0,math.floor((oy+row)/zoom)-halo)
-                local last=math.min(sz.h,math.ceil((oy+row+lines)/zoom)+halo)
+                local top,bottom=oy+row,oy+row+lines
+                local first=math.max(0,math.floor(top/zoom)-halo)
+                local last=math.min(sz.h,math.ceil(math.min(bottom,page_h)/zoom)+halo)
                 return first,last-first
             end
             local function draw_strip(bb,start,raw_height,lines)
                 local scaled,view,canvas
                 local required_extra
                 local ok,err=pcall(function()
-                    local filtered,reason,needed=filter_source(bb)
+                    local filtered,reason,needed=filter_source(bb,display_filter,false,zoom>1)
                     if not filtered then required_extra=needed;error(reason)end
                     local consumed=0
                     repeat
                         -- Resampling geometry must not change when the decode
                         -- batch shrinks. Keep canonical 64-display-row windows.
-                        local canonical=format=="png" or format=="jpeg"
                         local vertical=bb:getHeight()/raw_height
-                        local band=canonical and math.floor((row+consumed)/64)*64 or row
-                        local count=canonical and math.min(lines-consumed,band+64-row-consumed) or lines
-                        local first,last=start,start+raw_height
-                        if canonical then
-                            first=math.max(0,math.floor((oy+band)/zoom)-halo)
-                            last=math.min(sz.h,math.ceil((oy+math.min(band+64,th))/zoom)+halo)
-                            first=math.floor(first*vertical)/vertical
-                            last=math.ceil(last*vertical)/vertical
-                        end
+                        local band=math.floor((oy+row+consumed)/64)*64
+                        local count=math.min(lines-consumed,band+64-oy-row-consumed)
+                        local first=math.max(0,math.floor(band/zoom)-halo)
+                        local last=math.min(sz.h,math.ceil(math.min(band+64,page_h)/zoom)+halo)
+                        first=math.floor(first*vertical)/vertical
+                        last=math.ceil(last*vertical)/vertical
                         local top=math.floor(first*zoom)
                         local height=math.ceil(last*zoom)-top
                         local ratio=bb:getWidth()/sz.w
-                        local xhalo=math.max(2,math.ceil(ratio/zoom)+1)
-                        local x0=math.max(0,math.floor(ox/zoom*ratio)-xhalo)
-                        local x1=math.min(bb:getWidth(),math.ceil((ox+tw)/zoom*ratio)+xhalo)
-                        local left=math.floor(x0/ratio*zoom)
-                        local width=math.ceil(x1/ratio*zoom)-left
-                        local extra=canonical and (x1-x0)*math.ceil((last-first)*vertical)*(color and 4 or 1) or 0
-                        -- bb is already resident in the freshly sampled free
-                        -- memory. Charge only new crop/resampling allocations.
-                        required_extra=width*height*(color and 8 or 2)+extra
-                        if required_extra>decode_budget() then error("memory_budget") end
-                        if canonical then
+                        local xhalo=math.max(2,math.ceil(ratio/zoom)+1)+(display_filter and math.ceil(3*ratio/zoom) or 0)
+                        -- Anchor resampling in page coordinates, not in the
+                        -- requested viewport. Keep horizontal work bounded when
+                        -- zoomed into an unusually wide image.
+                        local cell=page_w<=2048 and page_w or 512
+                        local column=0
+                        while column<tw do
+                            local anchor=math.floor((ox+column)/cell)*cell
+                            local columns=math.min(tw-column,anchor+cell-ox-column)
+                            local right=math.min(page_w,anchor+cell)
+                            local x0=math.max(0,math.floor(anchor/zoom*ratio)-xhalo)
+                            local x1=math.min(bb:getWidth(),math.ceil(right/zoom*ratio)+xhalo)
+                            local left=math.floor(x0/ratio*zoom)
+                            local width=math.ceil(x1/ratio*zoom)-left
+                            local extra=(x1-x0)*math.ceil((last-first)*vertical)*(color and 4 or 1)
+                            -- bb is already resident in the freshly sampled free
+                            -- memory. Charge only new crop/resampling allocations.
+                            required_extra=width*height*(color and 8 or 2)+extra
+                            if required_extra>decode_budget() then error("memory_budget") end
                             local cy=math.floor((first-start)*vertical+0.5)
                             local ch=math.floor((last-first)*vertical+0.5)
                             if cy>=0 and cy+ch<=bb:getHeight() then
@@ -1596,14 +1614,23 @@ function MultiImageDoc:openPage(n)
                                 canvas:blitFrom(bb,0,y0-cy,x0,y0,x1-x0,y1-y0)
                                 view=canvas
                             end
-                        else
-                            view=bb:viewport(x0,0,x1-x0,bb:getHeight())
+                            local resize_reason,resize_need
+                            scaled,resize_reason,resize_need=resize_display(view,width,height,
+                                {x=left/zoom-x0,y=top/zoom-first,step_x=1/zoom,step_y=1/zoom},decode_budget)
+                            if not scaled then required_extra=resize_need;error(resize_reason)end
+                            if display_filter then
+                                -- A no-op resize aliases the source viewport. Keep
+                                -- overlapping halos pristine for the next window.
+                                if scaled==view then scaled=view:copy() end
+                                local enhanced,reason,needed=filter_source(scaled,false,true)
+                                if not enhanced then required_extra=needed;error(reason)end
+                            end
+                            target:blitFrom(scaled,column,row+consumed,ox+column-left,oy+row+consumed-top,columns,count)
+                            if scaled~=view then scaled:free() end
+                            scaled=nil
+                            view:free();view=nil;canvas=nil
+                            column=column+columns
                         end
-                        scaled=get_renderimage():scaleBlitBuffer(view,width,height,false)
-                        target:blitFrom(scaled,0,row+consumed,ox-left,oy+row+consumed-top,tw,count)
-                        if scaled~=view then scaled:free() end
-                        scaled=nil
-                        view:free();view=nil;canvas=nil
                         consumed=consumed+count
                     until consumed>=lines
                 end)
@@ -1655,7 +1682,10 @@ function MultiImageDoc:openPage(n)
                 -- Each native strip restarts the codec. Start with the visible
                 -- viewport when memory permits; failed budget checks halve it.
                 -- PNG keeps its streaming/canonical 64-row extraction path.
-                local batch=format=="png" and (ImageEnhance.spatial(self.session.display_enhancement)and zoom<1 and 32 or 64)or th
+                -- Keep conservative planning under tight budgets; otherwise a
+                -- display-sized filter should process each 64-row window once.
+                local lean_png=not display_filter or decode_budget()<4*1024*1024
+                local batch=format=="png" and (ImageEnhance.spatial(self.session.display_enhancement)and lean_png and zoom<1 and 32 or 64)or th
                 local lines=math.min(batch,th-row)
                 local success,reason,required
                 repeat
@@ -1736,7 +1766,7 @@ function MultiImageDoc:openPage(n)
             local processed=apply_render_post(render_post,post_url,bb)
             if not processed then bb:free(); return finish(placeholder_page("processing_failed"),"processing_failed") end
             bb=processed
-            local filtered,reason,needed=filter_source(bb)
+            local filtered,reason,needed=filter_source(bb,false,false,request and request.zoom and request.zoom>1)
             if not filtered then
                 bb:free();self.session:wait_for_memory(n,function()return decode_budget()>=needed end,needed)
                 return finish(placeholder_page("too_large",{reason=reason}),"filter_wait")
@@ -1767,7 +1797,7 @@ function MultiImageDoc:openPage(n)
             local processed=apply_render_post(render_post,post_url,bb)
             if not processed then bb:free(); return finish(placeholder_page("processing_failed"),"processing_failed") end
             bb=processed
-            local filtered,reason,needed=filter_source(bb)
+            local filtered,reason,needed=filter_source(bb,false,false,request and request.zoom and request.zoom>1)
             if not filtered then
                 bb:free();self.session:wait_for_memory(n,function()return decode_budget()>=needed end,needed)
                 return finish(placeholder_page("too_large",{reason=reason}),"filter_wait")
@@ -1868,7 +1898,7 @@ function MultiImageDoc:openPage(n)
             sub.image_bb = new_bb
             page.image_bb = new_bb
         end
-        local filtered,reason,needed=filter_source(image_bb)
+        local filtered,reason,needed=filter_source(image_bb,false,false,request and request.zoom and request.zoom>1)
         if not filtered then
             sub:close();self.current_sub=nil
             self.session:wait_for_memory(n,function()return decode_budget()>=needed end,needed)
@@ -2100,7 +2130,7 @@ function StreamDocument:getFullPageHash(pageno, zoom, rotation, gamma, saturatio
     return Document.getFullPageHash(self, pageno, zoom, rotation, gamma, saturation)
         .. "|" .. render_key(self.session, pageno)
         .. "|" .. self:size_key(pageno)
-        .. "|" .. ImageEnhance.key(self.session.display_enhancement,self.session.display_tone)
+        .. "|" .. ImageEnhance.key(self.session.display_enhancement,self.session.display_tone,self.session.adaptive_enhancement)
 end
 
 --- 页面尺寸指纹: 排版用的尺寸一变, 渲染缓存键就得跟着变
@@ -2121,7 +2151,7 @@ function StreamDocument:getPagePartHash(pageno, zoom, rotation, gamma, saturatio
     return Document.getPagePartHash(self, pageno, zoom, rotation, gamma, saturation, rect)
         .. "|" .. render_key(self.session, pageno)
         .. "|" .. self:size_key(pageno)
-        .. "|" .. ImageEnhance.key(self.session.display_enhancement,self.session.display_tone)
+        .. "|" .. ImageEnhance.key(self.session.display_enhancement,self.session.display_tone,self.session.adaptive_enhancement)
 end
 
 function StreamDocument:getDocumentProps()

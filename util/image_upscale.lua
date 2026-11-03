@@ -19,7 +19,7 @@ local function axis(size,count,start,step)
 end
 function M.workspace(bb,w,h)
     local n=bb:getType()==BB.TYPE_BB8 and 1 or 3
-    return w*tonumber(bb.h)*n*4+w*h*n+(w+h)*32+65536
+    return w*4*n*4+w*h*n+(w+h)*32+65536
 end
 function M.scale(bb,w,h,budget,mapping)
     local kind=bb:getType();local n=({[BB.TYPE_BB8]=1,[BB.TYPE_BBRGB24]=3})[kind]
@@ -33,25 +33,37 @@ function M.scale(bb,w,h,budget,mapping)
         local sw,sh=tonumber(bb.w),tonumber(bb.h)
         local ix,wx=axis(sw,w,mapping.x or 0,mapping.step_x or sw/w)
         local iy,wy=axis(sh,h,mapping.y or 0,mapping.step_y or sh/h)
-        scratch=BB.new(w*n*4,sh,BB.TYPE_BB8)
+        -- Four adjacent source rows suffice for any output row. Reuse their
+        -- horizontal results instead of retaining an entire float image.
+        scratch=BB.new(w*n*4,4,BB.TYPE_BB8)
         local temp=ffi.cast('float*',scratch.data)
         output=BB.new(w,h,kind);output:setInverse(bb:getInverse())
         local input=ffi.cast('uint8_t*',bb.data);local dest=ffi.cast('uint8_t*',output.data)
-        for c=0,n-1 do
-            for y=0,sh-1 do
-                local row=input+y*bb.stride
-                for x=0,w-1 do
-                    local k=x*4
-                    local a,b,d,e=tonumber(row[ix[k]*n+c]),tonumber(row[ix[k+1]*n+c]),tonumber(row[ix[k+2]*n+c]),tonumber(row[ix[k+3]*n+c])
-                    local v=a*wx[k]+b*wx[k+1]+d*wx[k+2]+e*wx[k+3]
-                    temp[(y*w+x)*n+c]=math.max(math.min(a,b,d,e),math.min(math.max(a,b,d,e),v))
+        local rows={};local width=w*n
+        for y=0,h-1 do
+            local k=y*4
+            for tap=0,3 do
+                local sy=tonumber(iy[k+tap]);local slot=sy%4
+                if rows[slot]~=sy then
+                    local row=input+sy*bb.stride;local base=slot*width
+                    for c=0,n-1 do
+                        for x=0,w-1 do
+                            local j=x*4
+                            local a,b,d,e=tonumber(row[ix[j]*n+c]),tonumber(row[ix[j+1]*n+c]),tonumber(row[ix[j+2]*n+c]),tonumber(row[ix[j+3]*n+c])
+                            local v=a*wx[j]+b*wx[j+1]+d*wx[j+2]+e*wx[j+3]
+                            temp[base+x*n+c]=math.max(math.min(a,b,d,e),math.min(math.max(a,b,d,e),v))
+                        end
+                    end
+                    rows[slot]=sy
                 end
             end
-            for y=0,h-1 do
-                local k=y*4;local row=dest+y*output.stride
-                local a,b,d,e=iy[k]*w*n,iy[k+1]*w*n,iy[k+2]*w*n,iy[k+3]*w*n
-                for x=0,w-1 do
-                    local i=x*n+c
+            local row=dest+y*output.stride
+            local a,b,d,e=(iy[k]%4)*width,(iy[k+1]%4)*width,(iy[k+2]%4)*width,(iy[k+3]%4)*width
+            if wy[k]==0 and wy[k+1]==1 and wy[k+2]==0 and wy[k+3]==0 then
+                -- An exact source-row sample needs no interpolation or clamp.
+                for i=0,width-1 do row[i]=math.floor(tonumber(temp[b+i])+.5) end
+            else
+                for i=0,width-1 do
                     local p,q,r,s=tonumber(temp[a+i]),tonumber(temp[b+i]),tonumber(temp[d+i]),tonumber(temp[e+i])
                     local v=p*wy[k]+q*wy[k+1]+r*wy[k+2]+s*wy[k+3]
                     row[i]=math.floor(math.max(math.min(p,q,r,s),math.min(math.max(p,q,r,s),v))+.5)

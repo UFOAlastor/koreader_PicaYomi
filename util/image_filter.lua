@@ -31,6 +31,50 @@ local function smooth(raw,w,h,stride,components,temp,ts)
     end
 end
 
+-- The separable filter is translation-invariant in intensity. A signed byte
+-- stores its rounded correction for each pair of differences (range -7..7).
+-- Build at most once, only when the original grant also covers this storage;
+-- tight grants and allocation failure keep the original arithmetic path.
+local DIFFERENCE_BYTES=511*511
+local difference_table
+local function lookup_for(pixels,budget,required)
+    if pixels<32768 or required+DIFFERENCE_BYTES>budget or difference_table==false then return nil end
+    if difference_table then return difference_table end
+    local ok,value=pcall(function()
+        local values=ffi.new('int8_t[?]',DIFFERENCE_BYTES)
+        for a=-255,255 do for b=-255,255 do
+            local wa,wb=weights[a+255],weights[b+255]
+            values[(a+255)*511+b+255]=math.floor((a*wa+b*wb)/(1+wa+wb)+.5)
+        end end
+        return values
+    end)
+    difference_table=ok and value or false
+    return difference_table or nil
+end
+
+local function smooth_lookup(raw,w,h,stride,components,temp,ts,differences)
+    for c=0,(components==4 and 2 or 0)do
+        for y=0,h-1 do
+            local a,b=raw+y*stride,temp+y*ts
+            for x=0,w-1 do
+                local i=x*components+c
+                local v=tonumber(a[i]);local l=tonumber(a[math.max(0,x-1)*components+c]);local r=tonumber(a[math.min(w-1,x+1)*components+c])
+                b[i]=v+differences[(l-v+255)*511+r-v+255]
+            end
+        end
+        for y=0,h-1 do
+            local b=raw+y*stride;local a=temp+y*ts
+            local up,down=temp+math.max(0,y-1)*ts,temp+math.min(h-1,y+1)*ts
+            for x=0,w-1 do
+                local i=x*components+c
+                local v,u,d=tonumber(a[i]),tonumber(up[i]),tonumber(down[i])
+                b[i]=v+differences[(u-v+255)*511+d-v+255]
+            end
+        end
+    end
+end
+
+
 local function backend()
     if lib then return lib end
     require('ffi/leptonica_h')
@@ -97,7 +141,9 @@ local function apply_piece(bb,mode,budget,fast,resize)
         end end
         if fast and mode=='denoise_sharpen' then
             scratch=BB.new(w,h,count>=3 and BB.TYPE_BBRGB32 or BB.TYPE_BB8)
-            smooth(raw,w,h,stride,count>=3 and 4 or 1,ffi.cast('uint8_t*',scratch.data),tonumber(scratch.stride))
+            local lookup=lookup_for(w*h,budget,required)
+            if lookup then smooth_lookup(raw,w,h,stride,count>=3 and 4 or 1,ffi.cast('uint8_t*',scratch.data),tonumber(scratch.stride),lookup)
+            else smooth(raw,w,h,stride,count>=3 and 4 or 1,ffi.cast('uint8_t*',scratch.data),tonumber(scratch.stride))end
             scratch:free();scratch=nil
         end
         if ffi.abi('le')then assert(l.pixEndianByteSwap(src)==0)end

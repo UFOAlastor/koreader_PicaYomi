@@ -27,15 +27,20 @@ for i=0,255 do
     local x=i/255;local d=x-0.5
     contrast_lut[i]=math.floor(255*(x+0.35*d*(1-4*d*d))+0.5)
 end
+-- Select inverse encoding once; visit channels outside the pixel loop.
+-- This keeps the hot loop branch-free without changing any output byte.
+local contrast_inverse=ffi.new("uint8_t[256]")
+for i=0,255 do contrast_inverse[i]=255-contrast_lut[255-i] end
 local function contrast(bb,count,alpha)
     local data=ffi.cast("uint8_t*",bb.data)
-    local inverse=bb:getInverse()==1
-    for y=0,tonumber(bb.h)-1 do
-        local row=data+y*tonumber(bb.stride)
-        for x=0,tonumber(bb.w)-1 do
-            for c=0,count-alpha-1 do
-                local i=x*count+c;local v=tonumber(row[i])
-                row[i]=inverse and 255-contrast_lut[255-v] or contrast_lut[v]
+    local lut=bb:getInverse()==1 and contrast_inverse or contrast_lut
+    local width,height,stride=tonumber(bb.w),tonumber(bb.h),tonumber(bb.stride)
+    for c=0,count-alpha-1 do
+        for y=0,height-1 do
+            local row=data+y*stride+c
+            for x=0,width-1 do
+                local i=x*count
+                row[i]=lut[row[i]]
             end
         end
     end

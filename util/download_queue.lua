@@ -751,7 +751,7 @@ function Queue:step()
     -- 3) 正在下载: 补任务 -> 收割 -> 再补 (让腾出的并发位下一拍就能用上)
     self:_fill_transport(job)
     local res = job.transport:poll(BUDGET_MS) or {}
-    local changed = false
+    local changed, forbidden = false, false
     for _i, item in ipairs(res.done or {}) do
         if item.ok then
             OfflineLibrary.markPageReady(job.source_id,job.comic_id,job.order,item.page,item.path)
@@ -759,6 +759,8 @@ function Queue:step()
             job.bytes = job.bytes + (tonumber(item.size) or 0)
             changed = true
             self.version = self.version + 1
+        elseif item.code=="network" and item.err=="HTTP 403" then
+            forbidden=true
         else
             local n = (job.attempts[item.page] or 0) + 1
             job.attempts[item.page] = n
@@ -788,6 +790,26 @@ function Queue:step()
         })
         -- UI 回调抛异常不能连累下载本身 (它只是"顺便刷新一下")
         if self.on_change then pcall(self.on_change, self, job) end
+    end
+
+    if forbidden then
+        -- Progress observers may pause/delete/close this job during the batch.
+        if self.active~=job or job.phase~="downloading" or next(self.pauses)~=nil then return true end
+        -- Consume successful completions from this batch before cancelling.
+        -- The manifest, not page indices or unconfirmed files, decides reuse.
+        job.transport:close();job.transport=nil
+        if not job.forbidden_refreshed then
+            job.forbidden_refreshed=true
+            job.done,job.bytes=0,0
+            job.attempts,job.failed={},{}
+            return self:_prepare(job)
+        end
+        local message="图片访问被拒绝，刷新地址后仍失败，请稍后重试"
+        if not self:_commit_chapter(job,{state="partial",done=job.done,total=job.total,
+                bytes=job.bytes,error=message}) then return false end
+        job.phase="failed"
+        self:_notify_error(job,message)
+        return true
     end
 
     -- 4) 所有页都发过 + 通道空闲: 本章结束

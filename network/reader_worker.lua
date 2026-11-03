@@ -108,13 +108,16 @@ function Worker.execute(job, deps)
     -- poll 了一次"算进下载耗时, 误判成慢链路。但尺子必须是**墙钟**: 下载等的是
     -- 网络, CPU 几乎不动 (见 wall_time 的注释)。
     local t0 = Worker.wall_time()
-    local ok, res = download(job.url, job.dest, job.headers,
+    local ok, res, retryable = download(job.url, job.dest, job.headers,
         job.timeout or Worker.DEFAULT_TIMEOUT)
 
     if not ok then
         item.elapsed = Worker.wall_time() - t0
         os.remove(job.dest)          -- 与同步实现一致: 失败不留残file
-        local err=require("source.contract").error("network",tostring(res),"image.download",nil,true)
+        local status=tonumber(tostring(res):match("^HTTP (%d%d%d)$"))
+        -- A rejected URL must be refreshed by its owner, not retried verbatim.
+        if status==403 then retryable=false end
+        local err=require("source.contract").error("network",tostring(res),"image.download",nil,retryable~=false)
         item.err,item.code,item.retryable=err.message,err.code,err.retryable
         return item
     end

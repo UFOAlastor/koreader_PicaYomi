@@ -349,7 +349,7 @@ function ScaledDecode.decode_jpeg(path, target_w, target_h, color, budget)
         local workspace=jw*256+1024*1024
         if lib.tj3Get(handle,lib.TJPARAM_PROGRESSIVE)~=0 then
             workspace=ScaledDecode.jpeg_workspace(jw,jh,lib.tj3Get(handle,lib.TJPARAM_SUBSAMP),
-                lib.tj3Get(handle,lib.TJPARAM_COLORSPACE))
+                lib.tj3Get(handle,lib.TJPARAM_COLORSPACE),data)
         end
         if input_bytes+output_bytes+workspace>available then return nil,'memory_budget' end
         local limit=math.floor((available-input_bytes-output_bytes)/1048576)
@@ -487,10 +487,14 @@ end
 -- assuming eight bytes per pixel for grayscale and chroma-subsampled images.
 -- Native MAXMEMORY remains the final limit even for unusual JPEG layouts.
 -- libjpeg-turbo/src/jdcoefct.c: request_virt_barray in jinit_d_coef_controller.
-function ScaledDecode.jpeg_workspace(width,height,subsampling,colorspace)
+function ScaledDecode.jpeg_workspace(width,height,subsampling,colorspace,data)
     local base=width*256+1024*1024
     local sampling=({[0]={1,1},[1]={2,1},[2]={2,2},[3]={1,1},
         [4]={1,2},[5]={4,1},[6]={1,4},[7]={4,2},[8]={2,4}})[subsampling]
+    if not sampling and data then
+        local coefficients=require("util.image_size").jpeg_coefficients(data,width,height)
+        if coefficients then return base+coefficients end
+    end
     if not sampling then return base+math.ceil(width/16)*16*math.ceil(height/16)*16*8 end
     local horizontal,vertical=sampling[1],sampling[2]
     local blocks=horizontal*vertical
@@ -510,7 +514,7 @@ function ScaledDecode.region_input(path, budget)
 end
 
 function ScaledDecode.decode_region(path, format, y, height, color, budget, display_zoom, input)
-    local output, handle, lib, cfg, raw_height
+    local output, full_output, handle, lib, cfg, raw_height
     local ok, result, origin, source_height = pcall(function()
         budget = tonumber(budget) or 0
         local size = require("libs/libkoreader-lfs").attributes(path, "size")
@@ -544,7 +548,7 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             workspace = width * 256 + 1024 * 1024
             if lib.tj3Get(handle, lib.TJPARAM_PROGRESSIVE) ~= 0 then
                 workspace = ScaledDecode.jpeg_workspace(width,full_h,lib.tj3Get(handle,lib.TJPARAM_SUBSAMP),
-                    lib.tj3Get(handle,lib.TJPARAM_COLORSPACE))
+                    lib.tj3Get(handle,lib.TJPARAM_COLORSPACE),data)
             end
             y = math.max(0, math.floor(y))
             height = math.min(math.ceil(height), full_h-y)
@@ -560,19 +564,27 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
                 return nil,"JPEG scale failed"
             end
             raw_height=height*denom
-            local bytes = width * height * (color and 3 or 1)
+            -- TurboJPEG cannot crop valid JPEGs with unequal chroma sampling.
+            -- Decode a scaled full frame only if BOTH buffers and the codec's
+            -- full progressive workspace fit the caller's unchanged budget.
+            local full_fallback=lib.tj3Get(handle,lib.TJPARAM_SUBSAMP)<0
+            local full_scaled_h=math.ceil(full_h/denom)
+            local bytes = width * (height+(full_fallback and full_scaled_h or 0)) * (color and 3 or 1)
             if input_bytes + bytes + workspace > budget then return nil, "memory_budget",input_bytes+bytes+workspace end
             local limit = math.floor((budget-input_bytes-bytes)/1048576)
             if limit < 1 or lib.tj3Set(handle, lib.TJPARAM_MAXMEMORY, limit) < 0 then return nil, "memory_budget" end
-            if crop(handle, ffi.new("picayomi_tjregion", {0,y,width,height})) < 0 then
+            if not full_fallback and crop(handle, ffi.new("picayomi_tjregion", {0,y,width,height})) < 0 then
                 return nil, "JPEG crop failed"
             end
             output = BB.new(width,height,color and BB.TYPE_BBRGB24 or BB.TYPE_BB8)
-            if lib.tj3Decompress8(handle,data,#data,ffi.cast("unsigned char*",output.data),output.stride,
+            if full_fallback then full_output=BB.new(width,full_scaled_h,color and BB.TYPE_BBRGB24 or BB.TYPE_BB8) end
+            local decoded=full_output or output
+            if lib.tj3Decompress8(handle,data,#data,ffi.cast("unsigned char*",decoded.data),decoded.stride,
                     color and lib.TJPF_RGB or lib.TJPF_GRAY) < 0 then
                 local message=ffi.string(lib.tj3GetErrorStr(handle)):lower()
                 return nil, message:find("memory",1,true) and "memory_budget" or "corrupt_image"
             end
+            if full_output then output:blitFrom(full_output,0,0,0,y,width,height) end
             y=y*denom
         elseif format == "webp" then
             lib, err = load_webp()
@@ -632,6 +644,7 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
         end
         return output,y,raw_height or height
     end)
+    if full_output then full_output:free() end
     if handle then pcall(function() lib.tj3Destroy(handle) end) end
     if cfg then pcall(function() lib.WebPFreeDecBuffer(cfg.output) end) end
     if not ok or not result then

@@ -75,8 +75,8 @@ end
 -- 每个带载荷的段都自带 2 字节长度 (含长度字段自身), 所以可以逐段跳过 ——
 -- 不必理解 EXIF / ICC / 缩略图这些段的内容。
 -- SOF 是 0xC0~0xCF 里的 13 个: 0xC4(DHT) / 0xC8(JPG) / 0xCC(DAC) 不是。
-local function parse_jpeg(d)
-    local len = #d
+local function parse_jpeg(d, coefficients)
+    local len = coefficients and math.min(#d, ImageSize.MAX_PROBE) or #d
     local pos = 3                      -- 1-based; 前 2 字节是 SOI(FFD8)
 
     while pos + 1 <= len do
@@ -102,6 +102,24 @@ local function parse_jpeg(d)
                 -- SOF 载荷: 精度(1) 高(2) 宽(2)
                 local h = u16be(d, pos + 5)
                 local w = u16be(d, pos + 7)
+                if coefficients then
+                    -- Only validated 8-bit progressive SOF2 may refine a codec
+                    -- budget. Unknown/truncated layouts keep the safe fallback.
+                    local n=d:byte(pos+9)
+                    if marker~=0xC2 or d:byte(pos+4)~=8 or not n or (n~=1 and n~=3 and n~=4)
+                        or seg~=8+3*n or pos+1+seg>len or not w or not h or w<1 or h<1 then return nil end
+                    local factors,ids,blocks,maxh,maxv={},{},0,0,0
+                    for c=0,n-1 do
+                        local id,sample,table_id=d:byte(pos+10+c*3,pos+12+c*3)
+                        local sh,sv=math.floor(sample/16),sample%16
+                        if ids[id] or sh<1 or sh>4 or sv<1 or sv>4 or table_id>3 then return nil end
+                        ids[id]=true;factors[#factors+1]={sh,sv}
+                        blocks=blocks+sh*sv;maxh=math.max(maxh,sh);maxv=math.max(maxv,sv)
+                    end
+                    if blocks>10 then return nil end
+                    for _,f in ipairs(factors)do if maxh%f[1]~=0 or maxv%f[2]~=0 then return nil end end
+                    return w,h,math.ceil(w/(8*maxh))*math.ceil(h/(8*maxv))*blocks*128
+                end
                 if w and h and w > 0 and h > 0 then return w, h end
                 return nil
             end
@@ -212,6 +230,13 @@ function ImageSize.from_file(path)
     local data = f:read(ImageSize.MAX_PROBE)
     f:close()
     return ImageSize.from_data(data)
+end
+
+-- Refine only when the parsed dimensions match the native decoder header.
+function ImageSize.jpeg_coefficients(data,width,height)
+    if type(data)~="string" or data:sub(1,2)~="\255\216" then return nil end
+    local w,h,bytes=parse_jpeg(data,true)
+    if w==width and h==height then return bytes end
 end
 
 return ImageSize

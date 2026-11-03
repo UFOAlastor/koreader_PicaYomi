@@ -133,7 +133,8 @@ function Async.run(fn, opts)
         -- blocking network I/O on a low-memory device.
         if not opts.subprocess and not (request and opts.reuse_worker and task.session) then
             local MG = require("util.memory_guard")
-            local allowed = MG.instance():fork_allowed()
+            local allowed
+            if opts.admit then allowed=opts.admit() else allowed=MG.instance():fork_allowed() end
             if not allowed then
                 resume(false, "可用内存不足，请稍后重试")
                 return

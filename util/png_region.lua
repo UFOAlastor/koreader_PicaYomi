@@ -36,8 +36,8 @@ local function uint(s)
     return ((a*256+b)*256+c)*256+d
 end
 local function paeth(a,b,c)
-    local p=a+b-c
-    local pa,pb,pc=math.abs(p-a),math.abs(p-b),math.abs(p-c)
+    local ac,bc=a-c,b-c
+    local pa,pb,pc=math.abs(bc),math.abs(ac),math.abs(ac+bc)
     if pa<=pb and pa<=pc then return a elseif pb<=pc then return b else return c end
 end
 local passes={{0,0,8,8},{4,0,8,8},{0,4,4,8},{2,0,4,4},{0,2,2,4},{1,0,2,2},{0,1,1,2}}
@@ -143,15 +143,18 @@ function R.extract(path, y, height, color, budget, consume)
             local f=current[0]
             if f>4 then error("corrupt_image",0) end
             local bpp=math.max(1,math.ceil(bits/8))
-            for i=1,len-1 do
-                local a=i>bpp and current[i-bpp] or 0
-                local b=previous[i]
-                local c=i>bpp and previous[i-bpp] or 0
-                local delta=0
-                if f==1 then delta=a elseif f==2 then delta=b
-                elseif f==3 then delta=math.floor((a+b)/2)
-                elseif f==4 then delta=paeth(a,b,c) end
-                current[i]=(current[i]+delta)%256
+            -- Dispatch once per row. The first pixel has no left neighbor.
+            -- uint8_t assignment performs the specified modulo-256 reduction.
+            if f==1 then
+                for i=bpp+1,len-1 do current[i]=current[i]+current[i-bpp] end
+            elseif f==2 then
+                for i=1,len-1 do current[i]=current[i]+previous[i] end
+            elseif f==3 then
+                for i=1,bpp do current[i]=current[i]+math.floor(previous[i]/2) end
+                for i=bpp+1,len-1 do current[i]=current[i]+math.floor((current[i-bpp]+previous[i])/2) end
+            elseif f==4 then
+                for i=1,bpp do current[i]=current[i]+previous[i] end
+                for i=bpp+1,len-1 do current[i]=current[i]+paeth(current[i-bpp],previous[i],previous[i-bpp]) end
             end
             local p=passlist[pi]
             local iy=p[2]+py*p[4]

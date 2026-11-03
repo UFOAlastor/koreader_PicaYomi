@@ -296,6 +296,13 @@ function Transport:_dispatch(job)
     if not ok then
         -- 管道坏了: 丢掉这个子进程, 本次退回同步实现
         self:_drop_session()
+        -- Closing this pipe also abandons earlier concurrent requests. Resolve
+        -- their owners before dispatching more work; otherwise no worker can
+        -- ever reply and the scheduler/cover channel stays busy forever.
+        for page in pairs(self.inflight) do
+            self.ready[#self.ready+1]={page=page,ok=false,err="下载子进程通信中断"}
+        end
+        self.inflight={}
         return self:_to_fallback(job, werr)
     end
 

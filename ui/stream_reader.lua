@@ -99,6 +99,15 @@ local function render_key(session, n)
     return epoch and epoch > 0 and (key .. "|memory:" .. epoch) or key
 end
 
+-- A bypass belongs to this image generation and these settings, not the
+-- whole book. Memory recovery must not re-enable work that already failed.
+local function enhancement_identity(session,n)
+    return session.store:render_key(n).."|"..ImageEnhance.key(session.display_enhancement,session.display_tone,session.adaptive_enhancement)
+end
+local function enhancement_bypassed(session,n)
+    return session.enhancement_bypass and session.enhancement_bypass[n]==enhancement_identity(session,n)
+end
+
 local function painted_key(session, n)
     local sz = session.store.sizes[n]
     return render_key(session, n) .. "|" .. (sz and (sz.w .. "x" .. sz.h) or "?")
@@ -513,6 +522,7 @@ function StreamSession.new(opts)
                     tostring(self.comic_id), tostring(self.order))) end
             end
             refresh_page_if_current(self, n)
+            if self._prediction_doc then self._prediction_doc:prefetch_ready(n)end
         end,
         on_failed = function(n, err)
             logger.warn(string.format("Picayomi Stream: 第 %d 页下载失败: %s",
@@ -954,6 +964,7 @@ end
 --
 -- 只影响"预取方向/窗口", 不在这里下载 (下载交给调度器, 见 request_page)。
 function StreamSession:on_page_turn(page, dir)
+    if self._prediction_doc then require("ui.enhancement_prefetch").cancel(self._prediction_doc)end
     if self.cancelled then return end
     page = tonumber(page)
     if not page then return end
@@ -1053,6 +1064,7 @@ function StreamSession:progress()
 end
 
 function StreamSession:cancel()
+    if self._prediction_doc then require("ui.enhancement_prefetch").cancel(self._prediction_doc);self._prediction_doc=nil end
     self.cancelled = true
     require("ui.reader_feedback").clear(self)
     for _, task in pairs(self.retry_pending or {}) do UIManager:unschedule(task) end
@@ -1072,6 +1084,7 @@ end
 -- DNS 解析里 —— 阻塞等它就是把"退出卡顿"原样留着。队列/在途/"已排队"标记照样
 -- 清干净, 只是不做阻塞回收 (孤儿进程由 init 收养, 无害)。
 function StreamSession:shutdown()
+    if self._prediction_doc then require("ui.enhancement_prefetch").cancel(self._prediction_doc);self._prediction_doc=nil end
     self.cancelled = true
     require("ui.reader_feedback").clear(self)
     for _, task in pairs(self.retry_pending or {}) do UIManager:unschedule(task) end
@@ -1399,7 +1412,7 @@ function MultiImageDoc:openPage(n)
             local draw=page.draw
             page.draw=function(p,dc,target,...)
                 draw(p,dc,target,...)
-                if not p.is_placeholder then
+                if not p.is_placeholder and not enhancement_bypassed(self.session,n) then
                     local enhanced=ImageEnhance.apply(target,mode)
                     if not enhanced and not self.session.enhancement_warning then
                         self.session.enhancement_warning=true
@@ -1484,14 +1497,17 @@ function MultiImageDoc:openPage(n)
         post_plan=require("source.processors").regionPlan(render_post,sz.w,sz.h)
     end
     local function filter_source(bb,defer,fast,upscale)
-        if defer or not ImageEnhance.spatial(self.session.display_enhancement)then return true end
+        if enhancement_bypassed(self.session,n) or defer or not ImageEnhance.spatial(self.session.display_enhancement)then return true end
         local mode=self.session.display_enhancement
         if upscale and not G_reader_settings:isTrue("legacy_image_scaling")then
             if mode=="sharpen"then mode="bounded_sharpen"end
             if mode=="denoise_sharpen"then mode="denoise_bounded_sharpen"end
         end
         local ok,reason,needed=require("util.image_filter").apply(bb,mode,decode_budget(),fast)
-        if not ok and reason~="memory_budget" then
+        if not ok then
+            -- Filters are transactional: a refusal leaves decoded pixels intact.
+            self.session.enhancement_bypass=self.session.enhancement_bypass or {}
+            self.session.enhancement_bypass[n]=enhancement_identity(self.session,n)
             if not self.session.enhancement_warning then
                 self.session.enhancement_warning=true
                 logger.warn("Picayomi: spatial filter unavailable; using original image")
@@ -1500,8 +1516,7 @@ function MultiImageDoc:openPage(n)
         end
         return ok,reason,needed
     end
-    local region_input
-    local function region_decode(format,y,height,current_budget,zoom)
+    local function region_decode(format,y,height,current_budget,zoom,region_input)
         local function read_piece(py,ph,remaining,pzoom)
             if format=="png" then return PngDecode.decode_region(path,py,ph,color,remaining) end
             -- WebP region scaling depends on crop height; resample below
@@ -1541,7 +1556,7 @@ function MultiImageDoc:openPage(n)
         page.draw=function(_,dc,target,ox,oy)
             local started=now_seconds()
             local zoom=dc:getZoom()
-            local display_filter=ImageEnhance.at_display(self.session.display_enhancement,zoom,self.session.adaptive_enhancement)
+            local display_filter=not enhancement_bypassed(self.session,n) and ImageEnhance.at_display(self.session.display_enhancement,zoom,self.session.adaptive_enhancement)
             local function record(reason)
                 local elapsed=(now_seconds()-started)*1000
                 if elapsed>=1000 then
@@ -1550,97 +1565,6 @@ function MultiImageDoc:openPage(n)
                 elseif Diag.enabled then
                     Diag.mark(string.format("draw p%d %dms (%s)",n,math.floor(elapsed),format))
                 end
-            end
-            ox,oy=ox or 0,oy or 0
-            local tw,th=target:getWidth(),target:getHeight()
-            local row=0
-            local halo=math.max(2,math.ceil(1/zoom)+1)+(display_filter and math.ceil(3/zoom) or ImageEnhance.spatial(self.session.display_enhancement)and 3 or 0)
-            local page_w,page_h=math.ceil(sz.w*zoom),math.ceil(sz.h*zoom)
-            local function range(lines)
-                local top,bottom=oy+row,oy+row+lines
-                local first=math.max(0,math.floor(top/zoom)-halo)
-                local last=math.min(sz.h,math.ceil(math.min(bottom,page_h)/zoom)+halo)
-                return first,last-first
-            end
-            local function draw_strip(bb,start,raw_height,lines)
-                local scaled,view,canvas
-                local required_extra
-                local ok,err=pcall(function()
-                    local filtered,reason,needed=filter_source(bb,display_filter,false,zoom>1)
-                    if not filtered then required_extra=needed;error(reason)end
-                    local consumed=0
-                    repeat
-                        -- Resampling geometry must not change when the decode
-                        -- batch shrinks. Keep canonical 64-display-row windows.
-                        local vertical=bb:getHeight()/raw_height
-                        local band=math.floor((oy+row+consumed)/64)*64
-                        local count=math.min(lines-consumed,band+64-oy-row-consumed)
-                        local first=math.max(0,math.floor(band/zoom)-halo)
-                        local last=math.min(sz.h,math.ceil(math.min(band+64,page_h)/zoom)+halo)
-                        first=math.floor(first*vertical)/vertical
-                        last=math.ceil(last*vertical)/vertical
-                        local top=math.floor(first*zoom)
-                        local height=math.ceil(last*zoom)-top
-                        local ratio=bb:getWidth()/sz.w
-                        local xhalo=math.max(2,math.ceil(ratio/zoom)+1)+(display_filter and math.ceil(3*ratio/zoom) or 0)
-                        -- Anchor resampling in page coordinates, not in the
-                        -- requested viewport. Keep horizontal work bounded when
-                        -- zoomed into an unusually wide image.
-                        local cell=page_w<=2048 and page_w or 512
-                        local column=0
-                        while column<tw do
-                            local anchor=math.floor((ox+column)/cell)*cell
-                            local columns=math.min(tw-column,anchor+cell-ox-column)
-                            local right=math.min(page_w,anchor+cell)
-                            local x0=math.max(0,math.floor(anchor/zoom*ratio)-xhalo)
-                            local x1=math.min(bb:getWidth(),math.ceil(right/zoom*ratio)+xhalo)
-                            local left=math.floor(x0/ratio*zoom)
-                            local width=math.ceil(x1/ratio*zoom)-left
-                            local extra=(x1-x0)*math.ceil((last-first)*vertical)*(color and 4 or 1)
-                            -- bb is already resident in the freshly sampled free
-                            -- memory. Charge only new crop/resampling allocations.
-                            required_extra=width*height*(color and 8 or 2)+extra
-                            if required_extra>decode_budget() then error("memory_budget") end
-                            local cy=math.floor((first-start)*vertical+0.5)
-                            local ch=math.floor((last-first)*vertical+0.5)
-                            if cy>=0 and cy+ch<=bb:getHeight() then
-                                view=bb:viewport(x0,cy,x1-x0,ch)
-                            else
-                                -- Fixed geometry even when the decode batch is
-                                -- smaller than the canonical resampling window.
-                                canvas=Blitbuffer.new(x1-x0,ch,bb:getType())
-                                canvas:fill(Blitbuffer.COLOR_WHITE)
-                                local y0,y1=math.max(0,cy),math.min(bb:getHeight(),cy+ch)
-                                canvas:blitFrom(bb,0,y0-cy,x0,y0,x1-x0,y1-y0)
-                                view=canvas
-                            end
-                            local resize_reason,resize_need
-                            scaled,resize_reason,resize_need=resize_display(view,width,height,
-                                {x=left/zoom-x0,y=top/zoom-first,step_x=1/zoom,step_y=1/zoom},decode_budget)
-                            if not scaled then required_extra=resize_need;error(resize_reason)end
-                            if display_filter then
-                                -- A no-op resize aliases the source viewport. Keep
-                                -- overlapping halos pristine for the next window.
-                                if scaled==view then scaled=view:copy() end
-                                local enhanced,reason,needed=filter_source(scaled,false,true)
-                                if not enhanced then required_extra=needed;error(reason)end
-                            end
-                            target:blitFrom(scaled,column,row+consumed,ox+column-left,oy+row+consumed-top,columns,count)
-                            if scaled~=view then scaled:free() end
-                            scaled=nil
-                            view:free();view=nil;canvas=nil
-                            column=column+columns
-                        end
-                        consumed=consumed+count
-                    until consumed>=lines
-                end)
-                if scaled and scaled~=view then scaled:free() end
-                if view then view:free();canvas=nil end
-                if canvas then canvas:free() end
-                bb:free()
-                if not ok then logger.warn("Picayomi region render:",err);return false,required_extra end
-                row=row+lines
-                return true
             end
             local function failed(reason,required,input_missing)
                 record(reason)
@@ -1670,53 +1594,15 @@ function MultiImageDoc:openPage(n)
                         require("ui.reader_feedback").queue(self.session,n,"display",placeholder.placeholder_text)
                     end
                 end
-                region_input=nil
             end
-            target:fill(Blitbuffer.COLOR_WHITE)
-            if format~="png" then
-                local err,required
-                region_input,err,required=ScaledDecode.region_input(path,decode_budget())
-                if not region_input then failed(err,required,true);return end
-            end
-            while row<th do
-                -- Each native strip restarts the codec. Start with the visible
-                -- viewport when memory permits; failed budget checks halve it.
-                -- PNG keeps its streaming/canonical 64-row extraction path.
-                -- Keep conservative planning under tight budgets; otherwise a
-                -- display-sized filter should process each 64-row window once.
-                local lean_png=not display_filter or decode_budget()<4*1024*1024
-                local batch=format=="png" and (ImageEnhance.spatial(self.session.display_enhancement)and lean_png and zoom<1 and 32 or 64)or th
-                local lines=math.min(batch,th-row)
-                local success,reason,required
-                repeat
-                    local y0,height=range(lines)
-                    if height<=0 then return end
-                    if format=="png" and not post_plan then
-                        -- Noninterlaced PNG consumes the source once for all
-                        -- visible strips. Adam7 uses independently bounded passes.
-                        success,reason=require("util.png_region").extract(path,y0,height,color,decode_budget(),
-                            function(encoded,start,raw_height)
-                                local bb,err=PngDecode.decode_encoded(encoded,color)
-                                if not bb then error(err,0) end
-                                if not draw_strip(bb,start,raw_height,lines) then error("memory_budget",0) end
-                                if row>=th then return nil end
-                                lines=math.min(lines,th-row)
-                                return range(lines)
-                            end)
-                    else
-                        local bb,start,raw_height=region_decode(format,y0,height,decode_budget(),zoom)
-                        if bb then success,required=draw_strip(bb,start,raw_height,lines);reason="memory_budget"
-                        else reason=start;required=raw_height end
-                    end
-                    if success or reason~="memory_budget" or lines==1 then break end
-                    lines=math.max(1,math.floor(lines/2))
-                until false
-                if not success then failed(reason,required);return end
-            end
-            region_input=nil
-            page.is_placeholder=nil
-            self.session:memory_recovered(n)
-            record("ok")
+            local ok=require("util.image_region_render").draw({
+                size=sz,path=path,format=format,color=color,
+                mode=self.session.display_enhancement,adaptive=self.session.adaptive_enhancement,
+                budget=decode_budget,filter=filter_source,decode=region_decode,
+                bypassed=function()return enhancement_bypassed(self.session,n)end,
+                resize=resize_display,post_plan=post_plan,failed=failed,record=record,
+            },dc,target,ox,oy)
+            if ok then page.is_placeholder=nil;self.session:memory_recovered(n)end
         end
         return finish(page,"region")
     end
@@ -1995,6 +1881,7 @@ function StreamDocument:init()
         error("Picayomi: 找不到流式阅读会话: " .. tostring(self.file))
     end
     self.session = session
+    session._prediction_doc=self
 
     self._document = MultiImageDoc.new(session)
     self._document.color = self.render_color
@@ -2114,8 +2001,61 @@ end
 --
 -- 所以这里**不渲染**, 只把它当作"向前补页"的补充信号交给会话 (真正的预取窗口
 -- 由翻页入口的方向决定)。
-function StreamDocument:hintPage(pageno, _zoom, _rotation, _gamma, _saturation)
+function StreamDocument:hintPage(pageno, zoom, rotation, gamma, saturation)
     if self.session then self.session:on_hint_page(pageno) end
+    require("ui.enhancement_prefetch").hint(self,pageno,zoom,rotation,gamma,saturation)
+end
+
+-- A downloaded future page does not repaint the current page. Re-enter the
+-- same hint path after metadata is known, using the reader's actual new zoom.
+function StreamDocument:prefetch_ready(n)
+    local reader=require("apps/reader/readerui").instance
+    if reader and reader.document==self and reader.zooming and reader.view
+        and n==(self._last_render_page or 0)+1 then
+        local state=reader.view.state
+        self:hintPage(n,reader.zooming:getZoom(n),state.rotation,state.gamma,state.saturation)
+    end
+end
+
+-- First rollout predicts ordinary forward pages only. Long strips, transforms,
+-- rotation and non-default host cleanup remain on the existing foreground path.
+function StreamDocument:prefetch_spec(n,zoom,rotation,gamma,saturation)
+    local s=self.session
+    if not s or s.cancelled or s.prefetch_disabled or not s:prefetch_on() or not self._last_render_page or s:page_state(self._last_render_page)~="ready"
+        or (s.scheduler.direction or 1)<0 or n~=(self._last_render_page or 0)+1
+        or not ImageEnhance.spatial(s.display_enhancement) or rotation~=0
+        or gamma~=1 or saturation~=1 or (self.configurable.background_cleanup or 0)~=0
+        or type(zoom)~="number" or zoom<=0 or zoom>4 then return end
+    local path=s:local_page(n);local sz=path and s:ensure_size(n)
+    if not sz then return end
+    local post,_,post_error=render_post_for(s,n);if post or post_error then return end
+    local fmt=ImageGuard.normalize_format(sz.fmt)
+    if fmt~="jpeg" and fmt~="webp" and fmt~="png"then return end
+    if sz.h>sz.w*3 or self.render_color and self.color_bb_type~=Blitbuffer.TYPE_BBRGB32 then return end
+    local dims=self:getPageDimensions(n,zoom,rotation)
+    local w,h=dims.w,dims.h
+    if w<=0 or h<=0 or w*h>CanvasContext:getWidth()*CanvasContext:getHeight()*2
+        or w*h*(self.render_color and 4 or 1)>8*1024*1024 then return end
+    local spec={kind="enhancement",input=path,size={w=sz.w,h=sz.h},format=fmt,
+        width=w,height=h,zoom=zoom,color=self.render_color==true,
+        mode=s.display_enhancement,tone=s.display_tone,adaptive=s.adaptive_enhancement,
+        legacy=G_reader_settings:isTrue("legacy_image_scaling"),bypass=enhancement_bypassed(s,n),
+        validity=self.tile_cache_validity_ts,cache_key=self:getFullPageHash(n,zoom,rotation,gamma,saturation)}
+    local key=self:getFullPageHash(n,zoom,rotation,gamma,saturation)
+        .."|prediction:"..tostring(self.tile_cache_validity_ts)..":"..tostring(spec.legacy)..":"..tostring(self._prefetch_context)
+    return spec,key
+end
+
+function StreamDocument:accept_prefetch(n,spec,bb,bypass)
+    if bypass then
+        self.session.enhancement_bypass=self.session.enhancement_bypass or {}
+        self.session.enhancement_bypass[n]=enhancement_identity(self.session,n)
+    end
+    local key=self:getFullPageHash(n,spec.zoom,0,1,1)
+    local tile=require("document/tilecacheitem"):new{bb=bb,pageno=n,
+        excerpt=Geom:new{x=0,y=0,w=spec.width,h=spec.height},size=tonumber(bb.stride)*bb.h+512,
+        created_ts=os.time(),persistent=false,doc_path=self.file}
+    require("document/doccache"):insert(key,tile)
 end
 
 --- DocCache 的键里带上"这一页这次画的是什么"
@@ -2131,6 +2071,7 @@ function StreamDocument:getFullPageHash(pageno, zoom, rotation, gamma, saturatio
         .. "|" .. render_key(self.session, pageno)
         .. "|" .. self:size_key(pageno)
         .. "|" .. ImageEnhance.key(self.session.display_enhancement,self.session.display_tone,self.session.adaptive_enhancement)
+        .. (enhancement_bypassed(self.session,pageno) and "|bypass" or "")
 end
 
 --- 页面尺寸指纹: 排版用的尺寸一变, 渲染缓存键就得跟着变
@@ -2152,6 +2093,7 @@ function StreamDocument:getPagePartHash(pageno, zoom, rotation, gamma, saturatio
         .. "|" .. render_key(self.session, pageno)
         .. "|" .. self:size_key(pageno)
         .. "|" .. ImageEnhance.key(self.session.display_enhancement,self.session.display_tone,self.session.adaptive_enhancement)
+        .. (enhancement_bypassed(self.session,pageno) and "|bypass" or "")
 end
 
 function StreamDocument:getDocumentProps()
@@ -2169,6 +2111,7 @@ function StreamDocument:drawPage(target, x, y, rect, pageno, zoom, rotation, gam
     if not guard:under_pressure() or rotation ~= 0 then
         return Document.drawPage(self,target,x,y,rect,pageno,zoom,rotation,gamma,saturation)
     end
+    require("ui.enhancement_prefetch").cancel(self)
     local raw = self._document
     raw:releaseSub()
     TransportWorker.reclaim_idle()
@@ -2197,12 +2140,38 @@ function StreamDocument:drawPage(target, x, y, rect, pageno, zoom, rotation, gam
     if not ok then error(err) end
 end
 
+-- Only hand off a tile that the host still owns under its original key.
+-- One weak reference avoids duplicate cache accounting or extending BB life.
+local function render_request_key(doc,n,rect,zoom,rotation,gamma,saturation)
+    if rect and rect.scaled_rect then return doc:getPagePartHash(n,zoom,rotation,gamma,saturation,rect) end
+    return doc:getFullPageHash(n,zoom,rotation,gamma,saturation).."|request:"..tostring(rect)
+end
+
 function StreamDocument:renderPage(pageno, rect, zoom, rotation, gamma, saturation, hinting)
+    local context=table.concat({pageno,zoom,rotation,gamma,saturation,tostring(self.render_color),tostring(rect)},"|")
+    if self._prefetch_context~=context then require("ui.enhancement_prefetch").cancel(self)end
+    self._prefetch_context=context
+    self._last_render_page=pageno
     local raw=self._document
     local previous=raw.render_request
     -- Cached tiles own their pixels; never retain a previous full decoded PNG
     -- while the host allocates the next tile (or after rendering has finished).
     raw:releaseSub()
+    local cache=require("document/doccache")
+    local request_key=render_request_key(self,pageno,rect,zoom,rotation,gamma,saturation)
+    local handoff=self._render_handoff
+    if handoff then
+        local owned=handoff.key==request_key and cache:check(handoff.cached_key)
+        if owned and owned==handoff.tile[1] and (not self.tile_cache_validity_ts
+                or owned.created_ts and owned.created_ts>=self.tile_cache_validity_ts) then
+            self._prediction_current={key=handoff.cached_key,tile=handoff.tile}
+            return owned
+        end
+        self._render_handoff=nil
+    end
+    local bypass_before=enhancement_bypassed(self.session,pageno)
+    local old_hash=rect and rect.scaled_rect and self:getPagePartHash(pageno,zoom,rotation,gamma,saturation,rect)
+        or self:getFullPageHash(pageno,zoom,rotation,gamma,saturation)
     if MemoryGuard.instance():under_pressure() then TransportWorker.reclaim_idle() end
     MemoryGuard.instance():prepare_decode() -- before the host allocates its tile
     raw.render_request={zoom=zoom,rotation=rotation}
@@ -2210,6 +2179,18 @@ function StreamDocument:renderPage(pageno, rect, zoom, rotation, gamma, saturati
     raw.render_request=previous
     raw:releaseSub()
     if not ok then error(tile) end
+    if tile and not bypass_before and enhancement_bypassed(self.session,pageno) then
+        local cached_key=old_hash
+        if cache:check(cached_key)~=tile and rect and not rect.scaled_rect then cached_key=old_hash.."|"..tostring(rect) end
+        if cache:check(cached_key)==tile then
+            self._render_handoff={key=render_request_key(self,pageno,rect,zoom,rotation,gamma,saturation),
+                cached_key=cached_key,tile=setmetatable({tile},{__mode="v"})}
+        end
+    end
+    local current_key=old_hash
+    if cache.cache:get(current_key)~=tile and rect and not rect.scaled_rect then current_key=old_hash.."|"..tostring(rect)end
+    self._prediction_current=tile and cache.cache:get(current_key)==tile
+        and {key=current_key,tile=setmetatable({tile},{__mode="v"})} or nil
     return tile
 end
 
@@ -2218,6 +2199,9 @@ function StreamDocument:getCoverPageImage()
 end
 
 function StreamDocument:close()
+    self._prediction_current=nil
+    require("ui.enhancement_prefetch").cancel(self)
+    self._render_handoff=nil
     -- 计时点: 真机反馈"从阅读页返回要 3~5 秒", 而 main.lua 只在整条返回链的两端
     -- 打了点 (点击返回 / 阅读器已关闭), 中间这一段到底是"KOReader 自己存设置"
     -- 还是"我们等子进程收尸"分不出来。这三行把 close 切成三段:

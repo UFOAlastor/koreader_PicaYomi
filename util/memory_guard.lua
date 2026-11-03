@@ -200,6 +200,17 @@ function MemoryGuard:make_room_for_fork()
     if s.available < s.worker then self:rebalance(s, true); s = self:snapshot() end
     return s.available and s.available / MB or nil, s.worker / MB
 end
+-- Speculation never reclaims current-page cache or borrows its working budget.
+function MemoryGuard:prediction_budget(tile_bytes)
+    if type(tile_bytes)~="number" or tile_bytes<=0 or tile_bytes>8*MB then return 0 end
+    local s=self:snapshot()
+    if not s.available then
+        -- Desktop simulator has no /proc. Production Linux fails closed.
+        return require("ffi").os=="OSX" and 16*MB or 0
+    end
+    local spare=s.available-s.reserve-MemoryGuard.WORKER_BYTES-self:decode_budget(0,s)-3*tile_bytes
+    return math.floor(math.max(0,math.min(16*MB,spare/2)))
+end
 function MemoryGuard:fork_allowed()
     local available, minimum = self:make_room_for_fork()
     -- Unknown metrics retain the pre-existing non-Linux behavior.

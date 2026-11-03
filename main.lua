@@ -323,6 +323,9 @@ end
 --- 退出前收掉离线下载队列 (与流式会话同一约定: 杀子进程, 不等待)
 function Picayomi:_shutdownDownloads()
     require("util.widget_sweep").shutdownTasks()
+    self._background_cover_release=nil;self._picayomi_asleep=false;self._picayomi_offline=false
+    require("ui.common.loading_task").setSuspended(false)
+    require("ui.enhancement_prefetch").setSuspended(false)
 end
 
 -- KOReader 用 `UIManager:broadcastEvent` 广播这些事件
@@ -353,44 +356,74 @@ function Picayomi:onClose()
     self:_shutdownDownloads()
 end
 
---- 挂起: **只**放开 standby 锁, 绝不取消会话
---
--- 取消之后恢复时页永远下不来, 用户只会看到一片"加载中…"。子进程挂起后若 socket 断了,
--- transport 会靠 `not session:alive()` 发现并报失败 (network/transport_worker.lua:218-225),
--- 下一页重试即可 —— 比"整话静默作废"好得多。
---
--- 为什么必须放开: `ReaderBridge:_prevent_standby` 在有下载在跑时会钉住设备不睡
--- (frontend/ui/uimanager.lua:1732), 挂起路径上如果不放, 恢复后那次 `_allow_standby`
--- 就可能与 UIManager 的计数器错位 —— 而 allowStandby 里是一个 assert (:1722)。
-function Picayomi:onSuspend()
-    require("source.extensions.updater").cancel()
-    require("network.async_task").cancelAll(true)
-    pcall(function()
-        local session = self:getActiveStream()
-        local driver = session and session.driver
-        if driver and driver._allow_standby then driver:_allow_standby() end
-    end)
+-- Screen sleep is distinct from OS deep sleep. Only explicit offline downloads
+-- may continue; speculative reading/cover work releases its workers and locks.
+local function updateBackgroundState(self)
+    local paused=self._picayomi_asleep or self._picayomi_offline
+    require("ui.downloads").setBackgroundPaused(paused==true)
+    if paused and not self._background_cover_release then
+        self._background_cover_release=require("util.cover_cache").pause(true)
+    elseif not paused and self._background_cover_release then
+        local release=self._background_cover_release;self._background_cover_release=nil;release()
+    end
+    local session=self:getActiveStream()
+    if session and session.set_suspended then session:set_suspended(self._picayomi_asleep==true)end
+    local driver=session and session.driver
+    if paused then
+        if driver and driver.suspend then driver:suspend()
+        elseif driver and driver._allow_standby then driver:_allow_standby()end
+    elseif driver then
+        if driver.resume then driver:resume()elseif driver.tick then driver:tick()end
+    end
+    if session and session.scheduler and not self._picayomi_asleep then
+        require("ui.reader_feedback").queue(session,session.scheduler.current_page,"connectivity")
+    end
 end
-
---- 恢复: 把可能被挂起打断的驱动循环重新拉起来
---
--- 挂起期间排进 UIManager 的 tick 会被丢掉, 驱动链就断在那里 (它只靠"还有活就重排自己"
--- 往前走, 没有任何外部心跳)。这里补一脚, 剩下的它会自己续上。
+function Picayomi:onSuspend()
+    self._picayomi_asleep=true
+    local q=require("util.download_queue").instance()
+    q:setSuspended(true)
+    self._picayomi_offline=not q:checkNetwork()
+    require("source.extensions.updater").cancel()
+    require("ui.enhancement_prefetch").setSuspended(true)
+    require("ui.common.loading_task").setSuspended(true)
+    require("network.async_task").cancelAll(true,true)
+    updateBackgroundState(self)
+end
 function Picayomi:onResume()
-    pcall(function()
-        local session = self:getActiveStream()
-        local driver = session and session.driver
-        if driver and driver.resume then driver:resume()
-        elseif driver and driver.tick then driver:tick() end
-        if session and session.scheduler then
-            require("ui.reader_feedback").queue(session, session.scheduler.current_page, "connectivity")
-        end
-    end)
-    -- 离线下载用的是同一种"自己重排自己"的驱动; 挂起期间排进 UIManager 的
-    -- tick 会被丢掉, 不补这一脚队列就永远停在那里 (进度条不动, 也没有报错)。
-    pcall(function()
-        require("util.download_queue").instance():kick()
-    end)
+    require("network.async_task").reap()
+    local q=require("util.download_queue").instance()
+    local was_asleep=self._picayomi_asleep
+    self._picayomi_asleep=false
+    -- Probe before releasing the sleep token: wake must not briefly issue IO
+    -- while still offline. This never enables Wi-Fi or makes a network request.
+    self._picayomi_offline=not q:checkNetwork()
+    q:setSuspended(false)
+    require("ui.common.loading_task").setSuspended(false)
+    require("ui.enhancement_prefetch").setSuspended(false)
+    updateBackgroundState(self)
+    q:kick(was_asleep)
+    if not self._picayomi_offline then require("source.extensions.updater").schedule()end
+end
+function Picayomi:onNetworkDisconnected()
+    self._picayomi_offline=true
+    require("util.download_queue").instance():setConnected(false)
+    require("source.extensions.updater").cancel()
+    require("ui.common.loading_task").cancelAll()
+    require("network.async_task").cancelAll(true)
+    updateBackgroundState(self)
+end
+function Picayomi:onNetworkDisconnecting()
+    Picayomi.onNetworkDisconnected(self)
+end
+function Picayomi:onNetworkConnected()
+    local q=require("util.download_queue").instance()
+    self._picayomi_offline=not q:checkNetwork()
+    updateBackgroundState(self)
+    q:kick()
+    if not self._picayomi_asleep and not self._picayomi_offline then
+        require("source.extensions.updater").schedule()
+    end
 end
 
 --- 把 KOReader 的文件浏览器补回"底层界面"

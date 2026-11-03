@@ -160,15 +160,15 @@ function U.schedule()
     local function start()
         U.start=nil
         if generation~=U.generation or not shownHome() then return end
-        if not idle() then U.start=start;UI:scheduleIn(1,start);return end
         local current=manager()
         if not current.state.auto_check or not due(current) then notify(current);return end
         local ok,network=pcall(require,"ui/network/manager")
         if not ok or not network:isConnected() then
             notify(current)
-            if not U.prompt then U.start=start;UI:scheduleIn(5,start) end
+            -- Retry on home entry, network restoration or wake, never poll offline.
             return
         end
+        if not idle() then U.start=start;UI:scheduleIn(1,start);return end
         if current.state_error then return end
         if logger.enabled then logger.info("Picayomi source check: catalog start") end
         U.task=require("network.async_task").run(function()

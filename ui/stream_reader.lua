@@ -206,7 +206,7 @@ local REFRESH_MAX_RETRIES = 40     -- 0.25 * 40 = 10s, 足够覆盖建阅读器 
 --   跳过; 但 zoom 还是按占位尺寸算的那个 —— 用户看到的就是"第一页尺寸不对,
 --   不全屏" (真机 2026-10-18)。尺寸从"未知"变"已知"时必须强制重算一次 zoom。
 local function refresh_page_if_current(session, n, attempt, force)
-    if session.cancelled then return end
+    if session.cancelled or session.suspended then return end
     local ok, ReaderUI = pcall(require, "apps/reader/readerui")
     if not ok or not ReaderUI then return end
 
@@ -789,6 +789,31 @@ end
 function StreamSession:cancel_memory_wait()
     if self.memory_retry then UIManager:unschedule(self.memory_retry) end
     self.memory_wait,self.memory_retry=nil,nil
+    self._sleep_memory_wait=nil
+end
+
+function StreamSession:_cancel_prefetch_timer()
+    if self._prefetch_task then UIManager:unschedule(self._prefetch_task)end
+    self._prefetch_task=nil;self.prefetch_scheduled=false
+end
+
+function StreamSession:set_suspended(asleep)
+    if self.cancelled or self.suspended==asleep then return end
+    self.suspended=asleep
+    if asleep then
+        local wait=self.memory_wait
+        self:cancel_memory_wait();self._sleep_memory_wait=wait
+        self:_cancel_prefetch_timer()
+        if self.failure_refresh then UIManager:unschedule(self.failure_refresh);self.failure_refresh=nil end
+        require("ui.reader_feedback").clear(self)
+    else
+        local wait=self._sleep_memory_wait;self._sleep_memory_wait=nil
+        if wait and wait.page==self.scheduler.current_page then
+            self:wait_for_memory(wait.page,wait.can_retry,wait.required)
+            if self.memory_wait then self.memory_wait.checks=wait.checks or 0 end
+        end
+        self:_schedule_prefetch()
+    end
 end
 
 function StreamSession:wait_for_memory(n, can_retry, required)
@@ -800,6 +825,10 @@ function StreamSession:wait_for_memory(n, can_retry, required)
     self.prefetch_queue={}
     self.scheduler:_drop_prefetch_entries()
     if self.cancelled then return end
+    if self.suspended then
+        self._sleep_memory_wait={page=n,can_retry=can_retry,required=required,checks=0}
+        return
+    end
     if (self.memory_retry_counts[n] or 0) >= 3 then
         require("ui.reader_feedback").queue(self,n,"display","当前图片所需内存仍不足，请稍后重试。")
         return
@@ -1006,15 +1035,19 @@ end
 -- 之所以不一次全塞进调度器: 预取是"顺手补", 不该和用户当前页抢带宽;
 -- 一次一页 + 调度器的优先级/并发度, 保证用户当前页永远先下。
 function StreamSession:_schedule_prefetch()
-    if self.prefetch_scheduled or self.cancelled or self.prefetch_disabled
+    if self.prefetch_scheduled or self.cancelled or self.suspended or self.prefetch_disabled
+       or #self.prefetch_queue==0
        or not self:prefetch_on() then
         return
     end
     self.prefetch_scheduled = true
 
-    UIManager:scheduleIn(PREFETCH_DELAY, function()
+    local task
+    task=function()
+        if self._prefetch_task~=task then return end
+        self._prefetch_task=nil
         self.prefetch_scheduled = false
-        if self.cancelled or self.prefetch_disabled or not self:prefetch_on() then return end
+        if self.cancelled or self.suspended or self.prefetch_disabled or not self:prefetch_on() then return end
 
         local n = table.remove(self.prefetch_queue, 1)
         if not n then return end
@@ -1055,7 +1088,9 @@ function StreamSession:_schedule_prefetch()
             logger.warn("Picayomi Stream: 预取定时器出错 (p" .. tostring(n) .. "): " .. tostring(err))
         end
         self:_schedule_prefetch()
-    end)
+    end
+    self._prefetch_task=task
+    UIManager:scheduleIn(PREFETCH_DELAY,task)
 end
 
 --- 已下载页数 / 总页数
@@ -1066,6 +1101,7 @@ end
 function StreamSession:cancel()
     if self._prediction_doc then require("ui.enhancement_prefetch").cancel(self._prediction_doc);self._prediction_doc=nil end
     self.cancelled = true
+    self:_cancel_prefetch_timer()
     require("ui.reader_feedback").clear(self)
     for _, task in pairs(self.retry_pending or {}) do UIManager:unschedule(task) end
     self.retry_pending = {}
@@ -1086,6 +1122,7 @@ end
 function StreamSession:shutdown()
     if self._prediction_doc then require("ui.enhancement_prefetch").cancel(self._prediction_doc);self._prediction_doc=nil end
     self.cancelled = true
+    self:_cancel_prefetch_timer()
     require("ui.reader_feedback").clear(self)
     for _, task in pairs(self.retry_pending or {}) do UIManager:unschedule(task) end
     self.retry_pending = {}
@@ -1555,13 +1592,17 @@ function MultiImageDoc:openPage(n)
             getUsedBBox=function() return 0.01,0.01,-0.01,-0.01 end}
         page.draw=function(_,dc,target,ox,oy)
             local started=now_seconds()
+            local timings={}
             local zoom=dc:getZoom()
             local display_filter=not enhancement_bypassed(self.session,n) and ImageEnhance.at_display(self.session.display_enhancement,zoom,self.session.adaptive_enhancement)
             local function record(reason)
                 local elapsed=(now_seconds()-started)*1000
                 if elapsed>=1000 then
+                    local prediction,prediction_ms,grant=require("ui.enhancement_prefetch").describe(self.session._prediction_doc,n)
                     logger.warn("Picayomi: slow page render", "page", n, "format", format,
-                        "width", sz.w, "height", sz.h, "ms", math.floor(elapsed), "result", reason, "filter_space", display_filter and "display" or "source")
+                        "width", sz.w, "height", sz.h, "ms", math.floor(elapsed), "result", reason, "filter_space", display_filter and "display" or "source",
+                        "decode_ms",math.floor(timings.decode or 0),"filter_ms",math.floor(timings.filter or 0),"resize_ms",math.floor(timings.resize or 0),
+                        "prediction",prediction,"prediction_ms",prediction_ms,"grant_kib",grant)
                 elseif Diag.enabled then
                     Diag.mark(string.format("draw p%d %dms (%s)",n,math.floor(elapsed),format))
                 end
@@ -1600,7 +1641,7 @@ function MultiImageDoc:openPage(n)
                 mode=self.session.display_enhancement,adaptive=self.session.adaptive_enhancement,
                 budget=decode_budget,filter=filter_source,decode=region_decode,
                 bypassed=function()return enhancement_bypassed(self.session,n)end,
-                resize=resize_display,post_plan=post_plan,failed=failed,record=record,
+                resize=resize_display,post_plan=post_plan,failed=failed,record=record,timings=timings,
             },dc,target,ox,oy)
             if ok then page.is_placeholder=nil;self.session:memory_recovered(n)end
         end
@@ -2008,12 +2049,15 @@ end
 
 -- A downloaded future page does not repaint the current page. Re-enter the
 -- same hint path after metadata is known, using the reader's actual new zoom.
+-- Later downloads can release memory after the next page was refused. Their
+-- completion is a bounded opportunity to recheck it, without a retry timer.
 function StreamDocument:prefetch_ready(n)
     local reader=require("apps/reader/readerui").instance
+    local next_page=(self._last_render_page or 0)+1
     if reader and reader.document==self and reader.zooming and reader.view
-        and n==(self._last_render_page or 0)+1 then
+        and n>=next_page then
         local state=reader.view.state
-        self:hintPage(n,reader.zooming:getZoom(n),state.rotation,state.gamma,state.saturation)
+        self:hintPage(next_page,reader.zooming:getZoom(next_page),state.rotation,state.gamma,state.saturation)
     end
 end
 
@@ -2021,21 +2065,23 @@ end
 -- rotation and non-default host cleanup remain on the existing foreground path.
 function StreamDocument:prefetch_spec(n,zoom,rotation,gamma,saturation)
     local s=self.session
-    if not s or s.cancelled or s.prefetch_disabled or not s:prefetch_on() or not self._last_render_page or s:page_state(self._last_render_page)~="ready"
-        or (s.scheduler.direction or 1)<0 or n~=(self._last_render_page or 0)+1
-        or not ImageEnhance.spatial(s.display_enhancement) or rotation~=0
+    if not s or s.cancelled then return nil,"closed" end
+    if s.prefetch_disabled or not s:prefetch_on() then return nil,"prefetch_paused" end
+    if not self._last_render_page or s:page_state(self._last_render_page)~="ready" then return nil,"current_loading" end
+    if (s.scheduler.direction or 1)<0 or n~=(self._last_render_page or 0)+1 then return nil,"direction" end
+    if not ImageEnhance.spatial(s.display_enhancement) or rotation~=0
         or gamma~=1 or saturation~=1 or (self.configurable.background_cleanup or 0)~=0
-        or type(zoom)~="number" or zoom<=0 or zoom>4 then return end
+        or type(zoom)~="number" or zoom<=0 or zoom>4 then return nil,"display_mode" end
     local path=s:local_page(n);local sz=path and s:ensure_size(n)
-    if not sz then return end
-    local post,_,post_error=render_post_for(s,n);if post or post_error then return end
+    if not sz then return nil,"not_downloaded" end
+    local post,_,post_error=render_post_for(s,n);if post or post_error then return nil,"source_transform" end
     local fmt=ImageGuard.normalize_format(sz.fmt)
-    if fmt~="jpeg" and fmt~="webp" and fmt~="png"then return end
-    if sz.h>sz.w*3 or self.render_color and self.color_bb_type~=Blitbuffer.TYPE_BBRGB32 then return end
+    if fmt~="jpeg" and fmt~="webp" and fmt~="png"then return nil,"format" end
+    if sz.h>sz.w*3 or self.render_color and self.color_bb_type~=Blitbuffer.TYPE_BBRGB32 then return nil,"geometry" end
     local dims=self:getPageDimensions(n,zoom,rotation)
     local w,h=dims.w,dims.h
     if w<=0 or h<=0 or w*h>CanvasContext:getWidth()*CanvasContext:getHeight()*2
-        or w*h*(self.render_color and 4 or 1)>8*1024*1024 then return end
+        or w*h*(self.render_color and 4 or 1)>8*1024*1024 then return nil,"tile_limit" end
     local spec={kind="enhancement",input=path,size={w=sz.w,h=sz.h},format=fmt,
         width=w,height=h,zoom=zoom,color=self.render_color==true,
         mode=s.display_enhancement,tone=s.display_tone,adaptive=s.adaptive_enhancement,
@@ -2179,6 +2225,7 @@ function StreamDocument:renderPage(pageno, rect, zoom, rotation, gamma, saturati
     raw.render_request=previous
     raw:releaseSub()
     if not ok then error(tile) end
+    require("ui.enhancement_prefetch").used(self,pageno,tile)
     if tile and not bypass_before and enhancement_bypassed(self.session,pageno) then
         local cached_key=old_hash
         if cache:check(cached_key)~=tile and rect and not rect.scaled_rect then cached_key=old_hash.."|"..tostring(rect) end
@@ -2201,6 +2248,7 @@ end
 function StreamDocument:close()
     self._prediction_current=nil
     require("ui.enhancement_prefetch").cancel(self)
+    require("ui.enhancement_prefetch").report(self)
     self._render_handoff=nil
     -- 计时点: 真机反馈"从阅读页返回要 3~5 秒", 而 main.lua 只在整条返回链的两端
     -- 打了点 (点击返回 / 阅读器已关闭), 中间这一段到底是"KOReader 自己存设置"

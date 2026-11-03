@@ -44,6 +44,7 @@ ConfigDefaults.defaults = {
     landscape_rotation = 3,
 
     -- 缓存设置
+    download_on_suspend = true, -- Explicit offline downloads only; never inhibit OS sleep.
     max_cache_size = 500,       -- 最大缓存容量(MB): util/cache.lua 等读取
 
     -- 操作与手势: ui/common/swipe_rules.lua 读取 (每次判定现读, 改完立刻生效)
@@ -56,6 +57,7 @@ ConfigDefaults.defaults = {
 
 -- 配置验证规则
 ConfigDefaults.validators = {
+    download_on_suspend = function(value)return type(value)=="boolean"end,
     grayscale_images = function(value)
         return type(value) == "boolean"
     end,
@@ -109,6 +111,7 @@ ConfigDefaults.validators = {
 
 -- 配置描述（用于生成帮助文档）
 ConfigDefaults.descriptions = {
+    download_on_suspend = _("息屏继续下载"),
     grayscale_images = _("图片模式"),
     comic_enhancement_adaptive = _("大图自适应加速"),
     comic_display_tone = _("漫画色调调整"),

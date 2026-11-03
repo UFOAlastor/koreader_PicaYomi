@@ -316,6 +316,14 @@ function ComicDetail:init()
         end
         guarded("continueReading", function() self:tryAutoContinue() end)
         if self.opening_reader then return end
+        -- A cover shortcut needs chapters, not a foreground detail request.
+        -- Keep the retained return target hidden until reading ends.
+        if self._quick_entry then
+            if not self.episodes_data and not self.offline then
+                guarded("loadChapters", function() self:loadChapters(1) end)
+            end
+            return
+        end
         guarded("loadCover", function() self:loadCover() end)
         -- 入口已提供章节数据 (如历史页 / 渲染测试) 时不再重复拉取
         if not self:isNovel() and (not self.episodes_data or self._chapters_stale) and not self.offline then
@@ -391,7 +399,8 @@ function ComicDetail:loadDetails(opts)
         delay=.05,timeout=60,
         is_cancelled=cancelled,
         on_cancel=function()
-            reset();self.auto_continue=nil;self:revealQuickEntry()
+            reset()
+            if not self.opening_reader then self.auto_continue=nil;self:revealQuickEntry()end
             if background and not self._closed and not self.opening_reader then self:refresh()end
         end,
         on_error=function(err)
@@ -421,6 +430,7 @@ function ComicDetail:loadDetailsAfterReading()
         self._return_detail_timer=nil
         if self._closed or self.opening_reader or require('apps/reader/readerui').instance
             or not require('util.widget_sweep').isInStack(self) then return end
+        self:loadCover()
         self:loadDetails({background=true})
     end
     UIManager:scheduleIn(.05,self._return_detail_timer)
@@ -1368,6 +1378,7 @@ function ComicDetail:startReadingFromBeginning()
     if not self.offline and not require("ui.common.source_access").check(self.source) then return end
     local episode = self:findFirstEpisode()
     if not episode then
+        self:revealQuickEntry()
         UIManager:show(InfoMessage:new{ text = self:isNovel() and _("该小说没有可阅读的章节") or _("该漫画没有可阅读的章节"), timeout = 2 }, "ui")
         return
     end
@@ -1540,8 +1551,9 @@ function ComicDetail:loadChapters(page,force,opts)
         self._chapter_unwatch=source:watchSession(function() self:cancelChapterLoad() end)
     end
     local function on_cancel()
-        self.auto_continue = nil
-        self:revealQuickEntry()
+        -- openReader cancels the completing catalogue task too. That cleanup
+        -- must not reveal the return page beneath its loading feedback.
+        if not self.opening_reader then self.auto_continue=nil;self:revealQuickEntry()end
         local manual=self._chapter_refresh_manual
         self._chapter_refresh_manual=nil
         self.loading_chapters=false

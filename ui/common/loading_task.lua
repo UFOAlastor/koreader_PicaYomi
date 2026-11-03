@@ -28,6 +28,10 @@ local logger = require("util.logger")
 
 local LoadingTask = {}
 local handles=setmetatable({},{__mode="k"})
+function LoadingTask.setSuspended(value)
+    LoadingTask.suspended=value
+    if value then LoadingTask.cancelAll()end
+end
 function LoadingTask.cancelAll()
     local pending={}
     for handle in pairs(handles)do pending[#pending+1]=handle end
@@ -85,6 +89,7 @@ function LoadingTask.background(loading, fn, opts)
     end
     handle.start = function()
         if handle.cancelled then return end
+        if LoadingTask.suspended then cancelled();return end
         handle.task = require("network.async_task").run(function()
             fn();handles[handle]=nil
         end, {

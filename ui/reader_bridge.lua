@@ -83,10 +83,33 @@ end
 
 -- Resume may follow a dropped UI task. Reset the scheduling latch before
 -- kicking; a stale _driving=true must not make every later tick a no-op.
+function ReaderBridge:suspend()
+    self._paused=true
+    if self._task then UIManager:unschedule(self._task);self._task=nil end
+    self._driving=false
+    self:_allow_standby()
+    local session=self.session
+    for page,timer in pairs(session and session.retry_pending or {})do
+        UIManager:unschedule(timer);session.retry_pending[page]=nil
+    end
+    local t=self.session and (self.session.transport or self.session.scheduler and self.session.scheduler.transport)
+    if t and t.pause then t:pause()end
+end
+
 function ReaderBridge:resume()
     if self._closed then return end
+    local was_paused=self._paused
+    self._paused=false
+    local t=self.session and (self.session.transport or self.session.scheduler and self.session.scheduler.transport)
+    if t and t.resume then t:resume()end
     if self._task then UIManager:unschedule(self._task); self._task = nil end
     self._driving = false
+    local session=self.session
+    local page=session and session.scheduler and session.scheduler.current_page
+    if was_paused and page and not session.cancelled and session.request_page
+        and not (session.store and session.store.non_retryable and session.store.non_retryable[page])then
+        session:clear_failure(page);session:request_page(page)
+    end
     self:tick()
 end
 
@@ -122,14 +145,14 @@ function ReaderBridge:_allow_standby()
 end
 
 function ReaderBridge:_schedule(immediate)
-    if self._driving or self._closed then return end
+    if self._driving or self._closed or self._paused then return end
     self._driving = true
 
     -- 本该在什么时候跑 (诊断用: 实际执行时间 - 这个值 = 事件循环被占住的时长)
     local due = Diag.enabled and (now_seconds() + (immediate and 0 or ReaderBridge.TICK)) or 0
 
     local function run()
-        if self._closed then return end
+        if self._closed or self._paused or self._task~=run then return end
         self._task = nil
         self._driving = false
         local lag = Diag.enabled and (now_seconds() - due) or 0

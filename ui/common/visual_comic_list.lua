@@ -871,18 +871,20 @@ function VisualComicList:updatePageButtons()
 end
 
 --- 下一屏 (到底时自动向服务器补货)
-function VisualComicList:nextScreen()
+function VisualComicList:nextScreen(requested)
     if not self.list_view then return true end
     self.page_fill_pending = nil
 
-    local target = (self.screen_index or 1) + 1
+    local target = requested or (self.screen_index or 1) + 1
     -- A server batch can end halfway through a display page. Keep the current
     -- complete page until the rest arrives; otherwise a second tap can skip
     -- the newly filled rows. A confirmed final page may legitimately be short.
     local target_ready = #self.buffer >= target * self:perScreen()
         or self.has_more == false or not self.fetch_page
     if target <= self:loadedScreens() and target_ready then
-        self.screen_index = self.screen_index + 1
+        self.advance_after_fetch = nil
+        self.requested_screen = nil
+        self.screen_index = target
         self:renderWindow()
         return true
     end
@@ -891,6 +893,7 @@ function VisualComicList:nextScreen()
     if self.has_more == false or not self.fetch_page then
         return true
     end
+    self.requested_screen = target
     if self.fetching_more then
         -- Coalesce taps while speculative fetching is in flight. The response
         -- must honor the user's request to advance, not silently eat the tap.
@@ -910,6 +913,7 @@ end
 function VisualComicList:prevScreen()
     -- A later navigation action supersedes a pending next-page tap.
     self.advance_after_fetch = nil
+    self.requested_screen = nil
     self.page_fill_pending = nil
     if (self.screen_index or 1) > 1 then
         self.screen_index = self.screen_index - 1
@@ -962,6 +966,11 @@ function VisualComicList:loadServerPage(page, notify, display_page)
         is_cancelled = function() return self._closed end,
         set_busy = function(v) self.loading_more = v end,
         fetch = function() return self.fetch_page(page) end,
+        on_cancel = function()
+            if self._closed then return end
+            self.prefetch_blocked=true
+            if notify then notify(false)end
+        end,
         on_done = function(ok, data, err)
             -- 取数期间页面被关了: 别再动控件 (重建窗口 / setDirty 都会作用到死控件上,
             -- 还会给当前画面发多余刷新)。
@@ -1043,15 +1052,16 @@ function VisualComicList:fetchMore(silent, on_done)
     on_done = function(ok)
         self.fetching_more = false
         local advance = self.advance_after_fetch
+        local target = self.requested_screen or (self.screen_index or 1) + 1
         self.advance_after_fetch = nil
+        self.requested_screen = nil
         self:updatePageText()
         if not self._closed then UIManager:setDirty(self, "ui") end
         if callback then callback(ok) end
-        local target = (self.screen_index or 1) + 1
         local final_tail = self.has_more == false and target <= self:loadedScreens()
         if advance and not self._closed then
             if final_tail or ok and #self.buffer >= target * self:perScreen() then
-                self:nextScreen()
+                self:nextScreen(target)
             elseif ok then
                 -- A tiny/filtered upstream batch must not cause an unbounded
                 -- fetch chain just to fill a screen. Keep all rows for retry.
@@ -1182,6 +1192,7 @@ function VisualComicList:fetchMore(silent, on_done)
             self.loading_more = false
             self.fetching_more = false
             self.advance_after_fetch = nil
+            self.requested_screen = nil
             self.prefetch_blocked = true
             self:updatePageText()
             if not self._closed then UIManager:setDirty(self, "ui") end
@@ -1328,7 +1339,9 @@ function VisualComicList:updatePageText()
     local text=pages_text and T(_("第 %1/%2 页"),cur,pages_text)or T(_("第 %1 页"),cur)
     if items~=nil then text=text..T(_(" · 共 %1 项"),items)end
     if self.fetching_more and self.advance_after_fetch then
-        text=text.._(" · 正在加载下一页…")
+        local target=self.requested_screen
+        text=text..(target and target~=(self.screen_index or 1)+1
+            and T(_(" · 正在加载第 %1 页…"),self:firstLoadedScreen()+target-1)or _(" · 正在加载下一页…"))
     elseif self.fetching_more and self:windowCapacity()<self:perScreen() then
         text=text.._(" · 正在补全本页…")
     elseif self.page_fill_pending then
@@ -1355,13 +1368,14 @@ function VisualComicList:jumpToScreen(n)
 
     if self.fetch_task then self.fetch_task:cancel() end
     self.advance_after_fetch = nil
+    self.requested_screen = nil
     self.page_fill_pending = nil
     -- 已在缓冲区里: 直接翻
     local first, last = self:firstLoadedScreen(), self:lastLoadedScreen()
     if n >= first and n <= last then
-        self.screen_index = n - first + 1
-        self:renderWindow()
-        return true
+        -- A cached server batch can contain only the beginning of this screen.
+        -- Share the next-page readiness guard rather than exposing blank rows.
+        return self:nextScreen(n - first + 1)
     end
 
     -- 超出缓冲区: 算出目标落在哪个服务端页

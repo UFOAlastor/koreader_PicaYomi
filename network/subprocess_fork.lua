@@ -250,6 +250,10 @@ function Fork.spawn(child_main)
         return nil, tostring(read_fd or "无法创建下载子进程")
     end
 
+    -- The child also sets its group, but cancellation can run before it gets
+    -- CPU time. Establish the owned child's group from the parent as well so
+    -- an immediate kill(-pid) cannot miss it (or block forever in close()).
+    C.setpgid(pid, pid)
     return new_session({
         pid = pid,
         read_fd = read_fd,

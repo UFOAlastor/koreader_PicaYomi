@@ -255,7 +255,7 @@ end
 
 -- Keep callbacks and queued requests, but release the background process
 -- before foreground reading forks/decodes. Tokens cover overlapping chapters.
-function CoverCache.pause()
+function CoverCache.pause(nonblocking)
     local token={}
     local first=next(pauses)==nil
     pauses[token]=true
@@ -263,7 +263,10 @@ function CoverCache.pause()
         local ch=channel
         if ch.pump_task then UIManager:unschedule(ch.pump_task);ch.pump_task=nil end
         if ch.idle_task then UIManager:unschedule(ch.idle_task);ch.idle_task=nil end
-        if ch.transport then ch.transport:close();ch.transport=nil end
+        if ch.transport then
+            if nonblocking and ch.transport.terminate then ch.transport:terminate()else ch.transport:close()end
+            ch.transport=nil
+        end
         ch.driving=false
     end
     local released=false

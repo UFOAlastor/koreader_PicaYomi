@@ -38,6 +38,20 @@ local function chapter_unit(comic)
 end
 
 local instances=setmetatable({},{__mode="k"})
+local background_paused=false
+function Downloads.setBackgroundPaused(value)
+    if background_paused==value then return end
+    background_paused=value
+    for instance in pairs(instances)do
+        if value then
+            if instance._timer_callback then UIManager:unschedule(instance._timer_callback)end
+            instance._timer_callback=nil;instance._timer=false
+        elseif not instance._closed and instance.list and not instance.list._closed then
+            instance:refreshList()
+            instance:startTimer()
+        end
+    end
+end
 function Downloads:init()
     instances[self]=true
     self.width = Screen:getWidth()
@@ -52,6 +66,7 @@ function Downloads:shutdown()
     self._delete_task=nil
 end
 function Downloads.shutdownAll()
+    background_paused=false
     for instance in pairs(instances)do instance:shutdown()end
 end
 
@@ -270,7 +285,7 @@ function Downloads:refreshList(list, force)
 end
 
 function Downloads:startTimer()
-    if self._timer or self._closed then return end
+    if background_paused or self._timer or self._closed then return end
     self._timer = true
     local callback
     callback=function()

@@ -131,7 +131,11 @@ function M.open(detail,episode,options)
                     UI:scheduleIn(.2,job.timer)
                 end
             end,{delay=.1,timeout=65,reuse_worker=true,
-                on_cancel=function()if job.cleanup then job.cleanup();job.cleanup=nil end end,
+                on_cancel=function()
+                    if job.cleanup then job.cleanup();job.cleanup=nil end
+                    job.status="cancelled"
+                    if job.on_done then job.on_done(false,nil,{cancelled=true})end
+                end,
                 on_error=function()
                     if job.cleanup then job.cleanup();job.cleanup=nil end
                     job.status="failed"
@@ -201,7 +205,7 @@ function M.open(detail,episode,options)
                 close_loading();detail._novel_task=nil
                 if state.closed or detail._closed then finish();return end
                 if ok then start(ep,from_beginning)
-                else UI:show(Info:new{text=err and err.message or "下一章加载失败，请重试"},"ui")end
+                elseif not (err and err.cancelled) then UI:show(Info:new{text=err and err.message or "下一章加载失败，请重试"},"ui")end
             end
             detail._novel_task={cancel=function()
                 job.waiting=false;job.on_done=nil;cancel_prefetch();cancelled()

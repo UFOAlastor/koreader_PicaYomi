@@ -515,7 +515,7 @@ end
 
 function ScaledDecode.decode_region(path, format, y, height, color, budget, display_zoom, input)
     local output, full_output, handle, lib, cfg, raw_height
-    local ok, result, origin, source_height = pcall(function()
+    local ok, result, origin, source_height, capacity = pcall(function()
         budget = tonumber(budget) or 0
         local size = require("libs/libkoreader-lfs").attributes(path, "size")
         -- A retained input is already resident when the caller samples free
@@ -610,7 +610,13 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             local zoom=math.min(1,display_zoom or 1)
             local ow,oh=math.ceil(width*zoom),math.ceil(height*zoom)
             local bytes=ow*oh*(color and (alpha and 8 or 3) or (alpha and 5 or 4))
-            if input_bytes+bytes+workspace>budget then return nil,"memory_budget",input_bytes+bytes+workspace end
+            if input_bytes+bytes+workspace>budget then
+                -- Return a planning hint only; every subsequent decode still
+                -- samples and enforces its own complete allocation budget.
+                local row_bytes=ow*(color and (alpha and 8 or 3) or (alpha and 5 or 4))
+                local rows=math.floor(math.max(0,budget-input_bytes-workspace)/row_bytes)
+                return nil,"memory_budget",input_bytes+bytes+workspace,math.floor(rows/zoom)
+            end
             cfg.output.colorspace=alpha and 1 or 0 -- RGBA only when compositing is needed
             if color and not alpha then
                 -- Decode directly into the owned result, avoiding a second
@@ -649,7 +655,7 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
     if cfg then pcall(function() lib.WebPFreeDecBuffer(cfg.output) end) end
     if not ok or not result then
         if output then output:free() end
-        return nil, not ok and tostring(result):lower():find("allocat",1,true) and "memory_budget" or (ok and origin or tostring(result)),ok and source_height or nil
+        return nil, not ok and tostring(result):lower():find("allocat",1,true) and "memory_budget" or (ok and origin or tostring(result)),ok and source_height or nil,ok and capacity or nil
     end
     return result,origin,source_height
 end

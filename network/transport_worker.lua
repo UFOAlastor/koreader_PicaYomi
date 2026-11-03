@@ -139,7 +139,10 @@ function Transport:_drop_session(nonblocking)
     end
     if session then
         if nonblocking and session.terminate then
-            pcall(function() session:terminate() end)
+            pcall(function()
+                local pid=session.pid;session:terminate()
+                if pid then require("network.async_task").reap(pid)end
+            end)
         else
             pcall(function() session:close() end)
         end
@@ -306,7 +309,7 @@ function Transport:_dispatch(job)
         return self:_to_fallback(job, werr)
     end
 
-    self.inflight[job.page] = { dest = job.dest, started = socket.gettime(), token = token }
+    self.inflight[job.page] = { dest = job.dest, started = socket.gettime(), token = token, request = job }
     return true
 end
 
@@ -376,9 +379,26 @@ end
 -- @param budget_ms 预留的 CPU 毫秒上限 (本实现用不到: 收帧是 ioctl + read)
 -- @param block     true 表示"同步语义": 发起后等到这一条真的有结果才返回
 -- @return { done = { item, ... }, idle = bool }
+-- Preserve ownership and request tokens across screen/network pauses.
+function Transport:pause()
+    if self.paused or self.cancelled then return end
+    self.paused=true
+    local active={}
+    for _,entry in pairs(self.inflight)do active[#active+1]=entry end
+    table.sort(active,function(a,b)return a.token<b.token end)
+    local pending={}
+    for _,entry in ipairs(active)do pending[#pending+1]=entry.request end
+    for _,job in ipairs(self.pending)do pending[#pending+1]=job end
+    self.pending=pending;self.inflight={}
+    self:_drop_session(true)
+end
+function Transport:resume()
+    self.paused=false
+end
+
 function Transport:poll(budget_ms, block)
     local done = {}
-    if self.cancelled then return { done = done, idle = true } end
+    if self.cancelled or self.paused then return { done = done, idle = not self:busy() } end
 
     -- 1) 之前判定失败的 (没有 fallback 时)
     if #self.ready > 0 then

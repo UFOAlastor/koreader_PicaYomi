@@ -13,7 +13,7 @@ local function failure_reason(session, page)
 end
 
 local function visible(session, page)
-    if session.cancelled then return false end
+    if session.cancelled or session.suspended then return false end
     local reader = package.loaded["apps/reader/readerui"]
     local ui = reader and reader.instance
     if not ui or not ui.document or ui.document.session ~= session then return false end
@@ -34,7 +34,7 @@ function Feedback.clear(session)
 end
 
 function Feedback.queue(session, page, kind, detail)
-    if session.cancelled then return end
+    if session.cancelled or session.suspended then return end
     if kind == "connectivity" and session.feedback_key then return end
     -- One deferred task per session. A later foreground failure replaces a
     -- connectivity check; background failures never displace the foreground.

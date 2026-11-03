@@ -8,6 +8,42 @@ Async.MAX_IDLE_TICK = 0.25
 Async.TIMEOUT = 90
 Async.MAX_RESULT = 8 * 1024 * 1024
 
+-- Keep only owned PIDs. Reaping never blocks and can be kicked after sleep
+-- even if the previously scheduled callback was discarded by the host.
+local reaping={}
+local reap_timer
+local function sweep(probe_parked)
+    local UI=require("ui/uimanager")
+    if reap_timer then UI:unschedule(reap_timer);reap_timer=nil end
+    local delay
+    for child,state in pairs(reaping)do
+        if state.attempts<8 or probe_parked then
+            if require("ffi/util").isSubProcessDone(child)then reaping[child]=nil
+            else
+                state.attempts=math.min(8,state.attempts+1)
+                if state.attempts<8 then
+                    local next_delay=math.min(1,.05*2^(state.attempts-1))
+                    delay=math.min(delay or next_delay,next_delay)
+                end
+            end
+        end
+    end
+    if delay then
+        local callback
+        callback=function()if reap_timer==callback then sweep()end end
+        reap_timer=callback;UI:scheduleIn(delay,callback)
+    end
+end
+function Async.reap(pid)
+    if pid then reaping[pid]=reaping[pid]or {attempts=0}
+    else
+        -- Retain ownership of slow-to-exit children without an infinite timer.
+        -- A wake explicitly starts another bounded sweep, including lost timers.
+        for _,state in pairs(reaping)do state.attempts=0 end
+    end
+    sweep(true)
+end
+
 function Async.active()
     local co = coroutine.running()
     return not in_worker and co and tasks[co] ~= nil
@@ -36,9 +72,11 @@ function Async.await(fn, request)
     return value, err
 end
 
-function Async.cancelAll(nonblocking)
+function Async.cancelAll(nonblocking,keep_downloads)
     local pending = {}
-    for _, task in pairs(tasks) do pending[#pending + 1] = task end
+    for _, task in pairs(tasks) do
+        if not (keep_downloads and task.keep_on_suspend) then pending[#pending + 1] = task end
+    end
     for _, task in ipairs(pending) do
         task.nonblocking = nonblocking
         task:cancel()
@@ -51,7 +89,7 @@ function Async.run(fn, opts)
     local socket = require("socket")
     local buffer = require("string.buffer")
     local Fork = opts.subprocess or require("network.subprocess_fork")
-    local task = { done = false, session=opts.session, subprocess=opts.subprocess }
+    local task = { done = false, session=opts.session, subprocess=opts.subprocess,keep_on_suspend=opts.keep_on_suspend }
     -- The worker watchdog below is per request. This optional budget spans all
     -- requests/retries in the continuation, including source fallbacks.
     local deadline=opts.timeout and socket.gettime()+opts.timeout
@@ -71,15 +109,7 @@ function Async.run(fn, opts)
                 if task.nonblocking and task.session.terminate then
                     local pid=task.session.pid
                     task.session:terminate()
-                    if pid then
-                        local util=require('ffi/util')
-                        local function reap()
-                            if not util.isSubProcessDone(pid)then UIManager:scheduleIn(.05,reap)end
-                        end
-                        -- Keep only the PID, never the cancelled coroutine or
-                        -- its source/document. WNOHANG never stalls the UI.
-                        reap()
-                    end
+                    if pid then Async.reap(pid)end
                 else task.session:close() end
             end)
             task.session = nil
@@ -319,7 +349,7 @@ function Async.map(functions,concurrency)
                 if not ok then stop(value);return end
                 results[i]=value
             end
-        end,{reuse_worker=true,session=lane==1 and borrowed or nil,subprocess=owner.subprocess,
+        end,{reuse_worker=true,session=lane==1 and borrowed or nil,subprocess=owner.subprocess,keep_on_suspend=owner.keep_on_suspend,
             on_error=stop})
         children[#children+1]=child;owner.children[child]=true
     end

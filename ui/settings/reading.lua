@@ -88,11 +88,34 @@ function ReadingSettings:show()
             local n=self:safeConfigGet("novel_prefetch_chapters",1)
             return n==0 and _("关闭")or T(_("%1 章"),n)
         end,callback=function()self:setNovelPrefetch()end},
+        {text=_("息屏继续下载"),mandatory_func=function()return self:safeConfigGet("download_on_suspend",true) and _("开启")or _("关闭")end,
+            callback=function()self:setSleepDownloads()end},
         self:createBackButton(),
     }
 
     local menu = self:createMenu(_("阅读设置"), items)
     self:showMenu(menu)
+end
+
+function ReadingSettings:setSleepDownloads()
+    local menu
+    local items={
+        {text=_("仅控制主动下载的漫画与小说章节"),enabled=false,select_enabled=false},
+        {text=_("系统休眠或断网时可能暂停，恢复后继续"),enabled=false,select_enabled=false},
+    }
+    for _,option in ipairs{{value=true,text=_("继续下载（默认）"),description=_("息屏后保持任务，不阻止系统休眠")},
+        {value=false,text=_("暂停下载"),description=_("息屏暂停，亮屏联网后继续，更省电")}}do
+        items[#items+1]={text=option.text,mandatory=option.description,text_func=function()
+            return checkLabel(self:safeConfigGet("download_on_suspend",true)==option.value,option.text)
+        end,callback=function()
+            if self:safeConfigSet("download_on_suspend",option.value)then
+                local q=require("util.download_queue").instance();q:setSuspended(q.suspended==true)
+                menu:updateItems();UIManager:setDirty(menu,"ui")
+            end
+        end}
+    end
+    items[#items+1]=self:createBackButton()
+    menu=self:createMenu(_("息屏继续下载"),items);self:showMenu(menu)
 end
 
 function ReadingSettings:setDisplayEnhancement(tone)
@@ -106,7 +129,7 @@ function ReadingSettings:setDisplayEnhancement(tone)
     local choices=tone and {{value="off",text=_("原样（不调色调）"),description=_("保留原色调，细节增强仍生效")},
         {value="light",text=_("轻度加深"),description=_("略微加深，适合文字偏淡")},{value="standard",text=_("标准加深"),description=_("整体加深，浅灰背景也会变暗")},
         {value="contrast",text=_("柔和对比度"),description=_("深灰更深、浅灰更浅，会影响整体氛围")}} or {{value="off",text=_("关闭（不处理细节）"),description=_("不降噪、不锐化，仍可放大小图")},
-        {value="sharpen",text=_("锐化"),description=_("强化边缘，配合小图保边放大")},{value="denoise_sharpen",text=_("降噪＋锐化"),description=_("减少噪点、强化边缘，配合小图放大")}}
+        {value="sharpen",text=_("锐化"),description=_("强化边缘，配合小图保边放大；可能影响耗时")},{value="denoise_sharpen",text=_("降噪＋锐化"),description=_("减少噪点、强化边缘，配合小图放大；可能影响耗时")}}
     local items={
         {text=tone and _("可与降噪、锐化叠加，保留下载原图") or _("可与色调调整叠加，保留下载原图"),enabled=false,select_enabled=false},
         {text=_("重新打开章节后生效，小说文字不受影响"),enabled=false,select_enabled=false},

@@ -118,9 +118,39 @@ function Queue.new(opts)
     self.novel_request_interval=opts.novel_request_interval or 3
     self.novel_chapter_interval=opts.novel_chapter_interval or 5
     self.novel_policies={}
+    self.connected=opts.connected or function()return require("ui/network/manager"):isConnected()end
+    self.prepare_failures={}
+    self.connection_failures={}
     return self
 end
 
+-- No recurring offline probe: network events, explicit enqueue and wake retry.
+function Queue:checkNetwork()
+    local ok,online=pcall(self.connected)
+    if ok then self:setConnected(online~=false)end
+    return not self._network_release
+end
+function Queue:setConnected(online)
+    if not online and not self._network_release then
+        self._network_release=self:pause("network")
+        local job=self.active
+        if job then
+            OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
+                {state="partial",error="网络未连接，联网后继续下载"},{force=true})
+        end
+    elseif online and self._network_release then
+        local release=self._network_release;self._network_release=nil;release()
+    end
+end
+function Queue:setSuspended(asleep)
+    self.suspended=asleep
+    self._idle_polls=0
+    local pause=asleep and require("util.config"):get("download_on_suspend")==false
+    if pause and not self._sleep_release then self._sleep_release=self:pause("sleep")
+    elseif not pause and self._sleep_release then
+        local release=self._sleep_release;self._sleep_release=nil;release()
+    end
+end
 function Queue:novelPolicy(job)
     if job.source.content_type~="novel"then return end
     local policy=self.novel_policies[job.source_id]
@@ -219,6 +249,9 @@ function Queue:enqueue(source, comic, chapters)
         return 0, 0
     end
     if not self:is_active()then self._error_notified=nil end
+    -- A deliberate new enqueue is an explicit retry, not an automatic loop.
+    self.connection_failures[source.identifier or "unknown"]=0
+    self.prepare_failures[source.identifier or "unknown"]=0
     local source_id = source.identifier or "unknown"
     if source.content_type=="novel" then
         comic=require("source.contract").copy(comic)
@@ -226,6 +259,7 @@ function Queue:enqueue(source, comic, chapters)
         comic.text_filters=require("source.contract").copy(source.text_filters or {},true)
     end
 
+    self:checkNetwork()
     local accepted = {}
     local previous_count=#self.jobs
     for _i, ch in ipairs(chapters) do
@@ -382,6 +416,7 @@ function Queue:shutdown(reason)
     local jobs=self.jobs
     if job then jobs[#jobs+1]=job end
     self.active=nil;self.jobs={};self.running=false;self.pauses={}
+    self._network_release=nil;self._sleep_release=nil;self.suspended=false
     self.scheduled=false;self._tick_id=(self._tick_id or 0)+1
     if self._tick_callback then
         local ok,UI=pcall(require,"ui/uimanager")
@@ -415,6 +450,7 @@ end
 
 --- 为当前章取图片列表并起 transport
 function Queue:_notify_error(job, msg)
+    if self.suspended then return end
     if self.on_error==default_error_notifier and self._error_notified then return end
     if self.on_error then
         local ok,shown=pcall(self.on_error, job, msg)
@@ -436,6 +472,7 @@ function Queue:_stop_prepare(job,nonblocking)
 end
 
 function Queue:_prepare(job)
+    if not self:checkNetwork() then job.phase="paused";return false end
     local policy=self:novelPolicy(job)
     if policy and self.clock()<policy.chapter_at then
         self:waitForSite(job,policy.chapter_at,"等待站点请求间隔…")
@@ -464,6 +501,7 @@ function Queue:_prepare(job)
     changed()
     local function finish(images,err)
         if cancelled() then return end
+        if not images and not self:checkNetwork() then return end
         self:_apply_preparation(job,images,err)
         job.prepare_token=nil;job.prepare_task=nil
         changed();self:_schedule()
@@ -510,7 +548,7 @@ function Queue:_prepare(job)
             finish(ok and document or nil,err)
         else finish(self.get_images(job.source,job.comic_id,job.order,context)) end
     end,{
-        timeout=budget,is_cancelled=cancelled,
+        timeout=budget,is_cancelled=cancelled,keep_on_suspend=true,
         on_error=function(err) finish(nil,err) end,
         on_cancel=function()
             if job.prepare_cleanup then job.prepare_cleanup();job.prepare_cleanup=nil end
@@ -534,6 +572,17 @@ function Queue:_apply_preparation(job,images,err)
         local message=type(err)=="table"and err.message or tostring(err or (novel and "小说章节下载失败" or "获取章节图片失败"))
         local retryable=type(err)=="table"and err.retryable==true
             or novel and type(err)=="string"and (err:find("超时",1,true)or err:lower():find("timeout",1,true))
+        if not policy then
+            local failures=(self.prepare_failures[job.source_id]or 0)+1
+            self.prepare_failures[job.source_id]=failures
+            if failures>=3 then
+                local keep,stopped={},{}
+                for _,pending in ipairs(self.jobs)do
+                    if pending.source_id==job.source_id then stopped[#stopped+1]=pending else keep[#keep+1]=pending end
+                end
+                self.jobs=keep;OfflineLibrary.stopChapters(stopped,"站点连续失败，已停止此源下载，请稍后重试")
+            end
+        end
         if policy then
             policy.failures=retryable and policy.failures+1 or 0
             if retryable then
@@ -584,6 +633,7 @@ function Queue:_apply_preparation(job,images,err)
         return true
     end
 
+    self.prepare_failures[job.source_id]=0
     job.images = images
     job.total = #images
     local saved,save_error,reuse=pcall(OfflineLibrary.setPageManifest,job.source_id,job.comic_id,job.order,job.source,images)
@@ -751,20 +801,36 @@ function Queue:step()
     -- 3) 正在下载: 补任务 -> 收割 -> 再补 (让腾出的并发位下一拍就能用上)
     self:_fill_transport(job)
     local res = job.transport:poll(BUDGET_MS) or {}
-    local changed, forbidden = false, false
+    self._idle_polls=#(res.done or {})==0 and math.min(3,(self._idle_polls or 0)+1)or 0
+    local changed, forbidden, circuit = false, false, false
+    local offline=false
+    for _,item in ipairs(res.done or {})do
+        if not item.ok then local ok,value=pcall(self.connected);offline=ok and value==false;break end
+    end
     for _i, item in ipairs(res.done or {}) do
         if item.ok then
+            self.connection_failures[job.source_id]=0
             OfflineLibrary.markPageReady(job.source_id,job.comic_id,job.order,item.page,item.path)
             job.done = job.done + 1
             job.bytes = job.bytes + (tonumber(item.size) or 0)
             changed = true
             self.version = self.version + 1
+        elseif offline then
+            -- The whole queue pauses after confirmed successes are committed.
         elseif item.code=="network" and item.err=="HTTP 403" then
             forbidden=true
         else
+            local err=tostring(item.err or ""):lower()
+            local connection=item.retryable~=false and (err:find("timeout",1,true) or err:find("closed",1,true)
+                or err:find("connect",1,true) or err:find("resolution",1,true) or err:find("unreachable",1,true)
+                or err:find("超时",1,true) or err:find("连接",1,true))
+            if connection then
+                local n=(self.connection_failures[job.source_id]or 0)+1
+                self.connection_failures[job.source_id]=n;circuit=n>=3
+            end
             local n = (job.attempts[item.page] or 0) + 1
             job.attempts[item.page] = n
-            if item.retryable~=false and n < self.retry_limit then
+            if not circuit and item.retryable~=false and n < self.retry_limit then
                 -- 失败不留残文件 (transport 已删); 原样重排这一页
                 job.transport:start{
                     page = item.page,
@@ -792,6 +858,22 @@ function Queue:step()
         if self.on_change then pcall(self.on_change, self, job) end
     end
 
+    if offline then self:setConnected(false);return false end
+    if self.active~=job or next(self.pauses)~=nil then return false end
+
+    if circuit then
+        local message="连续连接失败，已停止此源下载，请检查网络后重试"
+        local release=self:pause("connection failures")
+        local keep,stopped={},{}
+        for _,pending in ipairs(self.jobs)do
+            if pending.source_id==job.source_id then stopped[#stopped+1]=pending else keep[#keep+1]=pending end
+        end
+        self.jobs=keep;OfflineLibrary.stopChapters(stopped,message)
+        job.phase="failed"
+        OfflineLibrary.updateChapter(job.source_id,job.comic_id,job.order,
+            {state="partial",done=job.done,total=job.total,error=message},{force=true})
+        release();self:_notify_error(job,message);return true
+    end
     if forbidden then
         -- Progress observers may pause/delete/close this job during the batch.
         if self.active~=job or job.phase~="downloading" or next(self.pauses)~=nil then return true end
@@ -864,8 +946,14 @@ end
 -- 挂起时 UIManager 会丢掉已排期的任务, 但 self.scheduled 可能还停在 true ——
 -- 不强制重排的话队列就永远停住。旧 timer 若之后又被触发, 由 _tick_id 挡住,
 -- 避免出现两条并行的自续期链 (每一拍都做两次 step)。
-function Queue:kick()
+function Queue:kick(recover_prepare)
+    if not self:checkNetwork() then return end
     if not self:is_active() then return end
+    -- A deep sleep can discard an Async poll/continuation. Rebuild incomplete
+    -- preparation from committed cache rather than retaining a dead timer.
+    if recover_prepare and self.active and self.active.phase=="preparing" then
+        local release=self:pause("wake");release()
+    end
     self.scheduled = false
     self._tick_id = (self._tick_id or 0) + 1
     self:_schedule()
@@ -887,7 +975,10 @@ function Queue:_schedule()
     self._tick_id = (self._tick_id or 0) + 1
     local id = self._tick_id
     self._tick_callback=function()self:_tick(id)end
-    local delay=self.active and self.active.phase=="waiting"and math.max(self.tick,self.active.wait_until-self.clock())or self.tick
+    -- While asleep, an empty read need not wake the event loop 12.5 times/sec.
+    -- Progress resets the delay; waking immediately restores the normal cadence.
+    local tick=self.suspended and math.max(self.tick,math.min(.5,self.tick*2^(self._idle_polls or 0)))or self.tick
+    local delay=self.active and self.active.phase=="waiting"and math.max(self.tick,self.active.wait_until-self.clock())or tick
     if not self.schedule(self._tick_callback, delay) then
         -- 无 UI 环境 (纯逻辑测试): 不自动泵, 由调用方 step()
         self.scheduled = false

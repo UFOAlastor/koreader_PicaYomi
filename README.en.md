@@ -2,7 +2,7 @@
 
 [简体中文](README.md)
 
-A manga and novel reader plugin for [KOReader](https://github.com/koreader/koreader), designed primarily for Kindle and other e-ink devices. It supports multiple sources, search, streaming, chapter downloads, favorites, and reading history.
+A manga and novel reader plugin for [KOReader](https://github.com/koreader/koreader), designed primarily for Kindle and other e-ink devices. It supports multiple sources, search, streaming, manga image enhancement, chapter downloads, favorites, and reading history.
 
 **The plugin interface currently supports Chinese only.** This page is an introduction; the [Chinese README](README.md) contains the full user guide. Compatibility with devices other than Kindle needs testing.
 
@@ -26,7 +26,7 @@ Use the plugin ZIP attached to the release. GitHub's automatically generated “
 
 ## Getting started
 
-Select a source on the home page and sign in if the source requires it. Open a title to read online or use 下载章节 (Download chapters) to save chapters for offline reading. Offline chapters are available from 已下载 (Downloaded) on the home page. Downloads pause while reading and resume when you leave the reader. Exiting PicaYomi stops all downloads and keeps saved chapters; retry incomplete chapters from Downloaded.
+Select a source on the home page and sign in if the source requires it. Open a title to read online or use 下载章节 (Download chapters) to save chapters for offline reading. Offline chapters are available from 已下载 (Downloaded) on the home page. Downloads pause while reading and resume when you leave the reader. Settings → Reading settings → 息屏继续下载 (Continue downloading with the screen off) is enabled by default and controls explicitly requested chapter downloads; disable it to pause until the screen wakes and the network is available. OS deep sleep may still pause downloads. Disconnection preserves queued tasks for reconnection or wake; repeated connection failures stop automatic retries and can be retried from Downloaded. Exiting PicaYomi stops all downloads and keeps saved chapters; retry incomplete chapters from Downloaded.
 
 The home page places source selection and account access at the top, with Settings, Search, and Exit at the bottom. Favorites, History, and Downloaded show cover previews: tap a heading to open its list, or a cover to start or resume reading. Leaving the reader shows details, then returns to the original home page. Continue Reading in a list opens the reader directly; leaving it shows details, then returns to that list. Landscape layouts reuse available space. On smaller screens, download, history, and favorite previews are hidden in that order while text actions remain visible, without scrolling or pagination.
 
@@ -36,7 +36,7 @@ Search, History, and Cancel close the search input. Returning from search histor
 
 Long-press an illustration, tap **保存插图 (Save illustration)** in the image viewer, and choose a folder to save it.
 
-**Manga display enhancement**: choose sharpening or denoise + sharpening in Settings → Reading settings, and combine it with darkening or gentle contrast. Enhancement is off by default and preserves downloaded originals; reopen the chapter after changing it.
+**Manga display enhancement**: choose sharpening or denoise + sharpening in Settings → Reading settings to reduce noise and emphasize text and line edges; combine it with darkening or gentle contrast. Detail enhancement and tone adjustment are off by default. Small images can be upscaled to fit the screen while preserving edges, independently of detail enhancement; large images support adaptive acceleration. Downloaded originals are preserved; reopen the chapter after changing these settings.
 
 Novels support illustrated novel reading, chapter navigation, typography settings, resume, offline downloads, and configurable chapter preloading. Install **Wenku8**, **BiliNovel**, or **轻之国度 (LightNovel)** from Settings → Source Management → Update Sources (all subscriptions), then restart KOReader. You can also choose Update Sources (including new sources) in the default subscription. If the plugin version is incompatible, update the plugin from [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest) first. Wenku8 browsing requires a personal account; BiliNovel search may be blocked by site verification and its online bookshelf is unavailable. LightNovel supports a personal online bookshelf and read-only comments; use your own site account and follow its download access requirements. Local favorites remain available.
 

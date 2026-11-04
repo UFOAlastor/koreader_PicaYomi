@@ -693,7 +693,7 @@ function ComicDetail:coverWidget()
         width = cover_w,
         height = cover_h,
         title = self.comic.title,
-        background = Blitbuffer.COLOR_GRAY_E,
+        background = Blitbuffer.COLOR_WHITE,
         text = self.comic.thumb and self.comic.thumb ~= "" and _("加载中") or _("无封面"),
     }
 end
@@ -912,7 +912,7 @@ function ComicDetail:createHeader(height)
         padding = padding,
         margin = 0,
         bordersize = Size.border.thin,
-        background = Blitbuffer.COLOR_GRAY_E,
+        background = Blitbuffer.COLOR_WHITE,
         width = self.width,
         height = height,
         VerticalGroup:new{
@@ -924,7 +924,7 @@ function ComicDetail:createHeader(height)
                     align = "left",
                     (function()
                         local widget = TextBoxWidget:new{
-                            bgcolor = Blitbuffer.COLOR_GRAY_E,
+                            bgcolor = Blitbuffer.COLOR_WHITE,
                             text = self.comic.title or _("未知标题"),
                             face = Theme.face("detail_title"),
                             bold = true,
@@ -936,7 +936,7 @@ function ComicDetail:createHeader(height)
                         return widget
                     end)(),
                     TextBoxWidget:new{
-                            bgcolor = Blitbuffer.COLOR_GRAY_E,
+                            bgcolor = Blitbuffer.COLOR_WHITE,
                         text = T(_("作者：%1"), self.comic.author_text or _("未知作者")),
                         face = Theme.face("info"),
                         width = text_w,
@@ -944,7 +944,7 @@ function ComicDetail:createHeader(height)
                         height_overflow_show_ellipsis = true,
                     },
                     TextBoxWidget:new{
-                            bgcolor = Blitbuffer.COLOR_GRAY_E,
+                            bgcolor = Blitbuffer.COLOR_WHITE,
                         text = T(_("分类：%1"), self.comic.categories_text or _("未分类")),
                         face = Theme.face("info"),
                         width = text_w,
@@ -952,7 +952,7 @@ function ComicDetail:createHeader(height)
                         height_overflow_show_ellipsis = true,
                     },
                     TextBoxWidget:new{
-                            bgcolor = Blitbuffer.COLOR_GRAY_E,
+                            bgcolor = Blitbuffer.COLOR_WHITE,
                         text = status_text,
                         face = Theme.face("info"),
                         width = text_w,
@@ -966,7 +966,7 @@ function ComicDetail:createHeader(height)
                 -- 记下实例: tap 走本页的兜底消费者 (onTapConsume), 按绘制区命中,
                 -- 与封面放大同一套做法 (子控件先收到事件, 这里只处理落空的 tap)。
                 local widget = TextBoxWidget:new{
-                    bgcolor = Blitbuffer.COLOR_GRAY_E,
+                    bgcolor = Blitbuffer.COLOR_WHITE,
                     text = description,
                     face = Theme.face("info"),
                     width = inner_w,

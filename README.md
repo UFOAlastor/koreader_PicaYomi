@@ -19,7 +19,11 @@
 
 1. 从 [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases) 下载附件 **`picayomi.koplugin-<版本>.zip`**。
 2. 解压后，将 **`picayomi.koplugin`** 文件夹直接复制到设备的 **`koreader/plugins/`** 目录，无需重命名。
-3. 重启 KOReader，从“工具”菜单打开 PicaYomi。
+3. 重启 KOReader，点击屏幕顶部唤出菜单，选择工具栏的 **扳手与螺丝刀图标（工具）**，再点击 **Picayomi**。
+
+下图中的 **Picayomi** 就是插件入口；其他菜单项可能因设备和已安装插件而不同。
+
+<img src="docs/screenshots/koreader-tools.png" alt="KOReader 工具菜单中的 Picayomi 入口" width="360">
 
 安装后的路径为：
 

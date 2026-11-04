@@ -20,7 +20,11 @@ A manga and novel reader plugin for [KOReader](https://github.com/koreader/korea
 1. Install and verify KOReader on your device.
 2. Download **`picayomi.koplugin-<version>.zip`** from the [latest release](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest).
 3. Extract it and copy the **`picayomi.koplugin`** folder into **`koreader/plugins/`**.
-4. Restart KOReader and open PicaYomi from the Tools menu (工具).
+4. Restart KOReader, tap the top of the screen to open the menu, select the **crossed wrench and screwdriver icon (Tools / 工具)**, then tap **Picayomi**.
+
+The screenshot below shows the plugin entry. Other menu items may vary by device and installed plugins.
+
+<img src="docs/screenshots/koreader-tools.png" alt="Picayomi entry in the KOReader Tools menu" width="360">
 
 Use the plugin ZIP attached to the release. GitHub's automatically generated “Source code” archives are source snapshots.
 

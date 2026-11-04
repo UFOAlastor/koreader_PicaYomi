@@ -2136,6 +2136,15 @@ function StreamDocument:getDocumentProps()
     }
 end
 
+-- Resident lookup only: never load or allocate a disk-cached raster while
+-- deciding whether pressure rendering can reuse existing pixels.
+local function touch_render_tile(doc,cache,key,rect)
+    local tile=cache:check(key)
+    if not tile and rect and not rect.scaled_rect then tile=cache:check(key.."|"..tostring(rect)) end
+    return tile and (not doc.tile_cache_validity_ts
+        or tile.created_ts and tile.created_ts>=doc.tile_cache_validity_ts)
+end
+
 -- Under pressure, render into a borrowed portion of the screen's existing
 -- buffer. No full-page/tile allocation and no retained DocCache copy. The
 -- normal host path remains responsible for caching when memory recovers.
@@ -2145,11 +2154,19 @@ function StreamDocument:drawPage(target, x, y, rect, pageno, zoom, rotation, gam
         return Document.drawPage(self,target,x,y,rect,pageno,zoom,rotation,gamma,saturation)
     end
     require("ui.enhancement_prefetch").cancel(self)
+    local cache=require("document/doccache")
+    local key=rect and rect.scaled_rect and self:getPagePartHash(pageno,zoom,rotation,gamma,saturation,rect)
+        or self:getFullPageHash(pageno,zoom,rotation,gamma,saturation)
+    touch_render_tile(self,cache,key,rect)
     local raw = self._document
     raw:releaseSub()
     TransportWorker.reclaim_idle()
     collectgarbage("collect") -- discard prior strips before granting a new viewport
     guard:prepare_decode()
+    -- Recheck ownership after eviction; never pin a bitmap across reclamation.
+    if touch_render_tile(self,cache,key,rect) then
+        return Document.drawPage(self,target,x,y,rect,pageno,zoom,rotation,gamma,saturation)
+    end
     local previous = raw.render_request
     raw.render_request = {zoom=zoom,rotation=rotation,direct=true}
     local view,page
@@ -2205,6 +2222,11 @@ function StreamDocument:renderPage(pageno, rect, zoom, rotation, gamma, saturati
     local bypass_before=enhancement_bypassed(self.session,pageno)
     local old_hash=rect and rect.scaled_rect and self:getPagePartHash(pageno,zoom,rotation,gamma,saturation,rect)
         or self:getFullPageHash(pageno,zoom,rotation,gamma,saturation)
+    -- Mark the requested resident tile as recently used before pressure
+    -- reclamation. Otherwise a back-turn can evict its own cached pixels
+    -- just before Document.renderPage looks them up. Keep all pressure and
+    -- validity checks: this is LRU priority, not a pinned tile or larger grant.
+    touch_render_tile(self,cache,old_hash,rect)
     if MemoryGuard.instance():under_pressure() then TransportWorker.reclaim_idle() end
     MemoryGuard.instance():prepare_decode() -- before the host allocates its tile
     raw.render_request={zoom=zoom,rotation=rotation}

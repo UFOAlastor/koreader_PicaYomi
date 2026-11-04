@@ -16,6 +16,7 @@ end
 
 function Worker.request(spec,pool)
     assert(type(spec) == "table", "后台请求描述无效")
+    if spec.kind=="plugin_update"then return require("network.plugin_update_worker").prepare(spec)end
     if spec.kind=="enhancement"then return require("util.enhancement_worker").render(spec)end
     if spec.kind=='kosync'then
         assert(spec.operation=='get_progress' or spec.operation=='update_progress','无效同步操作')

@@ -77,6 +77,16 @@ function SettingsManager:showMainMenu()
                 callback = function() self:navigateTo("sources") end,
             },
             {
+                text = _("自动检查插件更新"),
+                mandatory_func = function()return require("util.config"):get("plugin_auto_update") and _("开启") or _("关闭")end,
+                callback = function()
+                    local module=self.modules.about
+                    if module:safeConfigSet("plugin_auto_update",not module:safeConfigGet("plugin_auto_update"))then
+                        main_menu:updateItems()
+                    end
+                end,
+            },
+            {
                 text = _("关于"),
                 callback = function()
                     self:navigateTo("about")

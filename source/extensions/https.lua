@@ -20,13 +20,8 @@ function Net.matches(host, name)
         and host:sub(-#suffix) == suffix and name:sub(3):find("%.") ~= nil
 end
 
-function Net.get(url, limit)
-    assert(Net.validURL(url), "订阅和源包仅支持无认证信息的 HTTPS 域名地址")
-    local Async = require("network.async_task")
-    if Async.active() then
-        return Async.await(function() return Net.get(url, limit) end,
-            { kind = "extension_https", url = url, limit = limit })
-    end
+function Net.request(url,limit,sink)
+    assert(Net.validURL(url), "更新仅支持 HTTPS 域名地址")
     local http, https = require("socket.http"), require("ssl.https")
     assert(not http.PROXY, "扩展更新不支持全局代理")
     local host = url:match("^https://([^/?:#]+)")
@@ -51,7 +46,7 @@ function Net.get(url, limit)
         end
         return connection
     end
-    local ok, result, status = pcall(http.request, {
+    local ok, result, status, headers = pcall(http.request, {
         url = url, method = "GET", create = create, redirect = false,
         headers = { ["User-Agent"] = "PicaYomi-Extensions/1", ["Accept"] = "application/json" },
         sink = function(chunk, err)
@@ -59,6 +54,7 @@ function Net.get(url, limit)
             if chunk then
                 size = size + #chunk
                 if size > limit then return nil, "扩展响应过大" end
+                if sink then return sink(chunk) end
                 chunks[#chunks + 1] = chunk
             end
             return 1
@@ -66,8 +62,20 @@ function Net.get(url, limit)
     })
     https.TIMEOUT = previous_timeout
     if connection then pcall(function() connection:close() end) end
-    assert(ok and result and tonumber(status) == 200, "HTTPS 获取失败: " .. tostring(ok and status or result))
-    return table.concat(chunks)
+    assert(ok and result, "HTTPS 获取失败: " .. tostring(ok and status or result))
+    return sink and true or table.concat(chunks),tonumber(status),headers
+end
+
+function Net.get(url, limit)
+    assert(Net.validURL(url), "订阅和源包仅支持无认证信息的 HTTPS 域名地址")
+    local Async = require("network.async_task")
+    if Async.active() then
+        return Async.await(function() return Net.get(url, limit) end,
+            { kind = "extension_https", url = url, limit = limit })
+    end
+    local body,status=Net.request(url,limit)
+    assert(status==200,"HTTPS 获取失败: "..tostring(status))
+    return body
 end
 
 return Net

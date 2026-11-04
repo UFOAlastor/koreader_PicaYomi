@@ -122,7 +122,12 @@ function AboutSettings:show()
     local items = {
         { text = T(_("版本 %1"), self:getVersion()), callback = function()
             self:showQr(self.LINKS.plugin, _("PicaYomi GitHub 仓库链接"))
-        end },
+        end, picayomi_actions = {
+            {text = T(_("版本 %1"), self:getVersion()), callback = function()
+                self:showQr(self.LINKS.plugin, _("PicaYomi GitHub 仓库链接"))
+            end},
+            {text = _("检查更新"), callback = function()require("ui.settings.plugin_update").check()end},
+        } },
         {
             text = _("漫画与小说阅读插件 · 基于 KOReader"),
             callback = function()
@@ -153,6 +158,10 @@ function AboutSettings:show()
         end, _license=true },
         self:createBackButton(),
     }
+    local state_ok,state=pcall(require("util.plugin_update").state)
+    if state_ok and state.previous and not state.pending then
+        table.insert(items,#items,{text=_("恢复上一版插件"),callback=function()require("ui.settings.plugin_update").rollback()end})
+    end
     for _,item in ipairs(items) do
         if item.callback and not item._license then
             local callback=item.callback

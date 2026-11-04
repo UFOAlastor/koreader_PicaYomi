@@ -1,3 +1,11 @@
+-- Select a verified payload before importing any plugin modules.
+do
+    local root=assert(debug.getinfo(1,"S").source:match("^@(.*)/main.lua$"))
+    local selected=assert(loadfile(root.."/plugin_boot.lua"))().select(root)
+    package.path=(selected or root).."/?.lua;"..package.path
+    if selected then return dofile(selected.."/main.lua")end
+end
+
 -- main.lua
 -- PicaYomi 插件入口
 -- 移植 PicaComic 到 KOReader 的漫画阅读插件
@@ -206,6 +214,12 @@ function Picayomi:init()
 
     if not ok then
         logger.err("Picayomi: init failed: " .. tostring(err))
+    else
+        local boot=package.loaded["picayomi.boot.context"]
+        if boot then
+            local healthy,err=pcall(boot.boot.healthy)
+            if not healthy then logger.err("Picayomi update health marker: "..tostring(err))end
+        end
     end
 end
 
@@ -322,6 +336,7 @@ end
 
 --- 退出前收掉离线下载队列 (与流式会话同一约定: 杀子进程, 不等待)
 function Picayomi:_shutdownDownloads()
+    require("ui.settings.plugin_update").cancel()
     require("util.widget_sweep").shutdownTasks()
     self._background_cover_release=nil;self._picayomi_asleep=false;self._picayomi_offline=false
     require("ui.common.loading_task").setSuspended(false)
@@ -385,6 +400,7 @@ function Picayomi:onSuspend()
     q:setSuspended(true)
     self._picayomi_offline=not q:checkNetwork()
     require("source.extensions.updater").cancel()
+    require("ui.settings.plugin_update").cancel()
     require("ui.enhancement_prefetch").setSuspended(true)
     require("ui.common.loading_task").setSuspended(true)
     require("network.async_task").cancelAll(true,true)
@@ -403,12 +419,13 @@ function Picayomi:onResume()
     require("ui.enhancement_prefetch").setSuspended(false)
     updateBackgroundState(self)
     q:kick(was_asleep)
-    if not self._picayomi_offline then require("source.extensions.updater").schedule()end
+    if not self._picayomi_offline then require("source.extensions.updater").schedule();require("ui.settings.plugin_update").schedule()end
 end
 function Picayomi:onNetworkDisconnected()
     self._picayomi_offline=true
     require("util.download_queue").instance():setConnected(false)
     require("source.extensions.updater").cancel()
+    require("ui.settings.plugin_update").cancel()
     require("ui.common.loading_task").cancelAll()
     require("network.async_task").cancelAll(true)
     updateBackgroundState(self)
@@ -422,7 +439,7 @@ function Picayomi:onNetworkConnected()
     updateBackgroundState(self)
     q:kick()
     if not self._picayomi_asleep and not self._picayomi_offline then
-        require("source.extensions.updater").schedule()
+        require("source.extensions.updater").schedule();require("ui.settings.plugin_update").schedule()
     end
 end
 

@@ -344,6 +344,7 @@ function Home.returnToHome()
         Home.refreshShownAccountState()
         shown=Home.findShownMenu() or shown
         require("source.extensions.updater").schedule()
+    require("ui.settings.plugin_update").schedule()
         UIManager:setDirty(shown, "ui")
         return true
     end
@@ -354,6 +355,7 @@ end
 
 function Home:show(return_callback)
     require("source.extensions.updater").schedule()
+    require("ui.settings.plugin_update").schedule()
     self.return_callback = return_callback
     -- 退出标记只对一次退出有效: Home 实例可能被再次 show (例如重新进入插件)
     self._leaving = nil

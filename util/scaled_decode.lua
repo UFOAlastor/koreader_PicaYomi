@@ -131,6 +131,7 @@ local function load_webp()
             picayomi_webp_dec_buffer output;
             picayomi_webp_decoder_options options;
         } picayomi_webp_decoder_config;
+        int WebPGetFeaturesInternal(const uint8_t *, size_t, picayomi_webp_features *, int);
         int WebPGetDecoderVersion(void);
         int WebPGetInfo(const uint8_t *data, size_t data_size, int *width, int *height);
         int WebPInitDecoderConfigInternal(picayomi_webp_decoder_config *, int);
@@ -396,6 +397,32 @@ end
 -- 我们能安全地据此判定"不可用"。
 local WEBP_DECODER_ABI_VERSION = 0x0210
 
+local function webp_workspace(width,height,lossless,alpha)
+    return width*256+1024*1024+(lossless and width*height*8 or 0)+(alpha and width*height*2 or 0)
+end
+
+-- A lower bound only: never promises that filtering/halos or a later budget
+-- will fit. Probe at most 64 KiB; unknown/long headers retain normal admission.
+function ScaledDecode.webp_minimum(path,size,color,zoom)
+    local ok,minimum=pcall(function()
+        local length=require("libs/libkoreader-lfs").attributes(path,"size")
+        if not length or length>ImageGuard.FILE_LIMIT then return end
+        local f=io.open(path,"rb");if not f then return end
+        local read,data=pcall(f.read,f,65536);f:close()
+        if not read or not data then return end
+        local lib=load_webp();if not lib then return end
+        local features=ffi.new("picayomi_webp_features")
+        if lib.WebPGetFeaturesInternal(data,#data,features,WEBP_DECODER_ABI_VERSION)~=0 then return end
+        local w,h=tonumber(features.width),tonumber(features.height)
+        if not size or w~=size.w or h~=size.h or w<1 or h<1 then return end
+        local lossless=features.format~=1
+        local alpha=lossless or features.has_alpha~=0
+        local row=math.ceil(w*math.min(1,zoom))*(color and (alpha and 8 or 3) or (alpha and 5 or 4))
+        return math.max(length*2+1,webp_workspace(w,h,lossless,alpha)+row)
+    end)
+    if ok then return minimum end
+end
+
 --- 缩放解码 WEBP
 --
 -- color=false 时将 RGBA 直接合成到白底灰度输出, 不复制第二份 RGBA。
@@ -593,19 +620,20 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             if lib.WebPInitDecoderConfigInternal(cfg,WEBP_DECODER_ABI_VERSION)==0 then
                 cfg=nil; return nil, "WebP ABI unavailable"
             end
-            local dims=ffi.new("int[2]")
-            if lib.WebPGetInfo(data,#data,dims,dims+1)==0 then return nil,"corrupt_image" end
-            width,full_h=tonumber(dims[0]),tonumber(dims[1])
+            if lib.WebPGetFeaturesInternal(data,#data,cfg.input,WEBP_DECODER_ABI_VERSION)~=0 then
+                return nil,"corrupt_image"
+            end
+            width,full_h=tonumber(cfg.input.width),tonumber(cfg.input.height)
             local bottom=math.min(full_h,math.ceil(y+height))
             y=math.max(0,math.floor(y/2)*2);height=bottom-y
             if height<1 then return nil,"invalid region" end
             -- VP8L and alpha can retain a full-image intermediate. Budget that
             -- separately; cropping bounds output, not every internal allocation.
-            local lossless=data:find("VP8L",1,true)~=nil
-            local alpha=lossless or data:find("ALPH",1,true)~=nil
-            workspace=width*256+1024*1024
-            if lossless then workspace=workspace+width*full_h*8 end
-            if alpha then workspace=workspace+width*full_h*2 end
+            -- Inspect the bitstream header, never signatures inside compressed
+            -- pixels/metadata. Retain the conservative lossless alpha allowance.
+            local lossless=cfg.input.format~=1
+            local alpha=lossless or cfg.input.has_alpha~=0
+            workspace=webp_workspace(width,full_h,lossless,alpha)
             raw_height=height
             local zoom=math.min(1,display_zoom or 1)
             local ow,oh=math.ceil(width*zoom),math.ceil(height*zoom)

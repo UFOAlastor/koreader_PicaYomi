@@ -1302,6 +1302,11 @@ function PicaReader:onEndOfBook()
 
         -- 检查是否有下一章节
         if self.episodes_list and self.current_episode_index and self.current_episode_index < #self.episodes_list then
+            local active=ReaderUI.instance
+            local target=self.current_episode_index+1
+            if require("ui.auto_next").start(active,function()
+                return self.is_showing and ReaderUI.instance==active and self.current_episode_index==target-1 and not self._chapter_loading
+            end,function()self:switchToChapter(target)end)then return true end
             -- 有下一章节，询问是否继续阅读
             local next_episode = self.episodes_list[self.current_episode_index + 1]
 

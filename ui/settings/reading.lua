@@ -90,6 +90,8 @@ function ReadingSettings:show()
         end,callback=function()self:setNovelPrefetch()end},
         {text=_("息屏继续下载"),mandatory_func=function()return self:safeConfigGet("download_on_suspend",true) and _("开启")or _("关闭")end,
             callback=function()self:setSleepDownloads()end},
+        {text=_("自动下一章"),mandatory_func=function()return self:safeConfigGet("auto_next_chapter",false) and _("开启")or _("关闭")end,
+            callback=function()self:setAutoNext()end},
         self:createBackButton(),
     }
 
@@ -389,6 +391,23 @@ function ReadingSettings:setWebtoonScroll()
     table.insert(items, self:createBackButton())
     local menu = self:createMenu(_("条漫滚动阅读"), items)
     self:showMenu(menu)
+end
+
+
+function ReadingSettings:setAutoNext()
+    local menu
+    local items={{text=_("适用于漫画和小说；仅在有下一章时生效"),enabled=false,select_enabled=false},
+        {text=_("加载失败后可手动切章重试"),enabled=false,select_enabled=false}}
+    for _,o in ipairs{{value=false,text=_("关闭（默认）"),hint=_("章节结束时询问是否继续")},
+        {value=true,text=_("开启"),hint=_("章节结束时直接加载下一章")}}do
+        items[#items+1]={text=o.text,mandatory=o.hint,text_func=function()
+            return checkLabel(self:safeConfigGet("auto_next_chapter",false)==o.value,o.text)
+        end,callback=function()
+            if self:safeConfigSet("auto_next_chapter",o.value)then menu:updateItems();UIManager:setDirty(menu,"ui")end
+        end}
+    end
+    items[#items+1]=self:createBackButton()
+    menu=self:createMenu(_("自动下一章"),items);self:showMenu(menu)
 end
 
 return ReadingSettings

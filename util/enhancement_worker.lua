@@ -9,15 +9,21 @@ function M.render(s)
     assert(s.budget>0 and s.budget<=16*1024*1024)
     local function budget()return math.min(s.budget,Guard:decode_budget())end
     local bypass=s.bypass==true
+    local function failed(why,required)
+        if why=='memory_budget' and type(required)=='number' and required>0 and required<math.huge then
+            error('speculation_budget:'..math.ceil(required),0)
+        end
+        error(why,0)
+    end
     local function filter(bb,defer,fast,upscale)
         if bypass or defer or not Enhance.spatial(s.mode)then return true end
         local mode=s.mode
         if upscale and not s.legacy then
             if mode=='sharpen'then mode='bounded_sharpen'elseif mode=='denoise_sharpen'then mode='denoise_bounded_sharpen'end
         end
-        local ok,why=require('util.image_filter').apply(bb,mode,budget(),fast)
+        local ok,why,needed=require('util.image_filter').apply(bb,mode,budget(),fast)
         if not ok then
-            if why=='memory_budget'then error('speculation_budget',0)end
+            if why=='memory_budget'then failed(why,needed)end
             bypass=true
         end
         return true
@@ -36,10 +42,10 @@ function M.render(s)
     local ok,err=pcall(function()
         local dc=require('ffi/drawcontext').new();dc:setZoom(s.zoom);dc:setRotate(0)
         local done=require('util.image_region_render').draw({size=s.size,path=s.input,format=s.format,color=s.color,
-            mode=s.mode,adaptive=s.adaptive,budget=budget,filter=filter,resize=resize,
-            bypassed=function()return bypass end,failed=function(why)error(why,0)end,
+            post_plan=s.post_plan,mode=s.mode,adaptive=s.adaptive,budget=budget,filter=filter,resize=resize,
+            bypassed=function()return bypass end,failed=failed,
             decode=function(format,y,height,grant,zoom,input)
-                return Decode.decode_region(s.input,format,y,height,s.color,grant,format=='webp'and 1 or zoom,input)
+                return require('util.image_region_decode').decode(s.input,s.size,s.color,s.post_plan,format,y,height,grant,zoom,input)
             end},dc,target,0,0)
         assert(done,'incomplete raster')
         if not bypass then assert(Enhance.apply(target,Enhance.tone(s.mode,s.tone)))end

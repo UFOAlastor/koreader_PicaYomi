@@ -9,7 +9,7 @@ local function observe(doc,n,state,job)
     doc._enhancement_observation=info
 end
 local function count(doc,event)
-    local stats=doc._enhancement_stats or {launched=0,ready=0,used=0,failed=0,cancelled=0}
+    local stats=doc._enhancement_stats or {launched=0,ready=0,used=0,failed=0,cancelled=0,retried=0}
     doc._enhancement_stats=stats;stats[event]=stats[event]+1
 end
 function M.describe(doc,n)
@@ -26,7 +26,7 @@ end
 function M.report(doc)
     local s=doc._enhancement_stats
     if s then require('util.logger').notice('Picayomi: enhancement summary',
-        'launched',s.launched,'ready',s.ready,'used',s.used,'failed',s.failed,'cancelled',s.cancelled)end
+        'launched',s.launched,'ready',s.ready,'used',s.used,'failed',s.failed,'cancelled',s.cancelled,'retried',s.retried or 0)end
     doc._enhancement_stats=nil;doc._enhancement_observation=nil
 end
 function M.setSuspended(value)
@@ -56,18 +56,32 @@ local function room(doc,bytes)
         and current.size+bytes+512<=cache.size
 end
 
-function M.hint(doc,n,zoom,rotation,gamma,saturation)
+function M.hint(doc,n,zoom,rotation,gamma,saturation,ready_event)
     if M.suspended then return end
+    -- The host also hints previous/farther pages. They must not cancel or
+    -- overwrite the single next-page job/evidence owned by this document.
+    if doc._last_render_page and n~=doc._last_render_page+1 then return end
     local spec,key=doc:prefetch_spec(n,zoom,rotation,gamma,saturation)
     if not spec then M.cancel(doc);observe(doc,n,key or 'ineligible');return end
-    if doc._prediction_rejected==key then M.cancel(doc);return end
-    local cache=require('document/doccache')
-    if cache:check(spec.cache_key)then M.cancel(doc);return end
     local current=doc._enhancement_job
     if current and current.key==key then return end
+    local cache=require('document/doccache')
+    if cache:check(spec.cache_key)then M.cancel(doc);return end
+    local bytes=spec.width*spec.height*(spec.color and 4 or 1)
+    local guard=require('util.memory_guard').instance()
+    local retry_minimum
+    if doc._prediction_rejected==key then
+        local refusal=doc._prediction_refusal
+        if not ready_event or not refusal or refusal.key~=key or refusal.kind~='memory' or not refusal.required or refusal.retried then
+            M.cancel(doc);return
+        end
+        retry_minimum=math.max(MIN_BUDGET,refusal.required,refusal.budget*1.5,refusal.budget+2*1024*1024)
+        if guard:prediction_budget(bytes)<retry_minimum then return end
+    end
     for other in pairs(documents)do M.cancel(other)end
     M.cancel(doc)
-    if not room(doc,spec.width*spec.height*(spec.color and 4 or 1))then observe(doc,n,'cache_room');return end
+    if not room(doc,bytes)then observe(doc,n,'cache_room');return end
+    if retry_minimum then doc._prediction_refusal.retried=true;count(doc,'retried')end
     local job={key=key,page=n,started=clock(),observation={page=n}}
     doc._enhancement_job=job;documents[doc]=true;observe(doc,n,'waiting',job)
     local function valid()
@@ -75,8 +89,6 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation)
         local fresh,newkey=doc:prefetch_spec(n,zoom,rotation,gamma,saturation)
         return fresh and newkey==key
     end
-    local bytes=spec.width*spec.height*(spec.color and 4 or 1)
-    local guard=require('util.memory_guard').instance()
     local Async=require('network.async_task')
     local function clean()
         if spec.output then os.remove(spec.output)end
@@ -86,7 +98,13 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation)
             Async.wait(.12)
             if not valid()then clean();return end
             spec.budget=guard:prediction_budget(bytes)
-            if spec.budget<MIN_BUDGET or not room(doc,bytes)then observe(doc,n,'memory',job);clean();return end
+            if spec.budget<(retry_minimum or MIN_BUDGET) or not room(doc,bytes)then observe(doc,n,'memory',job);clean();return end
+            if spec.format=='webp' then
+                spec.minimum_budget=require('util.scaled_decode').webp_minimum(spec.input,spec.size,spec.color,spec.zoom)
+                if spec.minimum_budget and spec.budget<spec.minimum_budget then
+                    error('speculation_budget:'..math.ceil(spec.minimum_budget),0)
+                end
+            end
             spec.output=os.tmpname();job.output=spec.output
             local result=Async.await(function()return require('util.enhancement_worker').render(spec)end,spec)
             if not valid()then clean();return end
@@ -124,13 +142,18 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation)
                 -- increase a grant, but do not reject a still-usable smaller one.
                 spec.budget=math.min(spec.budget,guard:prediction_budget(bytes))
                 job.observation.budget=spec.budget
-                if spec.budget<MIN_BUDGET then return false end
+                if spec.budget<math.max(retry_minimum or MIN_BUDGET,spec.minimum_budget or 0) then return false end
                 observe(doc,n,'running',job);count(doc,'launched');return true
             end,
             timeout=5,on_error=function(err)
                 local message=tostring(err)
                 local reason=message:find('memory',1,true) or message:find('budget',1,true) or message:find('内存',1,true)
-                observe(doc,n,reason and 'memory' or message:find('超时',1,true) and 'timeout' or 'worker_error',job)
+                local kind=reason and 'memory' or message:find('超时',1,true) and 'timeout' or 'worker_error'
+                local previous=doc._prediction_refusal
+                doc._prediction_refusal={key=key,kind=kind,budget=spec.budget or 0,
+                    required=tonumber(message:match('speculation_budget:(%d+)')),
+                    retried=previous and previous.key==key and previous.retried or false}
+                observe(doc,n,kind,job)
                 count(doc,'failed');doc._prediction_rejected=key;clean()
             end,on_cancel=function()
                 if doc._enhancement_job==job then observe(doc,n,'cancelled',job);count(doc,'cancelled')end

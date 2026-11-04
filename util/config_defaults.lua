@@ -27,6 +27,7 @@ ConfigDefaults.defaults = {
     -- (解码只发生在 MultiImageDoc:openPage, 且上一页的缓冲立刻释放), 所以放宽到 3。
     prefetch_pages = 3,
     novel_prefetch_chapters = 1,
+    auto_next_chapter = false,
     -- 翻页刷新: ui/reader.lua 的 forceFullRefresh 读取。
     -- true = 每翻一页整屏刷一次 (消墨水屏残影); false = 交给 KOReader 的刷新计数。
     refresh_on_page_turn = true,

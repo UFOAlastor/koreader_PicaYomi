@@ -866,6 +866,7 @@ end
 
 function StreamSession:memory_recovered(n)
     if not (self.memory_blocked and self.memory_blocked[n]) then return end
+    logger.notice("Picayomi: memory recovery","page",n,"attempts",self.memory_retry_counts[n] or 0)
     self.memory_blocked[n]=nil
     self.memory_retry_counts[n]=nil
     if self.memory_wait and self.memory_wait.page==n then
@@ -1553,36 +1554,8 @@ function MultiImageDoc:openPage(n)
         end
         return ok,reason,needed
     end
-    local function region_decode(format,y,height,current_budget,zoom,region_input)
-        local function read_piece(py,ph,remaining,pzoom)
-            if format=="png" then return PngDecode.decode_region(path,py,ph,color,remaining) end
-            -- WebP region scaling depends on crop height; resample below
-            -- in page coordinates so pressure crops keep identical pixels.
-            return ScaledDecode.decode_region(path,format,py,ph,color,remaining,format=="webp" and 1 or pzoom,region_input)
-        end
-        if not post_plan then return read_piece(y,height,current_budget,zoom) end
-        -- Assemble only the requested output strip. Source rows may be far
-        -- apart; no full decoded page is needed for host band reordering.
-        local bytes=sz.w*height*(color and 4 or 1)
-        if bytes>=current_budget then return nil,"memory_budget",bytes+1 end
-        local output,piece
-        local ok,result,why,needed=pcall(function()
-            output=Blitbuffer.new(sz.w,height,color and Blitbuffer.TYPE_BBRGB32 or Blitbuffer.TYPE_BB8)
-            for _,part in ipairs(require("source.image_service").regionPieces(post_plan,y,height)) do
-                local origin,required
-                piece,origin,required=read_piece(part.source_y,part.height,current_budget-bytes,1)
-                if not piece then return nil,origin,required and required+bytes end
-                output:blitFrom(piece,0,part.target_y,0,part.source_y-origin,sz.w,part.height)
-                piece:free();piece=nil
-            end
-            return output
-        end)
-        if piece then piece:free() end
-        if not ok or not result then
-            if output then output:free() end
-            return nil,ok and why or "memory_budget",needed
-        end
-        return result,y,height
+    local function region_decode(...)
+        return require("util.image_region_decode").decode(path,sz,color,post_plan,...)
     end
     if sz and sz.w and sz.h and (not render_post or post_plan) and request
             and (request.rotation or 0)==0 and (fmt=="jpeg" or fmt=="jpg" or fmt=="webp" or fmt=="png" and PngDecode.available()) then
@@ -1610,7 +1583,9 @@ function MultiImageDoc:openPage(n)
             local function failed(reason,required,input_missing)
                 record(reason)
                 page.is_placeholder=true
-                logger.warn("Picayomi region decode:",reason)
+                logger.warn("Picayomi region decode:",reason,"page",n,"format",format,
+                    "width",sz.w,"height",sz.h,"budget_kib",math.floor(decode_budget()/1024),
+                    "stage_required_kib",required and math.ceil(required/1024) or "unknown")
                 if reason=="corrupt_image" then
                     pcall(function()
                         DownloadManager.forgetImage(path)
@@ -2042,9 +2017,9 @@ end
 --
 -- 所以这里**不渲染**, 只把它当作"向前补页"的补充信号交给会话 (真正的预取窗口
 -- 由翻页入口的方向决定)。
-function StreamDocument:hintPage(pageno, zoom, rotation, gamma, saturation)
+function StreamDocument:hintPage(pageno, zoom, rotation, gamma, saturation, ready_event)
     if self.session then self.session:on_hint_page(pageno) end
-    require("ui.enhancement_prefetch").hint(self,pageno,zoom,rotation,gamma,saturation)
+    require("ui.enhancement_prefetch").hint(self,pageno,zoom,rotation,gamma,saturation,ready_event)
 end
 
 -- A downloaded future page does not repaint the current page. Re-enter the
@@ -2057,7 +2032,7 @@ function StreamDocument:prefetch_ready(n)
     if reader and reader.document==self and reader.zooming and reader.view
         and n>=next_page then
         local state=reader.view.state
-        self:hintPage(next_page,reader.zooming:getZoom(next_page),state.rotation,state.gamma,state.saturation)
+        self:hintPage(next_page,reader.zooming:getZoom(next_page),state.rotation,state.gamma,state.saturation,true)
     end
 end
 
@@ -2066,7 +2041,8 @@ end
 function StreamDocument:prefetch_spec(n,zoom,rotation,gamma,saturation)
     local s=self.session
     if not s or s.cancelled then return nil,"closed" end
-    if s.prefetch_disabled or not s:prefetch_on() then return nil,"prefetch_paused" end
+    -- A network circuit breaker stops downloads, not work on local files.
+    if s.suspended or not s:prefetch_on() then return nil,"prefetch_paused" end
     if not self._last_render_page or s:page_state(self._last_render_page)~="ready" then return nil,"current_loading" end
     if (s.scheduler.direction or 1)<0 or n~=(self._last_render_page or 0)+1 then return nil,"direction" end
     if not ImageEnhance.spatial(s.display_enhancement) or rotation~=0
@@ -2074,7 +2050,18 @@ function StreamDocument:prefetch_spec(n,zoom,rotation,gamma,saturation)
         or type(zoom)~="number" or zoom<=0 or zoom>4 then return nil,"display_mode" end
     local path=s:local_page(n);local sz=path and s:ensure_size(n)
     if not sz then return nil,"not_downloaded" end
-    local post,_,post_error=render_post_for(s,n);if post or post_error then return nil,"source_transform" end
+    local post,_,post_error=render_post_for(s,n)
+    local post_plan
+    if post_error then return nil,"source_transform" end
+    if post then
+        -- Tight-budget RGB strips can differ at the final source boundary.
+        -- Keep the proven foreground path until that equivalence is established.
+        if self.render_color then return nil,"source_transform_color" end
+        local plan=post.digest and require("source.processors").regionPlan(post,sz.w,sz.h)
+        if not plan or plan.width~=sz.w or plan.height~=sz.h or type(plan.bands)~="number"
+            or plan.bands%1~=0 or plan.bands<2 or plan.bands>math.min(512,sz.h) then return nil,"source_transform" end
+        post_plan={width=sz.w,height=sz.h,bands=plan.bands}
+    end
     local fmt=ImageGuard.normalize_format(sz.fmt)
     if fmt~="jpeg" and fmt~="webp" and fmt~="png"then return nil,"format" end
     if sz.h>sz.w*3 or self.render_color and self.color_bb_type~=Blitbuffer.TYPE_BBRGB32 then return nil,"geometry" end
@@ -2082,13 +2069,13 @@ function StreamDocument:prefetch_spec(n,zoom,rotation,gamma,saturation)
     local w,h=dims.w,dims.h
     if w<=0 or h<=0 or w*h>CanvasContext:getWidth()*CanvasContext:getHeight()*2
         or w*h*(self.render_color and 4 or 1)>8*1024*1024 then return nil,"tile_limit" end
-    local spec={kind="enhancement",input=path,size={w=sz.w,h=sz.h},format=fmt,
+    local spec={kind="enhancement",input=path,post_plan=post_plan,size={w=sz.w,h=sz.h},format=fmt,
         width=w,height=h,zoom=zoom,color=self.render_color==true,
         mode=s.display_enhancement,tone=s.display_tone,adaptive=s.adaptive_enhancement,
         legacy=G_reader_settings:isTrue("legacy_image_scaling"),bypass=enhancement_bypassed(s,n),
         validity=self.tile_cache_validity_ts,cache_key=self:getFullPageHash(n,zoom,rotation,gamma,saturation)}
     local key=self:getFullPageHash(n,zoom,rotation,gamma,saturation)
-        .."|prediction:"..tostring(self.tile_cache_validity_ts)..":"..tostring(spec.legacy)..":"..tostring(self._prefetch_context)
+        .."|prediction:"..tostring(self.tile_cache_validity_ts)..":"..tostring(spec.legacy)..":"..tostring(self._prefetch_context)..":"..tostring(post_plan and post_plan.bands or 0)
     return spec,key
 end
 

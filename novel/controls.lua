@@ -42,6 +42,8 @@ function Controls:onEndOfBook()
         return true
     end
     if next_chapter and next_chapter.enabled~=false then
+        if require("ui.auto_next").start(self.ui,function()return self:current() and not self.returning end,
+            next_chapter.callback)then return true end
         self.end_dialog=require("ui.common.action_style").ConfirmBox:new{
             is_picayomi_page=true,
             text="当前章节已结束，是否继续阅读下一章节？\n\n"..next_chapter.text,

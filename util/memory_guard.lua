@@ -45,6 +45,7 @@ function MemoryGuard.read_meminfo()
         elseif k == "MemFree" then info.free = tonumber(v)
         elseif k == "MemTotal" then info.total = tonumber(v)
         elseif k == "SwapFree" then info.swap = tonumber(v) end
+        if info.avail and info.free and info.total and info.swap then break end
     end
     f:close()
     if not info.avail then return nil end
@@ -52,13 +53,15 @@ function MemoryGuard.read_meminfo()
 end
 function MemoryGuard.available_mb()
     local m = MemoryGuard.read_meminfo()
-    return m and m.avail and m.avail / 1024 or nil
+    return m and m.avail and m.avail / 1024 or nil, m
 end
 function MemoryGuard.new(opts)
     opts = opts or {}
+    local read_info=opts.read_meminfo or function() return MemoryGuard.read_meminfo() end
     return setmetatable({
         read_available_mb = opts.read_available_mb or function() return MemoryGuard.available_mb() end,
-        read_meminfo = opts.read_meminfo or function() return MemoryGuard.read_meminfo() end,
+        read_meminfo = read_info,
+        _paired_meminfo = not opts.read_meminfo and read_info or nil,
         clock = opts.clock or os.time, _refs = 0,
     }, MemoryGuard)
 end
@@ -70,10 +73,15 @@ end
 function MemoryGuard.reset() default_instance = nil end
 
 function MemoryGuard:snapshot()
-    local ok, avail = pcall(self.read_available_mb)
+    local ok, avail, info = pcall(self.read_available_mb)
     avail = ok and number(avail) or nil
-    local ok_info, info = pcall(self.read_meminfo)
-    local total = ok_info and type(info) == "table" and number(info.total) or nil
+    -- The default reader returns both from one fresh kernel observation.
+    -- Explicit/replaced metric readers retain their independent contracts.
+    if not ok or type(info)~="table" or self.read_meminfo~=self._paired_meminfo then
+        local ok_info,value=pcall(self.read_meminfo)
+        info=ok_info and value or nil
+    end
+    local total = type(info) == "table" and number(info.total) or nil
     local reserve = total and total > 0 and total * 1024 * MemoryGuard.RESERVE_FRACTION
         or MemoryGuard.RESERVE_FALLBACK
     local available = avail and avail * MB or nil
@@ -94,8 +102,8 @@ end
 -- The caller caps PNG at 3 MiB; native JPEG/WebP may use up to 8 MiB to avoid
 -- repeatedly restarting the codec for unnecessarily tiny strips.
 function MemoryGuard:region_budget(maximum)
-    local regular = self:decode_budget()
     local s = self:snapshot()
+    local regular = self:decode_budget(nil,s)
     if not s.available then return regular end
     return math.max(regular, math.floor(math.max(0,
         math.min(maximum or 3 * MB, s.available / 2, s.available - 4 * MB))))

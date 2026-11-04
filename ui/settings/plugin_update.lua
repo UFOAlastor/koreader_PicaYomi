@@ -19,7 +19,7 @@ local function run(message,fn,done)
   on_cancel=Core.cleanup,
   on_done=function(ok,result,err)
    Core.cleanup()
-   if not ok then info('更新未完成，当前版本仍可使用。\n'..require('ui.common.error_message').describe(err));return end
+   if not ok then info('更新未完成，当前版本仍可使用。\n'..require('ui.common.error_message').describe(err,nil,'github'));return end
    done(result)
   end}
 end

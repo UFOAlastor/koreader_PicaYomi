@@ -140,7 +140,7 @@ koreader/
 
 版本变化与升级注意事项见 [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases)及[更新记录](CHANGELOG.md)，安装包从 [Release 附件](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest)下载。
 
-在“设置 → 关于”的版本号旁点击“检查更新”，确认下载后，正常重启 KOReader 即可启用。设置首页可开启“自动检查插件更新”（默认关闭），下载仍需确认。下载失败或取消不会替换正在使用的版本；新版启动未完成时会尝试恢复上一版，关于页也提供可用的上一版恢复入口。宿主不支持在线安装时，仍可手动更新。
+在“设置 → 关于”的版本号旁点击“检查更新”，确认下载后，正常重启 KOReader 即可启用。同页版本号下方可开启“自动检查插件更新”（默认关闭），下载仍需确认。下载失败或取消不会替换正在使用的版本；新版启动未完成时会尝试恢复上一版，关于页也提供可用的上一版恢复入口。宿主不支持在线安装时，仍可手动更新。
 
 手动更新时退出 KOReader，用新版 `picayomi.koplugin` 替换旧插件目录，再启动 KOReader。设置、账号、收藏、历史和下载保存在 KOReader 数据目录中；替换插件时保留该数据目录，重要数据建议先备份。
 

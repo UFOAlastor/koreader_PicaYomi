@@ -163,14 +163,36 @@ local function decorate_menu(menu)
             local actions=entry.picayomi_actions
             local group=require("ui/widget/horizontalgroup"):new{}
             local width=math.floor(menu.item_dimen.w/#actions)
+            local widths={}
+            for i=1,#actions do
+                widths[i]=i==#actions and menu.item_dimen.w-width*(i-1)or width
+            end
+            if entry.picayomi_compact_actions and #actions==2 then
+                widths[2]=math.min(Style.compactWidth(actions[2].text,menu.item_dimen.h),width)
+                widths[1]=menu.item_dimen.w-widths[2]
+            end
             for i,action in ipairs(actions)do
-                group[i]=Style.row{width=i==#actions and menu.item_dimen.w-width*(i-1)or width,
-                    height=menu.item_dimen.h,text=action.text,enabled=action.enabled}
+                if action.plain then
+                    local padding=menu.items_padding or Size.padding.fullscreen
+                    group[i]=Frame:new{padding=0,padding_left=padding,margin=0,bordersize=0,
+                        Left:new{dimen=Geom:new{w=widths[i]-padding,h=menu.item_dimen.h},
+                            Text:new{text=action.text,face=row.face,bold=false,
+                                max_width=widths[i]-padding*2,truncate_with_ellipsis=true}}}
+                    outline(group[i],function() return action.enabled~=false end)
+                else
+                    group[i]=Style.row{width=widths[i],height=menu.item_dimen.h,
+                        text=action.text,enabled=action.enabled}
+                end
             end
             row[1]:free();row[1]=group
             row.onTapSelect=function(self,_,ges)
                 if not self.dimen then return true end
-                local index=math.min(#actions,math.max(1,math.floor((ges.pos.x-self.dimen.x)/width)+1))
+                local x=ges.pos.x-self.dimen.x
+                if x<0 or x>=menu.item_dimen.w then return true end
+                local index=1
+                while index<#actions and x>=widths[index]do
+                    x=x-widths[index];index=index+1
+                end
                 local action=actions[index]
                 if action and action.enabled~=false then action.callback()end
                 return true

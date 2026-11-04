@@ -3,7 +3,7 @@
 local _ = require("gettext")
 local Message = {}
 
-function Message.describe(err, fallback)
+function Message.describe(err, fallback, service)
     fallback = fallback or _("操作未完成，请重试；若仍失败，请重新打开此页面。")
     if err == nil or err == false or err == "" then return fallback end
     local ok, raw = pcall(tostring, err)
@@ -46,7 +46,8 @@ function Message.describe(err, fallback)
     elseif has("http 401", "unauthorized", "登录状态", "请先登录", "登录已过期", "会话已过期") then
         return _("登录状态已失效或尚未登录，请登录后重试。")
     elseif has("http 403", "https 获取失败: 403", "forbidden") then
-        return _("服务器拒绝访问，请检查账号权限或稍后重试。")
+        return service == "github" and _("GitHub 服务器拒绝访问，请稍后重试。")
+            or _("服务器拒绝访问，请稍后重试。")
     elseif has("http 404", "https 获取失败: 404") then
         return _("请求的地址或内容不存在，请确认地址或刷新列表后重试。")
     elseif has("http 429", "https 获取失败: 429", "too many requests", "rate limit") then

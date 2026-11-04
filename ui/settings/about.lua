@@ -119,15 +119,27 @@ end
 
 function AboutSettings:show()
     self._license_taps=0
+    local menu
     local items = {
         { text = T(_("版本 %1"), self:getVersion()), callback = function()
             self:showQr(self.LINKS.plugin, _("PicaYomi GitHub 仓库链接"))
-        end, picayomi_actions = {
-            {text = T(_("版本 %1"), self:getVersion()), callback = function()
+        end, picayomi_compact_actions = true, picayomi_actions = {
+            {text = T(_("版本 %1"), self:getVersion()), plain = true, callback = function()
                 self:showQr(self.LINKS.plugin, _("PicaYomi GitHub 仓库链接"))
             end},
             {text = _("检查更新"), callback = function()require("ui.settings.plugin_update").check()end},
         } },
+        {
+            text = _("自动检查插件更新"),
+            mandatory_func = function()
+                return self:safeConfigGet("plugin_auto_update") and _("开启") or _("关闭")
+            end,
+            callback = function()
+                if self:safeConfigSet("plugin_auto_update",not self:safeConfigGet("plugin_auto_update")) then
+                    menu:updateItems()
+                end
+            end,
+        },
         {
             text = _("漫画与小说阅读插件 · 基于 KOReader"),
             callback = function()
@@ -168,7 +180,7 @@ function AboutSettings:show()
             item.callback=function(...) self._license_taps=0;return callback(...) end
         end
     end
-    local menu = self:createMenu(_("关于"), items)
+    menu = self:createMenu(_("关于"), items)
     -- 关于页的条目只是"打开二维码/子页", 点完不能把设置页退掉
     MenuStyle.disableSelectAutoClose(menu)
     self:showMenu(menu)

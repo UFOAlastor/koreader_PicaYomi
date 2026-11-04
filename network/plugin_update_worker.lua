@@ -71,11 +71,21 @@ function W.extract(archive,directory,version)
  arc:close();if not ok then error(err,0)end
  return total
 end
+-- Stable KOReader returns total/free; newer hosts also return available space.
+-- Prefer available when supplied, and keep an unreadable filesystem distinct from low space.
+function W.availableSpace(path)
+ local total,free,available=util.df(path)
+ local bytes=available
+ if bytes==nil then bytes=free end
+ assert(type(total)=='number' and type(bytes)=='number' and bytes==bytes and bytes>=0,
+  '无法读取存储空间，请稍后重试')
+ return bytes
+end
 function W.prepare(spec)
  local r=spec.release
  assert(type(spec.directory)=='string' and spec.directory:sub(1,#spec.root+16)==spec.root..'/.updates/stage-' and spec.directory:sub(#spec.root+17):match('^%x+$') and util.realpath(spec.root)==spec.root,'更新目标路径无效')
  assert(lfs.symlinkattributes(spec.directory,'mode')=='directory','更新暂存目录无效')
- local _,_,free=util.df(spec.directory);assert(free and free>=W.MAX_EXPANDED+r.size+4*1024*1024,'存储空间不足，无法准备更新')
+ local free=W.availableSpace(spec.directory);assert(free>=W.MAX_EXPANDED+r.size+4*1024*1024,'存储空间不足，无法准备更新')
  local lease=assert(require('util.plugin_update_stage').acquire(spec.directory),'更新任务已取消或正在使用')
  local ok,result=pcall(function()
   local file=spec.directory..'/update.zip';W.download(r.url,file,r.size,r.digest)

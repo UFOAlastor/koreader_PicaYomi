@@ -247,6 +247,7 @@ function ComicDetail:init()
     if self:isNovel() then self.comic.content_type="novel" end
     -- 本地收藏 (未登录兜底): 状态在本地就有, 先填上 —— 否则按钮会先显示"收藏",
     -- 再等 syncFromSource 去问源 (未登录问源只会拿到 401)
+    self:restoreDetailCache()
     self:seedLocalFavoriteState()
     self.dimen = Geom:new{ x = 0, y = 0, w = self.width, h = self.height }
     -- 滑动: 左滑 = 下一屏 (章节列表), 右滑 = 上一屏; 已在第一屏时右滑 = 返回。
@@ -330,7 +331,7 @@ function ComicDetail:init()
             guarded("loadChapters", function() self:loadChapters(1) end)
         end
         if not self.offline then
-            guarded("syncFromSource", function() self:loadDetails() end)
+            guarded("syncFromSource", function() self:loadDetails({background=true}) end)
         end
     end)
 end
@@ -360,55 +361,89 @@ local function sameDetailContext(a,b)
         and a.scope==b.scope and a.generation==b.generation
 end
 
+function ComicDetail:restoreDetailCache()
+    if self.offline then return end
+    local context=detailContext(self)
+    local entry=require('util.detail_cache').read(context and context.scope)
+    if entry then
+        self:mergeDetail(entry.data)
+        self._detail_cached_at=entry.time
+        self._detail_cached_context=context
+    end
+end
+
+function ComicDetail:refreshInformation()
+    self:loadDetails({background=true,force=true,manual=true})
+    self:loadChapters(1,true)
+end
+
 function ComicDetail:loadDetails(opts)
     if self._loading_detail or self._closed or self.opening_reader or self.offline then return end
     if not self.source or type(self.source.getComicDetail)~="function" then
         self:loadMissingNovelChapters(opts);return
     end
+    opts=opts or {}
+    if not opts.background and self._detail_error then opts.force=true end
     local need_fav,need_info=self:detailNeeds()
-    if not need_fav and not need_info and not self._detail_error then
+    if not opts.force and not self._detail_cached_context and not need_fav and not need_info and not self._detail_error then
+        self:loadMissingNovelChapters(opts);return
+    end
+    local context=detailContext(self)
+    local Cache=require('util.detail_cache')
+    local now=os.time()
+    local fresh=sameDetailContext(self._detail_cached_context,context)
+        and self._detail_cached_at and now-self._detail_cached_at<Cache.FRESH_SECONDS
+    local scoped_key=context and context.scope and (context.scope..':'..tostring(context.generation))
+    if not opts.force and fresh and not need_fav then
+        self:loadMissingNovelChapters(opts);return
+    end
+    local admitted,lease=Cache.admit(scoped_key,opts.force,need_fav)
+    if not admitted then
         self:loadMissingNovelChapters(opts);return
     end
     self._loading_detail=true
+    self._manual_detail_refresh=opts.manual==true
     local background=opts and opts.background==true
     self._detail_background=background
-    local context=detailContext(self)
+    self._detail_silent=background
     local function cancelled()
         return self._closed or self.opening_reader
             or context and not sameDetailContext(context,detailContext(self))
     end
     local hint
-    if background then self:refresh()
-    else
+    if not background then
         hint=require("ui.common.loading_progress"):new{title=self:isNovel() and _("加载小说详情") or _("加载漫画详情"),
             progress={message=_("正在获取作品信息…（最多等待 60 秒）")}}
         UIManager:show(hint,"ui");UIManager:forceRePaint()
     end
-    local function reset() self._loading_detail=false;self._detail_background=nil end
+    local function reset() self._loading_detail=false;self._detail_background=nil;self._manual_detail_refresh=nil end
     self._detail_task=LoadingTask.background(hint,function()
-        local ok,err,changed=self:syncFromSource({defer_refresh=true})
+        local ok,err,changed=self:syncFromSource({defer_refresh=true,force=opts.force or not fresh})
         reset();LoadingTask.close(hint)
         if cancelled() then return end
         local prior_error=self._detail_error
+        if ok==false then Cache.failure(scoped_key,lease) end
         self._detail_error=ok==false and err or nil
-        if background or changed or self._detail_error or prior_error then self:refresh() end
+        if changed or opts.manual and not self._chapter_refresh_manual
+            or not background and (self._detail_error or prior_error) then self:refresh() end
         self:tryAutoContinue()
-        if ok==false and not background then LoadingTask.showFailure(err) end
+        if ok==false and (not background or opts.manual) then LoadingTask.showFailure(err) end
         self:loadMissingNovelChapters(opts)
     end,{
         delay=.05,timeout=60,
         is_cancelled=cancelled,
         on_cancel=function()
+            Cache.cancel(scoped_key,lease)
             reset()
             if not self.opening_reader then self.auto_continue=nil;self:revealQuickEntry()end
-            if background and not self._closed and not self.opening_reader then self:refresh()end
+            if opts.manual and not self._closed and not self.opening_reader then self:refresh()end
         end,
         on_error=function(err)
+            Cache.failure(scoped_key,lease)
             reset();self._detail_error=err
             self:revealQuickEntry()
             if not self._closed then
-                self:refresh()
-                if not background then LoadingTask.showFailure(err)end
+                if not background or opts.manual then self:refresh();LoadingTask.showFailure(err)end
                 self:loadMissingNovelChapters(opts)
             end
         end,
@@ -1097,10 +1132,9 @@ function ComicDetail:buildRowSpecs()
         table.insert(specs, spec)
     end
 
-    if self._loading_detail and self._detail_background then add(_("正在补充作品信息…"))end
-    if self._detail_error then add(_("详情加载失败，点此重试"),function()self:loadDetails()end) end
-    -- 标签: 点击弹出标签菜单, 选中即按该标签搜索
-    -- (标签常有十几个且长短不一, 直接铺在页面上会挤成一团 / 放不下)
+    if self._detail_error and not self._detail_silent then
+        add(_("详情加载失败，点此重试"),function()self:loadDetails()end)
+    end
     if self.comic.tags_text and self.comic.tags_text ~= "" then
         add(T(_("标签：%1"), self.comic.tags_text), function() self:showTagMenu() end)
         specs[#specs].expandable_text = true
@@ -1160,11 +1194,11 @@ function ComicDetail:buildRowSpecs()
     local progress=self:chapterProgressText()
     if progress then summary=summary.." · "..progress end
     if not self.offline then
-        local refresh_width=ActionStyle.compactWidth(_("刷新章节"),ROW_H)
+        local refresh_width=ActionStyle.compactWidth(_("刷新信息"),ROW_H)
         add_cells({{text=summary,width=(self.width or Screen:getWidth())-refresh_width,section_header=true},
-            {text=self._chapter_refresh_manual and _("刷新中…") or _("刷新章节"),
-                action_button=true,enabled=not self._chapter_refresh_manual,
-                callback=function() self:loadChapters(1,true) end}})
+            {text=(self._chapter_refresh_manual or self._manual_detail_refresh) and _("刷新中…") or _("刷新信息"),
+                action_button=true,enabled=not (self._chapter_refresh_manual or self._manual_detail_refresh),
+                callback=function() self:refreshInformation() end}})
         specs[#specs].text=summary
     else
         add(summary)
@@ -1526,8 +1560,8 @@ function ComicDetail:loadChapters(page,force,opts)
             self:revealQuickEntry()
             if manual and self.episodes_data then self:refresh() end
             UIManager:show(InfoMessage:new{
-                text=T(manual and _("刷新章节失败: %1") or _("获取章节列表失败: %1"),require("ui.common.error_message").describe(err))
-                    ..(background and _("\n已保留原有章节，可点击“刷新章节”重试。") or ""),timeout=3,
+                text=T(manual and _("刷新信息失败: %1") or _("获取章节列表失败: %1"),require("ui.common.error_message").describe(err))
+                    ..(background and _("\n已保留原有章节，可点击“刷新信息”重试。") or ""),timeout=3,
             },"ui")
             if not self.episodes_data then
                 self:refresh()
@@ -1678,22 +1712,22 @@ function ComicDetail:seedLocalFavoriteState()
     if known ~= nil then self.comic.isFavourite = known end
 end
 
---- "没有内容": nil / 空串 / 空表。合并时只填空缺, 不覆盖已有值。
+--- Empty source values never erase existing metadata.
 local function blank(value)
     if value == nil or value == "" then return true end
     if type(value) == "table" then return next(value) == nil end
     return false
 end
 
---- 用详情接口的数据补空缺字段; 返回是否真的改了什么
+--- Hydration fills gaps; an explicit refresh replaces changed nonempty fields.
 --
 -- 只填空缺: 列表数据通常更干净 —— 源 B 的详情接口 author 是空串, 而列表里有作者;
 -- 反过来源 A/源 C 的列表项没有简介, 详情接口才有。两边各补各的。
-function ComicDetail:mergeDetail(detail)
+function ComicDetail:mergeDetail(detail, replace)
     local c = self.comic
     local changed = false
     local function fill(key, value)
-        if not blank(value) and blank(c[key]) then
+        if not blank(value) and (blank(c[key]) or replace) and c[key]~=value then
             c[key] = value
             changed = true
         end
@@ -1702,12 +1736,14 @@ function ComicDetail:mergeDetail(detail)
     -- 数字字段: normalizeComic 会把缺失的归成 0, 而 0 不是 blank —— 单独判
     local function fill_num(key, value)
         local n = tonumber(value) or 0
-        if n > 0 and (tonumber(c[key]) or 0) <= 0 then
+        if n > 0 and ((tonumber(c[key]) or 0) <= 0 or replace) and c[key]~=n then
             c[key] = n
             changed = true
         end
     end
 
+    fill("title", JN.str(detail.title))
+    fill("chineseTeam", JN.str(detail.chineseTeam))
     if self:isNovel() and not blank(JN.str(detail.description)) then
         if c.description~=detail.description then c.description=detail.description;changed=true end
     else
@@ -1717,30 +1753,32 @@ function ComicDetail:mergeDetail(detail)
     fill("update_time", JN.str(detail.update_time) or JN.str(detail.updated_at))
     local author=JN.str(detail.author)
     if author and author~="" and author~="未知作者" and author~=_("未知作者") then
-        if blank(c.author) or c.author=="未知作者" or c.author==_("未知作者") then
+        if (replace or blank(c.author) or c.author=="未知作者" or c.author==_("未知作者")) and c.author~=author then
             c.author=author;changed=true
         end
-        if blank(c.author_text) or c.author_text=="未知作者" or c.author_text==_("未知作者") then
+        if (replace or blank(c.author_text) or c.author_text=="未知作者" or c.author_text==_("未知作者")) and c.author_text~=author then
             c.author_text=c.author;changed=true
         end
     end
-    if type(detail.metadata)=="table" and next(detail.metadata) then
+    if type(detail.metadata)=="table" and next(detail.metadata)
+        and require("source.contract").serialize(c.metadata or {})~=require("source.contract").serialize(detail.metadata) then
         c.metadata=detail.metadata;changed=true
     end
     fill_num("pagesCount", JN.num(detail.pagesCount, 0))
     fill_num("epsCount", JN.num(detail.epsCount, 0))
     fill_num("likesCount", JN.num(detail.likesCount, 0))
-    if c.finished == nil and detail.finished ~= nil then
+    if (c.finished == nil or replace) and type(detail.finished)=="boolean" and c.finished~=detail.finished then
         c.finished = detail.finished
         changed = true
     end
-    if blank(c.tags) and type(detail.tags) == "table" and #detail.tags > 0 then
+    if (blank(c.tags) or replace) and type(detail.tags) == "table" and #detail.tags > 0
+        and join(c.tags or {}, " / ")~=join(detail.tags," / ") then
         c.tags = detail.tags
         changed = true
     end
-    if blank(c.tags_text) then
+    if blank(c.tags_text) or replace then
         local txt = join(c.tags, " / ")
-        if txt ~= "" then
+        if txt ~= "" and txt~=c.tags_text then
             c.tags_text = txt
             changed = true
         end
@@ -1760,7 +1798,7 @@ function ComicDetail:mergeDetail(detail)
         end
     end
     -- 作品属性 (页数/编号): 展示在简介区 (见 createHeader)
-    if blank(c.meta_text) and not blank(detail.meta_text) then
+    if (blank(c.meta_text) or replace) and not blank(detail.meta_text) and c.meta_text~=detail.meta_text then
         c.meta_text = detail.meta_text
         changed = true
     end
@@ -1814,16 +1852,21 @@ function ComicDetail:syncFromSource(opts)
 
     local fa = self.favorite_action
     local need_fav,need_info=self:detailNeeds()
-    if not need_fav and not need_info and not self._detail_error then return true end
+    if not (opts and opts.force) and not need_fav and not need_info and not self._detail_error then return true end
 
     local context=detailContext(self)
-    local ok, detail, err = source:getComicDetail(c._id)
+    local ok, detail, err = source:getComicDetail(c._id,{force_refresh=opts and opts.force==true})
     if not ok or type(detail) ~= "table" then return false,err or detail or _("详情加载失败") end
     if self._closed or self.closing_by_back or self.opening_reader then return end
     if context and not sameDetailContext(context,detailContext(self)) then return end
 
-    local changed = self:mergeDetail(detail)
+    local changed = self:mergeDetail(detail,opts and opts.force)
     self._detail_snapshot=context
+    self._detail_cached_context=context
+    self._detail_cached_at=os.time()
+    local Cache=require('util.detail_cache')
+    Cache.write(context and context.scope,self.comic)
+    Cache.success(context and context.scope and (context.scope..':'..tostring(context.generation)))
 
     if need_fav and detail.isFavourite ~= nil then
         c.isFavourite = detail.isFavourite

@@ -48,6 +48,11 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
     local ctx={ base=require("source.base"), http=require("network.http_client"),
         json=require("rapidjson"), aes=require("util.aes"), html=require("htmlparser"),
         config=scoped, secrets=secrets, logger=require("util.logger"), getSetting=settings }
+    function scoped_cache:getData(k,...)
+        local call=calls[ctx] and calls[ctx][thread()]
+        if call and call.force_refresh then return nil end
+        return cache:getData(cache_prefix..k,...)
+    end
     local http=ctx.http
     ctx.http=setmetatable({}, {__index=function(_,name)
         if api_version==3 and not ({get=true,post=true,request=true,requestWithRetry=true,requestOnce=true,

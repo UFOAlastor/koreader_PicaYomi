@@ -403,6 +403,7 @@ function Runtime.new(source,manifest,digest,extension_context)
         if method=="getAllChapterImages" or method=="getChapterImages" then
             context=args[3];args[3]=nil
         end
+        if method=="getComicDetail" then context=type(args[2])=="table" and args[2] or nil;args[2]=nil end
         local canonical=method
         if not legacy then canonical=({getComicDetail="getManga",getAllChapterImages="getPages",getChapterImages="getPages",getComics="getLatest"})[method] or method end
         local page_number=1

@@ -1,6 +1,6 @@
 local _ = require("gettext")
 return {
     fullname = _("PicaYomi"),
-    version = "1.5.1",
+    version = "1.5.2",
     description = _("KOReader 漫画与小说阅读插件，内容源独立安装。"),
 }

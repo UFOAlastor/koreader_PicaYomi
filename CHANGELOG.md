@@ -1,5 +1,16 @@
 # 更新记录
 
+## 1.5.2 — 2026-11-06
+
+- 作品详情加入缓存，返回阅读页面时优先显示已有信息，后台按需更新。
+- “刷新章节”改为“刷新信息”，同时更新详情与目录，刷新失败保留原有内容。
+- 哔咔支持保存加密登录凭据，在会话过期时自动尝试恢复；旧用户需重新登录一次启用。
+- 改善哔咔搜索失败时的错误提示。
+- Cache book details and refresh them quietly while keeping existing content visible.
+- Refresh information updates both book details and chapters without clearing existing content on failure.
+- Recover expired Picacg sessions using encrypted saved credentials; sign in once after updating to enable recovery.
+- Preserve useful error messages when Picacg search fails.
+
 ## 1.5.1 — 2026-11-05
 
 - 列表分隔线适当加深，仅用于内容列表；设置、菜单与按钮恢复原有样式。

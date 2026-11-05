@@ -9,6 +9,7 @@ local function manualCooling(state,now)
  return remaining>0 and remaining<=30
 end
 function U.cancel()
+ if U.transition then UI:unschedule(U.transition);U.transition=nil end
  if U.task then local task=U.task;U.task=nil;task:cancel()end
  U.busy=false;Core.cleanup()
  if U.prompt then UI:close(U.prompt,'ui');U.prompt=nil end
@@ -59,25 +60,39 @@ function U.pending()
  end
  UI:show(dialog,'ui')
 end
-function U.offer(release)
- U.prompt=Style.ConfirmBox:new{is_picayomi_page=true,text='发现 PicaYomi '..release.version..'\n下载并准备更新？完成后需正常重启 KOReader。',ok_text='下载更新',
+local function confirmTransition(text,label,action)
+ if U.busy or U.prompt or U.transition then return end
+ local prompt
+ prompt=Style.ConfirmBox:new{is_picayomi_page=true,text=text,ok_text=label,
   ok_callback=function()
+   if U.prompt~=prompt then return end
    U.prompt=nil
-   run('正在下载并校验更新…',function()return Core.prepare(release)end,U.pending)
-  end,cancel_callback=function()U.prompt=nil end}
- local close=U.prompt.onCloseWidget
- U.prompt.onCloseWidget=function(self)if U.prompt==self then U.prompt=nil end;if close then return close(self)end end
- UI:show(U.prompt,'ui')
+   -- Native confirmation closes and button feedback finishes after this callback.
+   -- Paint the next dialog only once those operations have completed.
+   local continuation
+   continuation=function()
+    if U.transition~=continuation then return end
+    U.transition=nil;action()
+   end
+   U.transition=continuation;UI:nextTick(continuation)
+  end}
+ local close=prompt.onCloseWidget
+ prompt.onCloseWidget=function(self)if U.prompt==self then U.prompt=nil end;if close then return close(self)end end
+ U.prompt=prompt;UI:show(prompt,'ui')
+end
+function U.offer(release)
+ confirmTransition('发现 PicaYomi '..release.version..'\n下载并准备更新？完成后需正常重启 KOReader。','下载更新',function()
+  run('正在下载并校验更新…',function()return Core.prepare(release)end,U.pending)
+ end)
 end
 function U.rollback()
- UI:show(Style.ConfirmBox:new{is_picayomi_page=true,text='恢复上一版插件？正常重启 KOReader 后生效，阅读数据保持不变。',
-  ok_text='准备恢复',ok_callback=function()
+ confirmTransition('恢复上一版插件？正常重启 KOReader 后生效，阅读数据保持不变。','准备恢复',function()
    local ok,err=pcall(Core.rollback)
    if ok then U.pending()else info('无法准备恢复：'..tostring(err))end
-  end},'ui')
+  end)
 end
 function U.check()
- if U.busy or U.prompt then return end
+ if U.busy or U.prompt or U.transition then return end
  local ok,state=pcall(Core.state)
  if not ok then info('更新状态异常，请重新安装插件以恢复更新功能。当前阅读不受影响。');return end
  if state.pending then U.pending();return end
@@ -98,7 +113,7 @@ local function idle()
  return Home and top and top.widget==Home.findShownMenu() and (not Queue or not Queue.instance():is_active())
 end
 function U.schedule()
- if U.busy or U.prompt or not Core.autoEnabled()then return end
+ if U.busy or U.prompt or U.transition or not Core.autoEnabled()then return end
  local ok,state=pcall(Core.state)
  local now=os.time()
  if not ok or state.pending or (tonumber(state.next_check)or 0)>now or manualCooling(state,now)or not idle()or not online()then return end

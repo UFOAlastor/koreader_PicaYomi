@@ -172,7 +172,7 @@ function AboutSettings:show()
     }
     local state_ok,state=pcall(require("util.plugin_update").state)
     if state_ok and state.previous and not state.pending then
-        table.insert(items,#items,{text=_("恢复上一版插件"),callback=function()require("ui.settings.plugin_update").rollback()end})
+        table.insert(items,3,{text=_("恢复上一版插件"),callback=function()require("ui.settings.plugin_update").rollback()end})
     end
     for _,item in ipairs(items) do
         if item.callback and not item._license then

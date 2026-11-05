@@ -1,5 +1,16 @@
 # 更新记录
 
+## 1.5.0 — 2026-11-05
+
+- 支持同类全部源搜索，进度条等待结束后按相关性统一展示，超时保留已有结果并可重试未完成来源。
+- 跨源打开作品保持阅读、收藏和下载的来源，返回原搜索结果，主页源不变。
+- 所有列表统一白底与浅灰细线，聚合结果以方括号标明来源。
+- 修复点击下载更新后的界面显示残缺，将恢复上一版入口移到自动检查开关下方。
+- Search all sources of the current content type with progress, ranked results, partial results on timeout, and retries for unfinished sources.
+- Keep each book's source throughout reading, favorites and downloads while preserving the original home source and search return path.
+- Use white list rows with subtle separators and bracketed source labels in search results.
+- Fix incomplete display after confirming an update download and place rollback below automatic update checking.
+
 ## 1.4.5 — 2026-11-05
 
 - 更新准备完成后可选择立即重启 KOReader。

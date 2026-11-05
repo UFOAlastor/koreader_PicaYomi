@@ -265,11 +265,10 @@ end
 
 --- 造一行。占位行不可看回复 (失败行可点重试), 但仍吃 tap。
 function CommentList:makeItem(comment, index)
-    local bg = (index % 2 == 0) and Blitbuffer.COLOR_GRAY_E or Blitbuffer.COLOR_WHITE
     return CommentRow:new{
         width = self.width,
         comment = comment,
-        background = bg,
+        background = Blitbuffer.COLOR_WHITE,
         has_replies=not self.is_reply and self.source and self.source.capabilities
             and self.source.capabilities.replies=="paged" and (tonumber(comment.repliesCount) or 0)>0,
         on_select = function(c)

@@ -116,7 +116,7 @@ end
 -- @return "online" | "local" | nil (两者都不行)
 function M.backend(source)
     if source and source.hasCapability and source:hasCapability("favorites")
-            and M.isLoggedIn() then
+            and (source.isLoggedIn and source:isLoggedIn() or not source.isLoggedIn and M.isLoggedIn()) then
         return "online"
     end
     if not source or not source.hasCapability
@@ -178,8 +178,9 @@ function M.buildAction(opts)
         if type(item) ~= "table" then return false, _("无效的作品数据") end
         local is_fav = item.isFavourite == true
         if online then
-            if is_fav then return comic_api:removeFavorite(item._id) end
-            return comic_api:addFavorite(item._id)
+            local target=source and source.addFavorite and source.removeFavorite and source or comic_api
+            if is_fav then return target:removeFavorite(item._id) end
+            return target:addFavorite(item._id)
         end
         if is_fav then return LocalFavorites.remove(source_id, item._id) end
         return LocalFavorites.add(source_id, item)

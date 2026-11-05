@@ -159,7 +159,7 @@ function DetailRow:init()
         padding = padding,
         margin = 0,
         bordersize = 0,
-        background = clickable and Blitbuffer.COLOR_GRAY_E or Blitbuffer.COLOR_WHITE,
+        background = Blitbuffer.COLOR_WHITE,
         width = self.width,
         height = self.height,
         FixedBox:new{
@@ -833,6 +833,7 @@ function ComicDetail:buildWindow()
             })
         end
     end
+    ActionStyle.separateRows(self.rows)
     return self.rows
 end
 

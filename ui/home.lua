@@ -981,7 +981,7 @@ function Home:showHistory()
 end
 
 function Home:showSearch()
-    if not SourceAccess.check(self.source, "search") then return end
+    -- Access is checked after submission, independently for each selected source.
     local return_callback = function() self:show() end
     self:_getUI("search"):show(return_callback)
 end

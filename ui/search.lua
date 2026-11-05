@@ -90,10 +90,9 @@ function Search:closeSearchDialog(expected)
     return true
 end
 
-function Search:showSearchDialog()
+function Search:showSearchDialog(input)
     self.source=require("source.registry"):getCurrent()
     self:ensureSourceSort(self.source)
-    if not require("ui.common.source_access").check(self.source,"search")then return end
     self:closeSearchDialog()
     self._left=false
     self._dialog_generation=(self._dialog_generation or 0)+1
@@ -102,8 +101,17 @@ function Search:showSearchDialog()
     dialog=InputDialog:new{
         is_picayomi_page=true,
         title=self.source and self.source.content_type=="novel" and _("搜索小说")or _("搜索漫画"),
-        input="",
+        input=input or "",
         buttons={{
+            {text=self.search_all and "当前源"or "✓ 当前源",callback=function()
+                if self.search_dialog~=dialog then return end
+                self.search_all=false;self:showSearchDialog(dialog:getInputText())
+            end},
+            {text=self.search_all and "✓ 全部源"or "全部源",callback=function()
+                if self.search_dialog~=dialog then return end
+                self.search_all=true;self:showSearchDialog(dialog:getInputText())
+            end},
+        },{
             {text=_("搜索"),callback=function()
                 if self.search_dialog~=dialog then return end
                 local input=dialog:getInputText():gsub("^%s+",""):gsub("%s+$","")
@@ -148,11 +156,13 @@ function Search:leave()
     self._left=true
     self._query_generation=(self._query_generation or 0)+1
     if self.search_task then self.search_task:cancel();self.search_task=nil end
+    if self.aggregate_batch then self.aggregate_batch:cancel();self.aggregate_batch=nil end
     self:closeSearchDialog()
     for _,name in ipairs({"history_delete_dialog","history_menu","result_menu"})do
         local widget=self[name];self[name]=nil
         if widget and WidgetSweep.isInStack(widget)then UIManager:close(widget,"ui")end
     end
+    self.aggregate_results=nil
     if self.return_callback then self.return_callback()end
 end
 
@@ -329,6 +339,7 @@ function Search:performSearch()
     end
     local source=require("source.registry"):getCurrent()
     self:ensureSourceSort(source)
+    if self.search_all then self:performAggregateSearch(false);return end
     if not require("ui.common.source_access").check(source,"search")then return end
     self._left=false
     self._query_generation=(self._query_generation or 0)+1
@@ -375,6 +386,7 @@ function Search:_sortOptions()
 end
 
 function Search:showSearchResults()
+    if self.search_all then return self:showAggregateResults()end
     self.source = require("source.registry"):getCurrent()
     -- 换排序 / 重搜时旧列表要收掉, 否则窗口栈里会堆出多层一模一样的列表
     -- (踩过: "点了没反应" 就是这种堆叠造成的)。
@@ -447,7 +459,13 @@ function Search:showComicDetail(comic, navigation)
     -- "进详情再返回, 列表又从第一页开始"。与 ui/home.lua / ui/history.lua 一致。
     -- (结果列表压在搜索输入框之上, 输入框在搜索发起时已关闭, 见 showSearchDialog 的
     --  调用点 —— 所以这里露出来的就是结果列表本身。)
-    local source = navigation and navigation.source or require("source.registry"):getCurrent()
+    local registry=require("source.registry")
+    local sid=comic.source_id or navigation and navigation.source_id
+    local source=sid and registry:get(sid) or navigation and navigation.source or registry:getCurrent()
+    if sid and (not source or source.identifier~=sid or source._offline)then
+        UIManager:show(InfoMessage:new{text="作品来源已不可用，请重新搜索。"},"ui")
+        return
+    end
     self.detail_menu = ComicDetail:new{
         navigation = navigation,
         comic = comic,
@@ -486,6 +504,86 @@ function Search:showComicDetail(comic, navigation)
     }
 
     UIManager:show(self.detail_menu, "ui")
+end
+
+
+function Search:performAggregateSearch(retry)
+    local Registry=require("source.registry")
+    local Service=require("util.aggregate_search")
+    local Async=require("network.async_task")
+    local source=Registry:getCurrent()
+    local previous=retry and self.aggregate_batch or nil
+    if self.search_task then self.search_task:cancel()end
+    if self.aggregate_batch then self.aggregate_batch:cancel()end
+    self._left=false
+    self._query_generation=(self._query_generation or 0)+1
+    local generation=self._query_generation
+    local function current()return not self._left and self._query_generation==generation and Registry:getCurrent()==source end
+    local sources=previous and previous.sources or Service.sources(Registry,source)
+    local batch=Service.new(sources,self.current_keyword,previous)
+    self.aggregate_batch=batch;self.aggregate_source=source
+    local loading=require("ui.common.loading_progress"):new{
+        title="搜索："..self.current_keyword,covers_fullscreen=not self.result_menu,progress={message="正在搜索",completed=0,total=#sources},
+    }
+    UIManager:show(loading,"ui");UIManager:forceRePaint()
+    self.search_task=LoadingTask.background(loading,function()
+        if not current()then LoadingTask.close(loading);return end
+        batch:start{on_progress=function(p)
+            if current()and not loading.closed then
+                loading:update{message="正在搜索",completed=p.finished,total=p.total}
+            end
+        end,admit=function()
+            local snapshot=require("util.memory_guard").instance():snapshot()
+            return not snapshot.available or snapshot.available>snapshot.reserve
+        end}
+        batch:await()
+        if not current()then batch:cancel();LoadingTask.close(loading);return end
+        loading:update{message="正在整理结果"}
+        local items=require("util.search_rank").rank(batch.items,self.current_keyword,source and source.identifier,function()Async.wait(.001)end)
+        if not current()then return end
+        self.aggregate_results=items
+        LoadingTask.close(loading)
+        self:showAggregateResults()
+    end,{
+        delay=.01,is_cancelled=function()return not current()end,
+        on_cancel=function()
+            batch:cancel()
+            if self._query_generation==generation then
+                self._query_generation=generation+1
+                self.aggregate_batch=previous
+                if not self.result_menu then self:leave()end
+            end
+        end,
+        on_error=function(err)
+            batch:cancel()
+            if current()then UIManager:show(InfoMessage:new{text=require("ui.common.error_message").describe(err)},"ui")end
+        end,
+    })
+end
+
+function Search:showAggregateResults()
+    if self._left or not self.aggregate_batch then return end
+    local old=self.result_menu
+    local comics={}
+    for _,item in ipairs(self.aggregate_results or {})do
+        local comic=self.comic_model:processComicData(item)
+        comic.source_id=item.source_id;comic.source_text=item.source_text;comic.content_type=item.content_type
+        comics[#comics+1]=comic
+    end
+    local s=self.aggregate_batch:summary()
+    local result
+    result=require("ui.aggregate_search"):new{
+        title=string.format("全部源：%s · %d/%d 源成功",self.current_keyword,s.complete,s.total),
+        comics=comics,source=self.aggregate_source,batch=self.aggregate_batch,
+        retry_search=function()
+            if self._left or self.result_menu~=result then return end
+            self:performAggregateSearch(true)
+        end,
+        on_select=function(comic,navigation)self:showComicDetail(comic,navigation)end,
+        on_back=function()self:leave()end,
+    }
+    self.result_menu=result
+    WidgetSweep.replace_page(old,self.result_menu)
 end
 
 

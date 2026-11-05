@@ -771,7 +771,6 @@ function VisualComicList:sourceForComic(comic)
 end
 
 function VisualComicList:makeItem(comic, index)
-    local bg = (index % 2 == 0) and Blitbuffer.COLOR_GRAY_E or Blitbuffer.COLOR_WHITE
     return ComicListItem:new{
         width = self.width,
         height = self.item_h or Screen:scaleBySize(126),
@@ -784,7 +783,7 @@ function VisualComicList:makeItem(comic, index)
         on_hold = self.on_hold,
         list_ui = self,
         index = index,
-        background = bg,
+        background = Blitbuffer.COLOR_WHITE,
     }
 end
 
@@ -829,8 +828,10 @@ function VisualComicList:buildWindow()
     local start_idx = (self.screen_index - 1) * per + 1
     self.items = {}
     for i = start_idx, math.min(start_idx + per - 1, #self.buffer) do
-        table.insert(self.items, self:makeItem(self.buffer[i], i))
+        local item=self:makeItem(self.buffer[i],i)
+        table.insert(self.items,item)
     end
+    require("ui.common.action_style").separateRows(self.items)
     return self.items
 end
 

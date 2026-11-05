@@ -38,7 +38,7 @@ Sources are managed under 设置 → 源管理 (Settings → Source management).
 
 Check for plugin updates beside the version number in Settings → About. After confirming the download, restart KOReader normally to activate it. Enable automatic plugin update checks below the version row on the same page; they are off by default, and downloads still require confirmation. Failed or cancelled downloads leave the running version intact. An incomplete first startup triggers recovery, and About offers a previous-version recovery option when available. Manual installation remains available if your KOReader version does not support online installation.
 
-Search, History, and Cancel close the search input. Returning from search history or results goes back to the calling page. Every nonempty submitted keyword is saved to search history, including failed requests, timeouts, and searches with no results.
+Choose the current source or all sources of the current manga or novel type. Results appear together, ranked by relevance, after the search finishes. Timeouts preserve collected results; unfinished sources can be retried. Each result shows its source, and reading from another source keeps your home source and search return path. Search, History, and Cancel close the search input. Returning from search history or results goes back to the calling page. Every nonempty submitted keyword is saved to search history, including failed requests, timeouts, and searches with no results.
 
 Long-press an illustration, tap **保存插图 (Save illustration)** in the image viewer, and choose a folder to save it.
 

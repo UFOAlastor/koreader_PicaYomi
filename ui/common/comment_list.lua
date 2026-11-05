@@ -98,6 +98,7 @@ function CommentRow:init()
     self.width = self.width or Screen:getWidth()
     local comment = self.comment or {}
     local text_w = self.width - ROW_PADDING * 2
+    local background = self.background or Blitbuffer.COLOR_WHITE
 
     -- 占位行 (加载中/暂无评论/加载失败): 只有一句说明, 不显示元信息。
     -- 它必须与真实评论行**等高** —— ListView 要求所有行等高。
@@ -109,6 +110,7 @@ function CommentRow:init()
     if meta_text ~= "" then
         table.insert(group, TextBoxWidget:new{
             text = meta_text,
+            bgcolor = background,
             face = Theme.face("info"),
             width = text_w,
             height = META_H,
@@ -117,6 +119,7 @@ function CommentRow:init()
     end
     local body=TextBoxWidget:new{
         text = body_text,
+        bgcolor = background,
         face = Theme.face("row"),
         width = text_w,
         height = CONTENT_H,
@@ -133,7 +136,7 @@ function CommentRow:init()
         padding = ROW_PADDING,
         margin = 0,
         bordersize = 0,
-        background = self.background or Blitbuffer.COLOR_WHITE,
+        background = background,
         width = self.width,
         height = self.height,
         FixedBox:new{

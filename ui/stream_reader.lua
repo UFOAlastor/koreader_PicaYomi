@@ -1146,7 +1146,12 @@ function MultiImageDoc.new(session)
 end
 
 function MultiImageDoc:getPages() return self.session.total end
-function MultiImageDoc:getToc() return {} end
+function MultiImageDoc:getToc()
+    local episode = self.session.context and self.session.context.episode
+    local title = episode and episode.title
+    if type(title) ~= "string" or not title:find("%S") then return {} end
+    return {{page=1, depth=1, title=title}}
+end
 function MultiImageDoc:getCacheSize() return 0 end
 function MultiImageDoc:cleanCache() end
 

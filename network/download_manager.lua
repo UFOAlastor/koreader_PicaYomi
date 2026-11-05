@@ -353,6 +353,13 @@ end
 function DownloadManager:cleanCache(max_size_mb, protect_seconds)
     max_size_mb = max_size_mb or require("util.config"):get("max_cache_size") or 500
     local max_bytes = max_size_mb * 1024 * 1024
+    -- A cached chapter can be old even while it is being read. Inspect only
+    -- the already-loaded reader; do not load UI modules or retain sessions.
+    local Reader = package.loaded["apps/reader/readerui"]
+    local document = Reader and Reader.instance and Reader.instance.document
+    local session = document and document.session
+    local active_prefix = session and not session.cancelled and type(session.cache_dir)=="string"
+        and (to_abs(session.cache_dir):gsub("/+$", "") .. "/")
     local cutoff = (protect_seconds and protect_seconds > 0)
         and (os.time() - protect_seconds) or nil
 
@@ -410,13 +417,15 @@ function DownloadManager:cleanCache(max_size_mb, protect_seconds)
     for _, file in ipairs(files) do
         if total_size <= max_bytes * 0.8 then break end
         -- 刚写进去的 (用户正在读的那一页/那一话) 不删
-        if cutoff and file.mtime and file.mtime > cutoff then
+        if active_prefix and file.path:sub(1,#active_prefix)==active_prefix
+            or cutoff and file.mtime and file.mtime > cutoff then
             -- 跳过, 继续看下一个 (旧的在后面对不上就继续往后找)
         else
-            os.remove(file.path)
-            total_size = total_size - file.size
-            removed = removed + file.size
-            if logger.enabled then logger.dbg("Picayomi DownloadManager: 清理缓存: " .. file.path) end
+            if os.remove(file.path) then
+                total_size = total_size - file.size
+                removed = removed + file.size
+                if logger.enabled then logger.dbg("Picayomi DownloadManager: 清理缓存: " .. file.path) end
+            end
         end
     end
     return removed
@@ -470,6 +479,13 @@ function DownloadManager:maybeCleanCache()
     local max_mb = require("util.config"):get("max_cache_size") or 500
     local max_bytes = max_mb * 1024 * 1024
 
+    if self.clean_limit_bytes ~= max_bytes then
+        self.clean_limit_bytes = max_bytes
+        self.clean_recheck_at = 0
+        self.cache_scan_retry_at = nil
+    end
+    if self.cache_scan_retry_at and os.time() < self.cache_scan_retry_at then return false end
+
     -- 首次调用才量一次基线 (一次遍历); 之后靠增量维护
     local known = self.known_cache_bytes
     if known == nil then
@@ -479,20 +495,25 @@ function DownloadManager:maybeCleanCache()
         -- 反复清空, 而下载内容一个字节都动不了。
         local ok_dl, dl_size = pcall(Cache.getDirSize, Cache, Cache.DOWNLOAD_CACHE_DIR)
         if ok and size and ok_dl and dl_size then size = size - dl_size end
-        if not ok or not size then
+        if not ok or not size or not ok_dl or not dl_size then
             logger.warn("Picayomi DownloadManager: 量不出缓存总量, 本次跳过: "
                 .. tostring(size))
+            self.cache_scan_retry_at = os.time() + 60
             return false
         end
-        known = size
+        self.cache_scan_retry_at = nil
+        known = math.max(0, size) -- The scan already includes the completed write.
+    else
+        known = known + pending
     end
-    known = known + pending
     self.known_cache_bytes = known
 
     if known <= max_bytes or known < self.clean_recheck_at then
         return false
     end
 
+    -- Failures must receive the same growth backoff as a protected full cache.
+    self.clean_recheck_at = known + math.max(max_bytes * 0.1, self.CACHE_RECHECK_BYTES)
     local ok, removed = pcall(self.cleanCache, self, max_mb, self.CLEAN_PROTECT_SECONDS)
     if not ok then
         logger.warn("Picayomi DownloadManager: 缓存清理失败: " .. tostring(removed))

@@ -12,6 +12,20 @@ function M.open(prepared,options)
     local function ready(ui)
         assert(ui.rolling and ui.document,"HTML did not open in text reader")
         ui._picayomi_content_type="novel"
+        -- The host resets document.getToc when typography or handmade TOCs
+        -- change. Add the fallback at the session's ReaderToc layer instead.
+        local title=options.chapter_title
+        if type(title)=="string" and title:find("%S") then
+            local fillToc=ui.toc.fillToc
+            ui.toc.fillToc=function(toc)
+                fillToc(toc)
+                if #toc.toc==0 then
+                    toc.toc={{page=1,depth=1,title=title,xpointer=ui.document:getPageXPointer(1)}}
+                    toc:validateAndFixToc()
+                end
+            end
+            ui.toc:resetToc()
+        end
         require('network.kosync_async').install(ui)
         local Diag=require("util.diag")
         if Diag.enabled then

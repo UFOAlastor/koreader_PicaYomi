@@ -76,7 +76,13 @@ function CacheSettings:show()
     page.close_callback=function()self:goBack()end
     page.onClose=page.close_callback
     page.key_events={Close={{"Back"}}}
-    page.updateItems=function()self:refresh()end
+    -- Numeric settings only change this label; retain the current scan and usage summary.
+    page.updateItems=function()
+        if page._closed then return end
+        local button=page.action_rows[1][1]
+        button:setText(T(_("缓存上限：%1 MB（不含下载）"),self:safeConfigGet("max_cache_size",500)),button.width)
+        UIManager:setDirty(page,"ui",button.dimen)
+    end
     require("ui.common.tap_guard").install(page,page.dimen)
     require("ui.common.menu_swipe").attach(page,function()self:goBack()end)
     local owner=self

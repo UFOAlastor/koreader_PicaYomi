@@ -51,14 +51,13 @@ package.path = BasePath:getBasePath() .. "?.lua;" .. package.path
 
 logger.notice("Picayomi: loading plugin...")
 
--- 打印构建标记: 真机上确认"当前跑的是哪次构建"的唯一可靠手段
--- (改完代码部署了但 KOReader 没重启时, 界面上看不出区别, 只能看这行日志)
+-- Always identify the selected runtime; reproducible release exports omit build_info.
 do
+    local boot=assert(package.loaded["picayomi.boot.context"])
+    logger.notice("Picayomi: version",boot.boot.version(boot.runtime),"debug",logger.enabled)
     local ok, info = pcall(dofile, BasePath:getBasePath() .. "build_info.lua")
     if ok and type(info) == "table" then
         logger.notice("Picayomi: build", info.version, info.built_at, "debug", logger.enabled)
-    else
-        logger.notice("Picayomi: development build", "debug", logger.enabled)
     end
 end
 

@@ -1,5 +1,12 @@
 # 更新记录
 
+## 1.5.1 — 2026-11-05
+
+- 列表分隔线适当加深，仅用于内容列表；设置、菜单与按钮恢复原有样式。
+- 修正启动日志中的版本标识，便于确认更新是否启用。
+- Log the active plugin version at startup for update verification.
+- Darken content-list separators and restore the original styling of settings, menus and buttons.
+
 ## 1.5.0 — 2026-11-05
 
 - 支持同类全部源搜索，进度条等待结束后按相关性统一展示，超时保留已有结果并可重试未完成来源。

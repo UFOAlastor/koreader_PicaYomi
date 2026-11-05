@@ -156,7 +156,7 @@ function Style.navigationFooter(width,opts)
     return footer,buttons,{prev=buttons[indices.prev],next=buttons[indices.next],jump=buttons[indices.jump]}
 end
 
--- Shared by every plugin list; paint within existing padding without resizing rows.
+-- Content lists opt in explicitly; action menus and buttons keep their outlines.
 function Style.separateRows(rows)
     for index,row in ipairs(rows or {})do
         row._picayomi_separator_before=index>1
@@ -169,7 +169,7 @@ function Style.separateRows(rows)
                 if self._picayomi_separator_before then
                     local inset=Screen:scaleBySize(8)
                     bb:paintRect(x+inset,y,self:getSize().w-inset*2,
-                        math.max(1,Screen:scaleBySize(1)),BB.COLOR_GRAY_D)
+                        math.max(1,Screen:scaleBySize(1)),BB.COLOR_GRAY_B)
                 end
             end
         end
@@ -232,11 +232,10 @@ local function decorate_menu(menu)
             row._picayomi_underlined_row=true
         elseif entry and (entry.callback or entry.sub_item_table or entry.tap_input)
             and not entry.picayomi_list_item then
-            if entry.picayomi_primary then outline(row[1],function() return entry.enabled~=false end,true)end
+            outline(row[1],function() return entry.enabled~=false end,entry.picayomi_primary)
             row._picayomi_action_row=true
         end
     end
-    Style.separateRows(menu.item_group)
 end
 Style.Menu=NativeMenu:extend{linesize=0,
     is_enable_shortcut=NativeMenu.is_enable_shortcut and not require("device"):isTouchDevice()}

@@ -3,7 +3,7 @@ function Loader.open(pkg, digest, settings, trusted_legacy)
     local m = pkg.manifest
     local prefix = "picayomi_ext."..m.id.."."..digest.."."
     local cache, loading = {}, {}
-    local ctx,processors = require("source.extensions.sdk").create(m.id, settings, trusted_legacy, m.cache_schema_version,m.api_version)
+    local ctx,processors = require("source.extensions.sdk").create(m.id, settings, trusted_legacy, m.cache_schema_version,m.api_version,m)
     local function ext_require(name)
         assert(type(name)=="string" and name:match("^[%w_%-%.]+$"), "模块名无效")
         if cache[name]~=nil then return cache[name] end

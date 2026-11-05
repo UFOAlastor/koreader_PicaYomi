@@ -360,6 +360,10 @@ function DownloadManager:cleanCache(max_size_mb, protect_seconds)
     local session = document and document.session
     local active_prefix = session and not session.cancelled and type(session.cache_dir)=="string"
         and (to_abs(session.cache_dir):gsub("/+$", "") .. "/")
+    local novel_root=to_abs(Cache.BASE_DIR.."/novels/reading")
+    local document_path=document and document.file
+    local active_novel=type(document_path)=="string" and to_abs(document_path):match("^(.*)/[^/]+$")
+    active_novel=active_novel and active_novel:sub(1,#novel_root+1)==novel_root.."/" and active_novel.."/"
     local cutoff = (protect_seconds and protect_seconds > 0)
         and (os.time() - protect_seconds) or nil
 
@@ -386,7 +390,7 @@ function DownloadManager:cleanCache(max_size_mb, protect_seconds)
                     end
                 elseif attr and attr.mode == "directory" then
                     -- .sdr = 文档设置 (阅读进度/缩放/旋转), 属于第 0 层, 不进淘汰列表
-                    if not name:find("%.sdr$") and fpath ~= cover_dir then
+                    if not name:find("%.sdr$") and name~="progress" and fpath ~= cover_dir then
                         scanDir(fpath, tier)
                     end
                 end
@@ -400,6 +404,7 @@ function DownloadManager:cleanCache(max_size_mb, protect_seconds)
     -- 第 2 层: 阅读页 (再下回来要一次网络请求, 但内容可再生)
     scanDir(to_abs(Cache.IMAGE_CACHE_DIR), 2)
     scanDir(to_abs(Cache.READING_CACHE_DIR), 2)
+    scanDir(novel_root, 2)
     -- 第 3 层: 数据缓存 (源站响应/列表, 删了只是下次慢一点)
     scanDir(to_abs(Cache.DATA_CACHE_DIR), 3)
     -- **不扫 downloads**: 那是用户主动下载的离线内容, 不是可再生的缓存。
@@ -418,6 +423,7 @@ function DownloadManager:cleanCache(max_size_mb, protect_seconds)
         if total_size <= max_bytes * 0.8 then break end
         -- 刚写进去的 (用户正在读的那一页/那一话) 不删
         if active_prefix and file.path:sub(1,#active_prefix)==active_prefix
+            or active_novel and file.path:sub(1,#active_novel)==active_novel
             or cutoff and file.mtime and file.mtime > cutoff then
             -- 跳过, 继续看下一个 (旧的在后面对不上就继续往后找)
         else
@@ -494,8 +500,9 @@ function DownloadManager:maybeCleanCache()
         -- 否则用户下载了几百 MB 漫画后, 每次记账都会"超限", 把封面/阅读页
         -- 反复清空, 而下载内容一个字节都动不了。
         local ok_dl, dl_size = pcall(Cache.getDirSize, Cache, Cache.DOWNLOAD_CACHE_DIR)
-        if ok and size and ok_dl and dl_size then size = size - dl_size end
-        if not ok or not size or not ok_dl or not dl_size then
+        local ok_novel,novel_size=pcall(Cache.getDirSize,Cache,Cache.BASE_DIR.."/novels/reading")
+        if ok and size and ok_dl and dl_size and ok_novel and novel_size then size = size - dl_size + novel_size end
+        if not ok or not size or not ok_dl or not dl_size or not ok_novel or not novel_size then
             logger.warn("Picayomi DownloadManager: 量不出缓存总量, 本次跳过: "
                 .. tostring(size))
             self.cache_scan_retry_at = os.time() + 60

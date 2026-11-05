@@ -600,6 +600,10 @@ function StreamSession:prefetch_count()
         if s.available and MemoryGuard.instance():decode_budget(math.max(s.worker,self.memory_worker_cost or 0),s)<self.memory_required then return 0 end
     end
     if MemoryGuard.instance():under_pressure() then return 0 end
+    return self:configured_prefetch_count()
+end
+
+function StreamSession:configured_prefetch_count()
     local n = tonumber(Config:get("prefetch_pages"))
     if not n then n = PREFETCH_DEFAULT end
     n = math.floor(n)
@@ -998,6 +1002,8 @@ function StreamSession:on_page_turn(page, dir)
     if self.cancelled then return end
     page = tonumber(page)
     if not page then return end
+    local stats=self._prefetch_stats or {hits=0,misses=0};self._prefetch_stats=stats
+    local kind=self.store:has_local(page) and 'hits' or 'misses';stats[kind]=stats[kind]+1
     if self.memory_wait and self.memory_wait.page~=page then
         self:cancel_memory_wait()
     end
@@ -1099,7 +1105,16 @@ function StreamSession:progress()
     return self.store:progress()
 end
 
+function StreamSession:report_prefetch()
+    local stats=self._prefetch_stats
+    if stats then
+        logger.notice("Picayomi: reading cache summary","local_turns",stats.hits,"waiting_turns",stats.misses)
+        self._prefetch_stats=nil
+    end
+end
+
 function StreamSession:cancel()
+    self:report_prefetch()
     if self._prediction_doc then require("ui.enhancement_prefetch").cancel(self._prediction_doc);self._prediction_doc=nil end
     self.cancelled = true
     self:_cancel_prefetch_timer()
@@ -1121,6 +1136,7 @@ end
 -- DNS 解析里 —— 阻塞等它就是把"退出卡顿"原样留着。队列/在途/"已排队"标记照样
 -- 清干净, 只是不做阻塞回收 (孤儿进程由 init 收养, 无害)。
 function StreamSession:shutdown()
+    self:report_prefetch()
     if self._prediction_doc then require("ui.enhancement_prefetch").cancel(self._prediction_doc);self._prediction_doc=nil end
     self.cancelled = true
     self:_cancel_prefetch_timer()
@@ -1580,7 +1596,9 @@ function MultiImageDoc:openPage(n)
                     logger.warn("Picayomi: slow page render", "page", n, "format", format,
                         "width", sz.w, "height", sz.h, "ms", math.floor(elapsed), "result", reason, "filter_space", display_filter and "display" or "source",
                         "decode_ms",math.floor(timings.decode or 0),"filter_ms",math.floor(timings.filter or 0),"resize_ms",math.floor(timings.resize or 0),
-                        "prediction",prediction,"prediction_ms",prediction_ms,"grant_kib",grant)
+                        "prediction",prediction,"prediction_ms",prediction_ms,"grant_kib",grant,
+                        "prefetch",self.session:prefetch_count(),"cancelled",self.session.cancelled==true,
+                        "suspended",self.session.suspended==true,"memory_wait",self.session.memory_wait~=nil)
                 elseif Diag.enabled then
                     Diag.mark(string.format("draw p%d %dms (%s)",n,math.floor(elapsed),format))
                 end
@@ -2047,7 +2065,7 @@ function StreamDocument:prefetch_spec(n,zoom,rotation,gamma,saturation)
     local s=self.session
     if not s or s.cancelled then return nil,"closed" end
     -- A network circuit breaker stops downloads, not work on local files.
-    if s.suspended or not s:prefetch_on() then return nil,"prefetch_paused" end
+    if s.suspended or s:configured_prefetch_count()==0 then return nil,"prefetch_paused" end
     if not self._last_render_page or s:page_state(self._last_render_page)~="ready" then return nil,"current_loading" end
     if (s.scheduler.direction or 1)<0 or n~=(self._last_render_page or 0)+1 then return nil,"direction" end
     if not ImageEnhance.spatial(s.display_enhancement) or rotation~=0

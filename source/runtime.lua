@@ -43,6 +43,7 @@ function Runtime.new(source,manifest,digest,extension_context)
         text_filters=Contract.copy(manifest.text_filters or {},true),
         _extension_digest=digest,_api_version=manifest.api_version,_source_runtime=true,
         capabilities=Contract.copy(caps),access=Contract.copy(access)}
+    function handle:canRecoverSession()return source.canRecoverSession and source:canRecoverSession()==true or false end
     function handle:init() return true end -- already initialized by the loader
     local orders,legacy_orders,order_keys={},{},{}
     local generation,listeners=0,{}
@@ -87,7 +88,7 @@ function Runtime.new(source,manifest,digest,extension_context)
             return false,nil,Contract.error("unsupported","当前源不支持分页回复",method)
         end
         if (caps.requires_login and method~="login" and method~="logout" and method~="getUserProfile" and method~="getSession" and method~="setCredential"
-            or access[cap]=="login") and not logged() then
+            or access[cap]=="login") and not logged() and not (source.canRecoverSession and source:canRecoverSession()) then
             return false,nil,Contract.error("auth_required","请先登录",method)
         end
         local fn=source[method]
@@ -404,6 +405,7 @@ function Runtime.new(source,manifest,digest,extension_context)
             context=args[3];args[3]=nil
         end
         if method=="getComicDetail" then context=type(args[2])=="table" and args[2] or nil;args[2]=nil end
+        if method=="getCategories" then context=type(args[1])=="table" and args[1] or nil;args[1]=nil end
         local canonical=method
         if not legacy then canonical=({getComicDetail="getManga",getAllChapterImages="getPages",getChapterImages="getPages",getComics="getLatest"})[method] or method end
         local page_number=1

@@ -86,10 +86,11 @@ end
 
 -- Only idle workers are reclaimed. Pending jobs and completed replies remain
 -- owned by the transport and are delivered normally on the next poll.
-function Transport.reclaim_idle(tag)
+function Transport.reclaim_idle(tag,only_empty)
     local count = 0
     for transport in pairs(instances) do
-        if (not tag or transport.tag==tag) and transport.session and next(transport.inflight) == nil then
+        if (not tag or transport.tag==tag) and transport.session and next(transport.inflight) == nil
+            and (not only_empty or next(transport.pending)==nil) then
             transport:_drop_session()
             count = count + 1
         end

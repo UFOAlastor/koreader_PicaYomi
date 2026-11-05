@@ -1,5 +1,6 @@
 -- Explicit, versioned host services. This is dependency isolation, not a sandbox.
 local SDK = {}
+local function pack(...)return {n=select("#",...),...}end
 local calls=setmetatable({},{__mode="k"})
 local sealed=setmetatable({},{__mode="k"})
 local processing=setmetatable({},{__mode="k"})
@@ -22,7 +23,7 @@ local legacy = {
         jm_img_host=true,jm_categories_cache=true,jm_scramble_cache_v=true},
     htcomic={ ["source.htcomic.cookies"]=true,["source.htcomic.account"]=true },
 }
-function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
+function SDK.create(id, settings, trusted_legacy, cache_version, api_version, manifest)
     local config = require("util.config")
     local function key(k)
         assert(type(k)=="string" and #k<=160 and k:match("^[%w_%.%-]+$"), "源存储键无效")
@@ -53,6 +54,18 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
         if call and call.force_refresh then return nil end
         return cache:getData(cache_prefix..k,...)
     end
+    function ctx.isForceRefresh()
+        local call=calls[ctx] and calls[ctx][thread()]
+        return call and call.force_refresh==true or false
+    end
+    local function check_call(call)
+        if call and (call.cancelled or call.isCancelled and call.isCancelled())then
+            error(require("source.contract").error("cancelled","操作已取消"),0)
+        end
+        if call and call.deadline and require("socket").gettime()>=call.deadline then
+            error(require("source.contract").error("timeout","操作超时",nil,nil,true),0)
+        end
+    end
     local http=ctx.http
     ctx.http=setmetatable({}, {__index=function(_,name)
         if api_version==3 and not ({get=true,post=true,request=true,requestWithRetry=true,requestOnce=true,
@@ -63,8 +76,7 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
             assert(not ctx.initializing, "源初始化禁止联网")
             assert(not processing[ctx],"图片处理器禁止联网")
             local call=calls[ctx] and calls[ctx][thread()]
-            assert(not call or not (call.cancelled or call.isCancelled and call.isCancelled()),"操作已取消")
-            assert(not call or not call.deadline or require("socket").gettime()<call.deadline,"操作超时")
+            check_call(call)
             if api_version==3 then
                 local args={...}
                 local at=({get=3,post=4,request=5,requestWithRetry=5,requestOnce=5,httpsRequest=5,download=4})[name]
@@ -75,12 +87,61 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version)
                     local requested=args[at] or 20
                     assert(type(requested)=="number" and requested==requested and requested>0,"HTTP 超时无效")
                     args[at]=math.min(requested,60,limit)
-                    return value(http,unpack(args,1,math.max(select("#",...),at)))
+                    local results
+                    if call and call.account_recovery and (name=="get" or name=="post") then
+                        results=pack(http:requestOnce(name=="get" and "GET" or "POST",args[1],args[2],name=="post" and args[3] or nil,args[at]))
+                    elseif call and call.account_recovery and name=="requestWithRetry" then
+                        results=pack(http:requestOnce(unpack(args,1,math.max(select("#",...),at))))
+                    else
+                        results=pack(value(http,unpack(args,1,math.max(select("#",...),at))))
+                    end
+                    check_call(call)
+                    return unpack(results,1,results.n)
                 end
             end
-            return value(http,...)
+            local results=pack(value(http,...))
+            check_call(call)
+            return unpack(results,1,results.n)
         end
     end})
+    for _,name in ipairs({'set','clear','set_json'})do
+        local original=secrets[name]
+        secrets[name]=function(...)
+            local call=calls[ctx] and calls[ctx][thread()]
+            check_call(call)
+            return original(...)
+        end
+    end
+    ctx.accounts={wrap=function(source)
+        ctx.accountRecoveryManaged=true
+        return require('source.session_recovery').wrap(source,ctx,{
+            scope=function()
+                local values={}
+                for _,setting in ipairs(manifest and manifest.settings or {})do
+                    local value=setting.default
+                    if settings then value=settings(setting.key,setting.default)end
+                    values[setting.key]=value
+                end
+                return require('ffi/sha2').sha256(require('source.contract').serialize{
+                    id=id,publisher=manifest and manifest.publisher_id,settings=values})
+            end,
+            run=function(fn,valid,timeout)
+                local previous=calls[ctx] and calls[ctx][thread()]
+                local call={};for k,v in pairs(previous or {})do call[k]=v end
+                if timeout then
+                    call.deadline=math.min(call.deadline or math.huge,require("socket").gettime()+timeout)
+                    call.account_recovery=true
+                end
+                local cancelled=call.isCancelled
+                call.isCancelled=function()return not valid() or cancelled and cancelled()end
+                SDK.enter(ctx,call)
+                local result=pack(pcall(fn))
+                SDK.enter(ctx,previous)
+                if not result[1]then error(result[2],0)end
+                return unpack(result,2,result.n)
+            end,
+        })
+    end}
     function ctx.host(name)
         if name=="logger" then return require("util.logger") end
         if name=="network.http_client" then return ctx.http end

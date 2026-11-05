@@ -1,5 +1,20 @@
 # 更新记录
 
+## 1.5.3 — 2026-11-06
+
+- 七个源统一支持保存登录凭据和会话过期恢复，退出账号时清除；更新源后重新登录一次启用。
+- 修复聚合搜索中不同来源的封面互相取消下载。
+- 分类标签优先显示缓存，提供手动刷新，失败时保留已有内容。
+- 小说阅读缓存纳入缓存限额，已下载小说和漫画仍独立保存，不受缓存限额影响。
+- 新版成功启动后清理过期更新包，取消待更新版本也会清理对应文件。
+- 改善低内存下的下一页图像预处理，增加翻页缓存诊断。
+- Unify expired-session recovery across all seven sources; sign in once after updating sources to enable it. Signing out removes saved credentials.
+- Keep mixed-source cover downloads from cancelling each other.
+- Cache category labels with manual refresh and retain existing labels on failure.
+- Include novel reading caches in the cache quota while keeping downloaded books separate.
+- Clean obsolete update payloads after a successful startup and remove cancelled updates.
+- Reclaim idle reading workers before bounded next-page preprocessing and improve cache diagnostics.
+
 ## 1.5.2 — 2026-11-06
 
 - 作品详情加入缓存，返回阅读页面时优先显示已有信息，后台按需更新。

@@ -216,7 +216,7 @@ function Picayomi:init()
     else
         local boot=package.loaded["picayomi.boot.context"]
         if boot then
-            local healthy,err=pcall(boot.boot.healthy)
+            local healthy,err=pcall(require("util.plugin_update").markHealthy)
             if not healthy then logger.err("Picayomi update health marker: "..tostring(err))end
         end
     end

@@ -98,6 +98,14 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation,ready_event)
             Async.wait(.12)
             if not valid()then clean();return end
             spec.budget=guard:prediction_budget(bytes)
+            if spec.budget<(retry_minimum or MIN_BUDGET) then
+                local released=require('network.transport_worker').reclaim_idle('read',true)
+                if released>0 then
+                    Async.wait(.08)
+                    if not valid()then clean();return end
+                    spec.budget=guard:prediction_budget(bytes)
+                end
+            end
             if spec.budget<(retry_minimum or MIN_BUDGET) or not room(doc,bytes)then observe(doc,n,'memory',job);clean();return end
             if spec.format=='webp' then
                 spec.minimum_budget=require('util.scaled_decode').webp_minimum(spec.input,spec.size,spec.color,spec.zoom)

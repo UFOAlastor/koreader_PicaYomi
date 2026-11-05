@@ -16,6 +16,14 @@ local function isNovel()
     return source and source.content_type=="novel"
 end
 
+local function visibleCategories(categories)
+    local visible={}
+    for _,category in ipairs(categories or {})do
+        if not category.isWeb or category._id then visible[#visible+1]=category end
+    end
+    return visible
+end
+
 local Categories = WidgetContainer:extend{
     name = "picayomi_categories",
     title = _("分类"),
@@ -53,35 +61,47 @@ function Categories:show(return_callback)
     self:loadCategories()
 end
 
-function Categories:loadCategories()
-    if not require("ui.common.source_access").check(require("source.registry"):getCurrent(),"categories") then return end
-    -- 显示加载消息
-    local loading = InfoMessage:new{
-        text = _("加载分类列表..."),
-    }
-    UIManager:show(loading, "ui")
-    -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
-    -- 不等这一下的话事件循环没机会重绘, 提示等于没显示
-    UIManager:forceRePaint()
-
-    -- 获取分类列表
-    -- 抛异常时也关掉提示, 否则"加载分类列表..."永久盖屏 (见 loading_task 注释)
-    local success, categories, error_msg = LoadingTask.call(loading, function()
-        return self.comic_api:getCategories()
-    end)
-
-    if success and categories then
-        -- 保存分类数据
-        self.categories = categories
-
-        -- 显示分类列表
-        self:showCategoryList()
-    else
-        -- 显示错误消息
-        UIManager:show(InfoMessage:new{
-            text = T(_("获取分类失败: %1"), require("ui.common.error_message").describe(error_msg)),
-        }, "ui")
+function Categories:loadCategories(force)
+    local source=require("source.registry"):getCurrent()
+    if not require("ui.common.source_access").check(source,"categories") then return end
+    if self._category_task then return end
+    local Cache=require("util.category_cache")
+    local key=source and source.detailCacheScope and source:detailCacheScope("category-labels")
+    if self._category_scope~=key then self.categories=nil;self._category_scope=key end
+    local cached=not force and Cache.read(key)
+    if cached then self.categories=cached.data;self:showCategoryList()end
+    if not Cache.admit(key,force)then return end
+    local page=self.category_menu
+    local function valid()
+        return require("source.registry"):getCurrent()==source
+            and (not page or self.category_menu==page and not page._closed)
+            and (not key or source:detailCacheScope("category-labels")==key)
     end
+    local loading
+    if not self.categories then
+        loading=InfoMessage:new{text=_("加载分类列表...")}
+        UIManager:show(loading,"ui")
+    end
+    local function failure(err)
+        self._category_task=nil;Cache.failure(key)
+        if valid() and (force or not self.categories)then
+            UIManager:show(InfoMessage:new{text=T(_("获取分类失败: %1"),require("ui.common.error_message").describe(err))},"ui")
+        end
+    end
+    self._category_task=LoadingTask.background(loading,function()
+        local ok,data,err=self.comic_api:getCategories({force_refresh=true,isCancelled=function()return not valid()end})
+        if loading then LoadingTask.close(loading)end
+        self._category_task=nil
+        if not valid()then Cache.failure(key);return end
+        if not ok or type(data)~="table" or #data==0 then failure(err or _("没有可用的分类"));return end
+        Cache.write(key,data)
+        local Contract=require("source.contract")
+        if self.categories and Contract.serialize(self.categories)==Contract.serialize(data)then return end
+        self.categories=data
+        if self.category_menu then self.category_menu:updateCategories(visibleCategories(data))
+        else self:showCategoryList()end
+    end,{timeout=45,delay=.01,is_cancelled=function()return not valid()end,
+        on_error=failure,on_cancel=function()self._category_task=nil;Cache.failure(key)end})
 end
 
 --- 控件当前是否还在窗口栈里
@@ -112,17 +132,7 @@ function Categories:showCategoryList()
 
     if logger.enabled then logger.info("ComicAPI", "创建分类界面，分类数量: " .. #self.categories) end
 
-    -- 筛选漫画分类（过滤掉网页分类）
-    local comic_categories = {}
-    for _idx, category in ipairs(self.categories) do
-        -- 只保留漫画分类，过滤掉网页分类
-        if not category.isWeb then
-            table.insert(comic_categories, category)
-        elseif category._id then
-            -- 有_id的都是传统漫画分类，也要包含
-            table.insert(comic_categories, category)
-        end
-    end
+    local comic_categories = visibleCategories(self.categories)
 
     if logger.enabled then logger.info("ComicAPI", "筛选后的漫画分类数量: " .. #comic_categories) end
 
@@ -134,11 +144,15 @@ function Categories:showCategoryList()
     page = CategoryCloud:new{
         title = isNovel() and _("小说分类") or _("漫画分类"),
         categories = comic_categories,
+        extra_buttons={{text=_("刷新"),callback=function()self:loadCategories(true)end}},
         on_select = function(category) self:onCategorySelected(category) end,
         on_hold = function(category) self:onCategoryHold(category) end,
         on_back = function() if self.return_callback then self.return_callback() end end,
         close_callback = function()
-            if self.category_menu == page then self.category_menu = nil end
+            if self.category_menu == page then
+                self.category_menu = nil
+                if self._category_task then self._category_task:cancel();self._category_task=nil end
+            end
         end,
     }
     self.category_menu = page

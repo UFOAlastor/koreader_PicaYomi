@@ -269,6 +269,13 @@ function M.prepare(session,options)
         return false,nil,{code="chapter_unavailable",message=message}
     end
     if diag.enabled then diag.mark(string.format("novel prepare %.3fs images=%d",clock()-began,image_count))end
+    local cache=require("util.cache")
+    if root==cache.BASE_DIR.."/novels/reading" then
+        local bytes=0
+        for _,file in ipairs(result.manifest.files or {})do bytes=bytes+(file.bytes or 0)end
+        local manager=require("network.download_manager")
+        manager:noteCacheBytes(bytes);manager:maybeCleanCache()
+    end
     return true,result,nil
 end
 function M.savePosition(document,xpointer)

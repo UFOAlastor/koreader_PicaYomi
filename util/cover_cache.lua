@@ -47,6 +47,8 @@ local inflight = {}
 
 -- 共享下载通道: { source =, transport =, jobs = { id -> { dest, finish } }, next_id =, driving = }
 local channel = nil
+local waiting = {}
+local activate_next
 local pauses = {}
 local release_channel
 
@@ -178,22 +180,34 @@ function release_channel(ch)
     for _id, job in pairs(jobs) do
         pcall(job.finish, nil)
     end
+    if activate_next then activate_next() end
 end
 
 --- 取/建通道。**换源时重建** —— 通道里的 transport 绑定着 source
 --- (imageHeaders / imagePost 都取自它), 复用会让新源的图带着旧源的请求头。
+activate_next=function()
+    if channel or next(pauses) then return end
+    while #waiting>0 do
+        local ch=table.remove(waiting,1)
+        if next(ch.jobs)then
+            channel=ch;ch.transport=new_transport(ch.source)
+            local ids={};for id in pairs(ch.jobs)do ids[#ids+1]=id end;table.sort(ids)
+            for _,id in ipairs(ids)do ch.transport:start(ch.jobs[id].request)end
+            kick(ch);return
+        end
+    end
+end
 local function get_channel(source)
-    if channel and channel.source == source then return channel end
-    if channel then release_channel(channel) end
-
-    channel = {
-        source = source,
-        next_id = 0,
-        jobs = {},
-        driving = false,
-        transport = next(pauses)==nil and new_transport(source) or nil,
-    }
-    return channel
+    if channel and channel.source==source then return channel end
+    for _,ch in ipairs(waiting)do if ch.source==source then return ch end end
+    local ch={source=source,next_id=0,jobs={},driving=false}
+    if not channel then
+        channel=ch
+        if not next(pauses)then ch.transport=new_transport(source)end
+    else
+        waiting[#waiting+1]=ch
+    end
+    return ch
 end
 
 --- 收一步: 收割完成的任务 -> 回调; 还有活就排下一拍
@@ -234,7 +248,9 @@ function pump(ch)
     end
 
     if next(pauses) or not ch.transport then return end
-    if res.idle then
+    if res.idle and not next(ch.jobs) and #waiting>0 then
+        release_channel(ch)
+    elseif res.idle then
         -- 空闲就准备关掉通道: fork 出来的子进程不该常驻。
         -- 用户补完一屏封面后可能马上进阅读页, 那时列表页的下载子进程若还在,
         -- 就是"阅读时多一个进程抢内存" —— 真机 OOM 排查里踩过这一类。
@@ -276,7 +292,8 @@ function CoverCache.pause(nonblocking)
         if not pauses[token]then return end
         pauses[token]=nil
         local ch=channel
-        if next(pauses) or not ch then return end
+        if next(pauses) then return end
+        if not ch then activate_next();return end
         if not next(ch.jobs) then release_channel(ch);return end
         ch.transport=new_transport(ch.source)
         local ids={}
@@ -291,6 +308,8 @@ end
 function CoverCache.shutdown()
     local ch=channel
     channel=nil;inflight={};pauses={}
+    for _,pending in ipairs(waiting)do pending.jobs={}end
+    waiting={}
     if not ch then return end
     for _,key in ipairs{"pump_task","idle_task"}do
         if ch[key] then UIManager:unschedule(ch[key]);ch[key]=nil end
@@ -374,6 +393,7 @@ function CoverCache.ensure(source, source_id, comic, on_done)
     end
     if ch.transport then ch.transport:start(ch.jobs[id].request) end
     kick(ch)
+    if channel~=ch and channel and not next(channel.jobs) then release_channel(channel)end
     return unsubscribe(base,on_done,entry)
 end
 

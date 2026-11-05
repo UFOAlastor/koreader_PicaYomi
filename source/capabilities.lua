@@ -15,7 +15,9 @@ function C.needsLogin(source, name)
     local required = caps.requires_login == true or (source.access or {})[name] == "login"
     if not required then return false end
     local ok, logged = pcall(function() return source:isLoggedIn() end)
-    return not ok or logged ~= true
+    if ok and logged==true then return false end
+    local recovered,available=pcall(function()return source.canRecoverSession and source:canRecoverSession()end)
+    return not recovered or available~=true
 end
 function C.query(source, name)
     local caps = source and source.capabilities or {}
@@ -25,7 +27,7 @@ function C.query(source, name)
         or name ~= "login" and name ~= "local_favorites" and caps.requires_login == true)
     local available = supported and not source._offline
     local reason
-    if requires and (not source.isLoggedIn or not source:isLoggedIn()) then
+    if requires and C.needsLogin(source,name) then
         available, reason = false, "请先登录"
     elseif not supported then reason = "当前源不支持此功能"
     elseif source._offline then reason = "当前源仅可离线访问" end

@@ -104,6 +104,15 @@ function Cloud:buildRows()
         label_height + 2 * Screen:scaleBySize(6) + 2 * Size.border.thin)
 end
 
+function Cloud:updateCategories(categories)
+    if self._closed then return end
+    self.categories=categories
+    self:buildRows()
+    self.page_num=math.max(1,math.ceil(#self.rows/self.rows_per_page))
+    self.page=math.min(self.page,self.page_num)
+    self:renderPage();UIManager:setDirty(self,"ui")
+end
+
 function Cloud:renderPage()
     if self.body[1] then self.body[1]:free() end
     self.chips = {}

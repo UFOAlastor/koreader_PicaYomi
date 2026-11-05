@@ -103,8 +103,29 @@ function M.cleanup()
  local dir=M.stage;M.stage=nil
  if dir then pcall(require('util.plugin_update_stage').remove,dir)end
 end
+function M.collect()
+ local ctx=M.context();local state=M.state()
+ if state.trial then return end
+ local keep={base=true}
+ for _,id in ipairs{state.active,ctx.id or 'base'}do keep[id]=true end
+ for _,key in ipairs{'previous','pending'}do if state[key]then keep[state[key]]=true end end
+ local lfs=require('libs/libkoreader-lfs')
+ local parent=ctx.root..'/.updates'
+ if lfs.symlinkattributes(parent,'mode')~='directory'then return end
+ local PluginUpdateStage=require('util.plugin_update_stage')
+ for name in lfs.dir(parent)do
+  if (ctx.boot.id(name) and name~='base' and not keep[name]) or name:match('^stage%-%x+$')then
+   PluginUpdateStage.remove(parent..'/'..name)
+  end
+ end
+end
+function M.markHealthy()
+ M.context().boot.healthy()
+ M.collect()
+end
 function M.cancelPending()
  local s=M.state();s.pending=nil;s.rollback=nil;M.save(s)
+ M.collect()
 end
 function M.rollback()
  local s=M.state();assert(s.previous and not s.pending,'没有可恢复版本')

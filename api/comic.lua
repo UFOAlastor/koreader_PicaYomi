@@ -89,10 +89,10 @@ function ComicAPI:processResponse(response)
 end
 
 -- 获取分类
-function ComicAPI:getCategories()
+function ComicAPI:getCategories(context)
     local source = getSource()
     if not source then return false, nil, "源未初始化" end
-    return source:getCategories()
+    return source:getCategories(context)
 end
 
 -- 获取漫画列表

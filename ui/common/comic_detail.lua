@@ -478,7 +478,12 @@ function ComicDetail:loadDetailsAfterReading()
         if not self._chapter_error and (not self.episodes_data or self._chapters_stale) then
             self:loadChapters(1,nil,{background=true})
         end
-        self:loadDetails({background=true})
+        -- Reading longer than the disk-cache TTL must not turn this retained
+        -- page into a new entry request. Cold shortcuts and changed sessions
+        -- still hydrate; explicit refresh keeps its normal force semantics.
+        if self._detail_error or not sameDetailContext(self._detail_snapshot,detailContext(self)) then
+            self:loadDetails({background=true})
+        end
     end
     UIManager:scheduleIn(.05,self._return_detail_timer)
 end

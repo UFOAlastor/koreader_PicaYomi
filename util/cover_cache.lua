@@ -51,10 +51,11 @@ local waiting = {}
 local activate_next
 local pauses = {}
 local release_channel
+local schedule_idle_close
 
 -- Unsubscribe a page without cancelling other pages waiting for the same file.
 local function unsubscribe(base,callback,expected)
-    return function()
+    return function(keep_worker)
         local entry=inflight[base]
         if not entry or entry~=expected or not callback then return end
         for i=#entry.callbacks,1,-1 do
@@ -64,8 +65,18 @@ local function unsubscribe(base,callback,expected)
             local ch=entry.channel
             ch.jobs[entry.id]=nil
             inflight[base]=nil
-            if ch.transport then pcall(ch.transport.cancel,ch.transport,entry.id) end
-            if next(ch.jobs)==nil then release_channel(ch) end
+            local released = true
+            if ch.transport then
+                local ok, result = pcall(ch.transport.cancel,ch.transport,entry.id)
+                released = ok and result == true
+            end
+            if next(ch.jobs)==nil then
+                -- A page turn immediately submits replacement work. Keep the
+                -- existing bounded idle grace instead of killing/forking here.
+                if keep_worker and released and channel==ch and ch.transport and #waiting==0 then
+                    schedule_idle_close(ch)
+                else release_channel(ch) end
+            end
         end
     end
 end
@@ -133,7 +144,7 @@ end
 
 --- 排一次"稍后再关"。到点时若又有了活动, 就再等一轮 (不能直接放弃,
 --- 否则通道再也不会被关掉)。
-local function schedule_idle_close(ch)
+schedule_idle_close=function(ch)
     if ch.idle_task then return end
     ch.idle_task = function()
         ch.idle_task = nil

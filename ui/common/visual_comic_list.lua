@@ -56,6 +56,11 @@ local ComicStats = require("ui.common.comic_stats")
 local ComicMetadata = require("ui.common.comic_metadata")
 local ComicModel = require("model.comic")
 local logger = require("util.logger")
+local list_render_samples = 0
+local function renderClock()
+    local time = require("ui/time")
+    return time.to_s(time.monotonic())
+end
 
 local ComicListItem = InputContainer:extend{
     width = nil,
@@ -130,6 +135,14 @@ end
 function ComicListItem:coverWidget()
     local comic_id = self.comic and self.comic._id
     local path = comic_id and CoverCache.find(self:itemSourceId(), comic_id)
+    local attr = path and require("libs/libkoreader-lfs").attributes(path)
+    local stamp = attr and table.concat({path, tostring(attr.modification), tostring(attr.change),
+        tostring(attr.ino), tostring(attr.size), tostring(self.cover_w), tostring(self.cover_h)}, ":")
+    local previous = self.content and self.content[1] and self.content[1][1]
+    if stamp and stamp == self._cover_stamp and previous and previous.file == path then
+        return previous
+    end
+    self._cover_stamp = stamp
     if path then
         return ImageWidget:new{
             file = path,
@@ -359,6 +372,8 @@ function ComicListItem:buildContent()
         text_w = self.width - self.cover_w - gap - padding * 2
     end
 
+    local previous = self.content
+    local cover = self:coverWidget()
     self.content = FrameContainer:new{
         padding = padding,
         margin = 0,
@@ -367,12 +382,18 @@ function ComicListItem:buildContent()
         width = self.width,
         height = self.height,
         HorizontalGroup:new{
-            self:coverWidget(),
+            cover,
             HorizontalSpan:new{ width = gap },
             makeTextColumn(text_w),
         },
     }
     self[1] = self.content
+    if previous then
+        -- Transfer ownership of the decoded cover before freeing the old row.
+        -- The remaining text/button widgets must not accumulate on every return.
+        if previous[1][1] == cover then table.remove(previous[1], 1) end
+        previous:free()
+    end
 end
 
 function ComicListItem:select(continue_reading)
@@ -410,16 +431,21 @@ function ComicListItem:onHoldSelect()
     return true
 end
 
+-- Both a completed request and a cache hit after page construction must
+-- replace the placeholder. Keep queue completion independent of paint errors.
+function ComicListItem:applyCoverResult(path)
+    self.cover_loaded = path ~= nil
+    self.cover_error = not path and _("加载失败") or nil
+    local ok, err = pcall(function() self:buildContent(); self:refreshRow() end)
+    if not ok then logger.warn("Picayomi VisualComicList: 封面就位后重建行失败: " .. tostring(err)) end
+end
+
 --- 确保本行封面已缓存
 -- @param delay   延迟秒数 (0 表示立刻)
 -- @param on_done function(path或nil) 无论成功失败都会回调, 用于串行队列推进
 function ComicListItem:loadCover(delay, on_done)
     local comic = self.comic or {}
     local own_source = not comic.source_id or comic.source_id == self.source_id
-    if self.cover_loaded then
-        if on_done then on_done(CoverCache.find(self:itemSourceId(), comic._id)) end
-        return
-    end
     if self.cover_loading then
         -- 已在下载中: 不重复发起, 但要让队列能继续推进
         if on_done then on_done(nil) end
@@ -433,6 +459,8 @@ function ComicListItem:loadCover(delay, on_done)
     local existing = CoverCache.find(self:itemSourceId(), comic._id)
     if existing then
         self.cover_loaded = true
+        local displayed = self.content and self.content[1] and self.content[1][1]
+        if not displayed or displayed.file ~= existing then self:applyCoverResult(existing) end
         if on_done then on_done(existing) end
         return
     end
@@ -444,6 +472,7 @@ function ComicListItem:loadCover(delay, on_done)
     end
 
     self.cover_loading = true
+    local unsubscribe, timer, cancelled
     local function stale()
         if not self.list_ui then return false end
         if self.list_ui._closed then return true end
@@ -453,39 +482,35 @@ function ComicListItem:loadCover(delay, on_done)
         return true
     end
     local function start()
-        if stale() then
+        if cancelled or stale() then
             self.cover_loading = false
             if on_done then on_done(nil) end
             return
         end
-        CoverCache.ensure(self.source, self.source_id, comic, function(path)
+        unsubscribe = CoverCache.ensure(self.source, self.source_id, comic, function(path)
+            if cancelled then return end
             self.cover_loading = false
             -- 页面已关闭: 不必再重建控件 (省下这份无用功), 但 on_done 仍要回调
             if (path or self.list_ui and self.list_ui.resolve_cover)
                     and not stale() then
-                self.cover_loaded = path ~= nil
-                self.cover_error = not path and _("加载失败") or nil
-                -- 重建/刷新抛异常不能让 on_done 丢掉: on_done 是推进封面队列的唯一
-                -- 动力 (pumpCoverQueue 的 next_one 负责复位 cover_busy 并排下一拍)。
-                -- CoverCache 对回调有 pcall, 异常不会闪退, 但 on_done 没被调用的话,
-                -- 这一屏剩下的封面**永远**加载不出来, 且没有任何报错。
-                local ok_build, err_build = pcall(function()
-                    self:buildContent()
-                    self:refreshRow()
-                end)
-                if not ok_build then
-                    logger.warn("Picayomi VisualComicList: 封面就位后重建行失败: "
-                        .. tostring(err_build))
-                end
+                self:applyCoverResult(path)
             end
             if on_done then on_done(path) end
         end)
     end
 
     if delay and delay > 0 then
-        UIManager:scheduleIn(delay, start)
+        timer = start
+        UIManager:scheduleIn(delay, timer)
     else
         start()
+    end
+    return function(keep_worker)
+        if cancelled then return end
+        cancelled = true
+        self.cover_loading = false
+        if timer then UIManager:unschedule(timer) end
+        if unsubscribe then unsubscribe(keep_worker) end
     end
 end
 
@@ -840,6 +865,11 @@ end
 function VisualComicList:renderWindow(allow_prefetch)
     local lv = self.list_view
     if not lv then return end
+    local sample
+    if list_render_samples < 8 then
+        list_render_samples = list_render_samples + 1
+        sample = { started = renderClock() }
+    end
     self:buildWindow()
     lv.items = self.items
     lv.show_page = 1
@@ -851,6 +881,23 @@ function VisualComicList:renderWindow(allow_prefetch)
     if allow_prefetch ~= false then
         self:maybePrefetch()
     end
+    if sample then sample.built = renderClock(); self._render_sample = sample end
+end
+
+-- One anonymous sample per navigation render, bounded for the whole process.
+-- No polling: wait measures queued UI work before the first actual paint.
+function VisualComicList:paintTo(bb, x, y)
+    local sample = self._render_sample
+    self._render_sample = nil
+    local started = sample and renderClock()
+    local result = InputContainer.paintTo(self, bb, x, y)
+    if sample then
+        pcall(logger.notice, string.format(
+            "Picayomi: list render timing build_ms=%.1f wait_ms=%.1f paint_ms=%.1f rows=%d",
+            (sample.built - sample.started) * 1000, (started - sample.built) * 1000,
+            (renderClock() - started) * 1000, #(self.items or {})))
+    end
+    return result
 end
 
 --- 当前屏还能再放几条 (缓冲区末尾那一屏常常是半屏)
@@ -1495,11 +1542,18 @@ end
 
 --- 当前屏优先，最多两项在途，避免一张慢封面阻塞整屏。
 -- 图片仍共用一个异步 worker；不一次性提交整页预取。
+function VisualComicList:cancelCoverSubscriptions(keep_worker)
+    local subscriptions = self._cover_subscriptions or {}
+    self._cover_subscriptions = {}
+    for _, cancel in pairs(subscriptions) do pcall(cancel, keep_worker) end
+end
+
 function VisualComicList:scheduleVisibleCovers()
     -- 页面已关闭: 别再排新的下载 (见 onCloseWidget 注释)
     if self._closed then return end
 
     self._cover_generation = (self._cover_generation or 0) + 1
+    self:cancelCoverSubscriptions(true)
     for _, task in pairs(self._cover_metadata_tasks or {}) do task:cancel() end
     self._cover_metadata_tasks = {}
     self.cover_queue = {}
@@ -1557,6 +1611,7 @@ function VisualComicList:dispatchCover(entry, generation)
         advanced = true
         self._cover_active = math.max(0, self._cover_active - 1)
         self._cover_metadata_tasks[entry] = nil
+        if self._cover_subscriptions then self._cover_subscriptions[entry] = nil end
         -- 留一小段空闲, 让点击/翻页能被处理
         UIManager:scheduleIn(0.05, function() self:pumpCoverQueue() end)
     end
@@ -1568,9 +1623,10 @@ function VisualComicList:dispatchCover(entry, generation)
     local function dispatch()
         if stale() then return end
         local ok_dispatch, err_dispatch = pcall(function()
+            local cancel
             if entry.item then
                 -- 当前屏: 下完要重建该行内容
-                entry.item:loadCover(0, function(path)
+                cancel = entry.item:loadCover(0, function(path)
                     -- 该行可能已随窗口翻页被换掉, 但 loadCover 内部有 cover_loaded 守卫, 安全
                     next_one()
                 end)
@@ -1581,9 +1637,16 @@ function VisualComicList:dispatchCover(entry, generation)
                 if existing then
                     next_one()
                 else
-                    CoverCache.ensure(self:sourceForComic(comic), comic.source_id or self.source_id, comic, function()
+                    cancel = CoverCache.ensure(self:sourceForComic(comic), comic.source_id or self.source_id, comic, function()
                         next_one()
                     end)
+                end
+            end
+            if type(cancel) == "function" and not advanced then
+                if stale() then cancel()
+                else
+                    self._cover_subscriptions = self._cover_subscriptions or {}
+                    self._cover_subscriptions[entry] = cancel
                 end
             end
         end)
@@ -1672,6 +1735,8 @@ end
 -- 实测: 关掉列表后继续泵事件循环, 仍会发生 6 次封面下载。
 function VisualComicList:onCloseWidget()
     self._closed = true
+    self._render_sample = nil
+    self:cancelCoverSubscriptions()
     for _, task in pairs(self._cover_metadata_tasks or {}) do task:cancel() end
     self._cover_metadata_tasks = {}
     if self.fetch_task then self.fetch_task:cancel(); self.fetch_task = nil end

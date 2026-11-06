@@ -10,6 +10,20 @@ local json = require("rapidjson")
 local Redact = require("util.log_redact")
 
 local HttpClient = {}
+HttpClient.MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+local function bounded_sink(chunks)
+    local size = 0
+    return function(chunk, err)
+        if err then return nil, err end
+        if chunk then
+            size = size + #chunk
+            if size > HttpClient.MAX_RESPONSE_BYTES then return nil, "HTTP response too large" end
+            chunks[#chunks + 1] = chunk
+        end
+        return 1
+    end
+end
+
 
 -- Cookie-based source logins must inspect each response before following Location.
 -- This operation never follows redirects or retries a credential submission.
@@ -47,7 +61,8 @@ function HttpClient:request(method, url, headers, body, timeout)
 
     -- 准备请求体
     local source = nil
-    local request_headers = headers or {}
+    local request_headers = {}
+    for k,v in pairs(headers or {}) do request_headers[k]=v end
 
     if body then
         if type(body) == "table" then
@@ -66,8 +81,8 @@ function HttpClient:request(method, url, headers, body, timeout)
         method = method,
         headers = request_headers,
         source = source,
-        sink = ltn12.sink.table(response_body),
-        redirect = true,
+        sink = bounded_sink(response_body),
+        redirect = false,
     }
 
     -- 设置超时
@@ -79,7 +94,32 @@ function HttpClient:request(method, url, headers, body, timeout)
     end
 
     -- 发送请求
-    local ok, code, resp_headers = socket_http.request(request)
+    local ok, code, resp_headers
+    for hop = 0, 5 do
+        response_body = {}
+        request.sink = bounded_sink(response_body)
+        if request.url:match("^https://") then require("ssl.https").TIMEOUT = timeout end
+        ok, code, resp_headers = socket_http.request(request)
+        if not ok then break end
+        local status = tonumber(code)
+        local location = resp_headers and resp_headers.location
+        if not (status and (status == 301 or status == 302 or status == 303 or status == 307 or status == 308) and location) then break end
+        if hop == 5 then return nil, "HTTP redirect limit exceeded" end
+        local target = HttpClient.resolveLocation(request.url, location)
+        if not target or (request.url:match('^https://') and not target:match('^https://')) then
+            return nil, "HTTP redirect protocol rejected"
+        end
+        if (status == 307 or status == 308) and request.method ~= 'GET' and request.method ~= 'HEAD'
+            and not HttpClient.sameOrigin(request.url, target) then return nil, "HTTP cross-origin replay rejected" end
+        request.headers = HttpClient.redirectHeaders(request.url, target, request.headers)
+        if status == 303 or ((status == 301 or status == 302) and request.method == 'POST') then
+            request.method, body, request.source = 'GET', nil, nil
+            for k in pairs(request.headers) do
+                if k:lower() == 'content-length' or k:lower() == 'content-type' then request.headers[k] = nil end
+            end
+        elseif body then request.source = ltn12.source.string(body) end
+        request.url = target
+    end
 
     if not ok then
         local reason = Redact.text(code)
@@ -220,7 +260,7 @@ function HttpClient:_httpsOnce(method, url, headers, body, timeout, sink)
         method = string.upper(method or "GET"),
         headers = request_headers,
         source = source,
-        sink = sink or ltn12.sink.table(response_body),
+        sink = sink or bounded_sink(response_body),
         -- 注意: 不要设置 redirect (luasec 不支持)
     }
 
@@ -251,7 +291,7 @@ function HttpClient:httpsRequest(method, url, headers, body, timeout)
     local current_body = body
 
     -- 手动跟随重定向 (最多 5 次)
-    for _ = 1, 5 do
+    for hop = 0, 5 do
         local result, err = self:_httpsOnce(current_method, current_url, headers, current_body, timeout)
         if not result then
             return nil, "HTTPS请求失败: " .. tostring(err)
@@ -259,18 +299,23 @@ function HttpClient:httpsRequest(method, url, headers, body, timeout)
 
         local code = result.status_code
         local location = result.headers and result.headers.location
-        if code and code >= 300 and code < 400 and location then
+        if code and (code == 301 or code == 302 or code == 303 or code == 307 or code == 308) and location then
             -- 处理相对路径重定向
-            if location:match("^/") then
-                local origin = current_url:match("^(https?://[^/]+)")
-                location = (origin or "") .. location
-            end
+            if hop == 5 then return nil, "HTTPS请求失败: 重定向次数过多" end
+            location = HttpClient.resolveLocation(current_url, location)
+            if not location or not location:match('^https://') then return nil, "HTTPS redirect protocol rejected" end
+            if (code == 307 or code == 308) and current_method ~= 'GET' and current_method ~= 'HEAD'
+                and not HttpClient.sameOrigin(current_url, location) then return nil, "HTTPS cross-origin replay rejected" end
+            headers = HttpClient.redirectHeaders(current_url, location, headers)
             if logger.enabled then logger.dbg("Picayomi HttpClient: HTTPS 重定向 -> " .. Redact.url(location)) end
             current_url = location
             -- 301/302/303 后按惯例改为 GET
             if code == 303 or ((code == 301 or code == 302) and current_method == "POST") then
                 current_method = "GET"
                 current_body = nil
+                for k in pairs(headers) do
+                    if k:lower() == 'content-length' or k:lower() == 'content-type' then headers[k] = nil end
+                end
             end
         else
             return result
@@ -298,15 +343,10 @@ end
 -- @param retries: 快速失败时的额外重试次数 (默认 1)
 -- @return: true 或 nil, err
 function HttpClient:_downloadOnce(url, dest_path, response_headers, timeout, pool)
-    -- 确保目标目录存在
-    -- 直接用 mkdir -p: 之前的逐级拼接对 "./xxx" 这类相对路径会错误地
-    -- 生成 "/xxx" (根目录) 从而创建失败
-    local dir = dest_path:match("(.*/)")
-    if dir then
-        local lfs = require("libs/libkoreader-lfs")
-        if not lfs.attributes(dir, "mode") then
-            os.execute("mkdir -p \"" .. dir .. "\"")
-        end
+    local dir = dest_path:match("^(.*)/[^/]+$")
+    if dir and dir ~= "" then
+        local ok = pcall(require("source.extensions.storage").mkdir, dir)
+        if not ok then return nil, "无法创建下载目录", false end
     end
 
     -- 响应体**边收边写文件**, 不先读进内存。
@@ -378,20 +418,22 @@ function HttpClient:_downloadOnce(url, dest_path, response_headers, timeout, poo
         local current_url = start_url
         local result, last_err
         local hops = 0
-        for _attempt = 1, 5 do
+        for _attempt = 0, 5 do
             local r, e = fetch_once(current_url)
             result, last_err = r, e
             if not r then break end
             local rcode = tonumber(r.status_code) or 0
             local location = r.headers and r.headers.location
             if rcode >= 300 and rcode < 400 and location then
+                if hops >= 5 then break end
                 location = HttpClient.resolveLocation(current_url, location)
                 -- 解析不出来 (base_url 不合法) 就别往下走了: 交给非 2xx 分支报状态码
-                if not location then break end
+                if not location or (current_url:match('^https://') and not location:match('^https://')) then break end
                 if not restart_file() then
                     return nil, "无法创建文件: " .. dest_path
                 end
                 hops = hops + 1
+                response_headers = HttpClient.redirectHeaders(current_url, location, response_headers)
                 current_url = location
             else
                 break
@@ -600,20 +642,32 @@ end
 --   p             相对当前目录
 -- @return 绝对地址 或 nil (location 为空/非法)
 function HttpClient.resolveLocation(base_url, location)
-    if type(location) ~= "string" or location == "" then return nil end
-    if location:match("^https?://") then return location end
-    local scheme, origin = base_url:match("^(https?)://([^/]+)")
-    if not scheme then return nil end
-    if location:sub(1, 2) == "//" then
-        return scheme .. ":" .. location
+    if type(base_url) ~= "string" or not base_url:match('^https?://') then return nil end
+    if type(location) ~= "string" or location == "" or location:find("[%c%s]") then return nil end
+    if location:match("^[%a][%w+.-]*:") and not location:match("^https?://") then return nil end
+    local url = require("socket.url")
+    local resolved = url.absolute(base_url, location)
+    local parsed = url.parse(resolved)
+    if not parsed or (parsed.scheme ~= 'http' and parsed.scheme ~= 'https')
+        or not parsed.host or parsed.host == '' or parsed.userinfo then return nil end
+    return resolved:gsub("#.*$", "")
+end
+
+-- Preserve caller-owned headers; credentials must never follow a different origin.
+function HttpClient.sameOrigin(from, target)
+    local parse = require('socket.url').parse
+    local a, b = parse(from), parse(target)
+    return a and b and a.scheme == b.scheme and a.host and b.host and a.host:lower() == b.host:lower()
+        and tostring(a.port or (a.scheme == 'https' and 443 or 80)) == tostring(b.port or (b.scheme == 'https' and 443 or 80))
+end
+function HttpClient.redirectHeaders(from, target, headers)
+    local same = HttpClient.sameOrigin(from, target)
+    local out = {}
+    for k,v in pairs(headers or {}) do
+        local lower = k:lower()
+        if lower ~= 'host' and (same or not ({authorization=true,cookie=true,['proxy-authorization']=true})[lower]) then out[k]=v end
     end
-    if location:sub(1, 1) == "/" then
-        return scheme .. "://" .. origin .. location
-    end
-    -- 相对路径: 按当前 URL 所在目录解析 ("a/b/c.jpg" + "d.jpg" -> "a/b/d.jpg")
-    local dir = base_url:match("^(.*/)")
-    if not dir then return scheme .. "://" .. origin .. "/" .. location end
-    return dir .. location
+    return out
 end
 
 --- 处理重定向 (会真的发请求; 只在需要"先探一下最终地址"时用)
@@ -630,15 +684,18 @@ function HttpClient:resolveRedirect(url, max_redirects)
             url = url,
             method = "GET",
             headers = { ["Connection"] = "close" },
-            sink = ltn12.sink.table(response_body),
+            sink = bounded_sink(response_body),
             redirect = false,
         }
 
         socket_http.TIMEOUT = 5
         local _, code, resp_headers = socket_http.request(request)
 
+        code = tonumber(code)
         if code and code >= 300 and code < 400 and resp_headers and resp_headers.location then
-            url = resp_headers.location
+            local resolved = HttpClient.resolveLocation(url, resp_headers.location)
+            if not resolved or (url:match('^https://') and not resolved:match('^https://')) then break end
+            url = resolved
             redirect_count = redirect_count + 1
             if logger.enabled then logger.dbg("Picayomi HttpClient: 重定向到 " .. Redact.url(url)) end
         else

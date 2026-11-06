@@ -214,8 +214,17 @@ function Pool:_exchange(sock, host, port, path, headers, sink, method, body)
         local want = p:want()
         local chunk, err, partial
         if want == nil then
-            chunk, err, partial = sock:receive("*l")
-            if chunk then chunk = chunk .. "\r\n" end
+            -- Read only through the delimiter: bounded even before the parser sees it.
+            -- LuaSocket buffers the transport; these reads do not imply one syscall per byte.
+            local parts, size = {}, 0
+            repeat
+                local byte
+                byte, err, partial = sock:receive(1)
+                if not byte then partial = table.concat(parts) .. (partial or ""); break end
+                size = size + 1; parts[size] = byte
+                if size > Parser.MAX_LINE_BYTES + 2 then return nil, "HTTP response line too large" end
+                if byte == "\n" then chunk = table.concat(parts); break end
+            until false
         elseif want < 0 then
             chunk, err, partial = sock:receive(Pool.READ_CHUNK)
         else

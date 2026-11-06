@@ -130,7 +130,7 @@ local function follow_redirect(self, job)
     local location = p and p.headers and p.headers.location
     local next_url = HttpClient.resolveLocation(job.url, location)
     -- 没有 Location 的 3xx 不是跳转, 交给 check_download 报真实状态码
-    if not next_url then return false end
+    if not next_url or (job.url:match('^https://') and not next_url:match('^https://')) then return false end
     if (job.hops or 0) >= Async.MAX_REDIRECTS then return false end
 
     -- 连接按响应头决定留不留 (与正常完成时同一套判定)
@@ -146,6 +146,7 @@ local function follow_redirect(self, job)
     end
     job.written = 0
     job.hops = (job.hops or 0) + 1
+    job.headers = HttpClient.redirectHeaders(job.url, next_url, job.headers)
     job.url = next_url
     job.parser = nil
     job.state = "connect"               -- 下一轮 advance 重新建连 + 发请求

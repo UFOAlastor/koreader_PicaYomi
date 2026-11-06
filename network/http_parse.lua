@@ -16,6 +16,7 @@ local Parser = {}
 Parser.__index = Parser
 
 Parser.MAX_HEADER_BYTES = 64 * 1024
+Parser.MAX_LINE_BYTES = 8 * 1024
 
 --- @param sink function(chunk) -> 1|nil  响应体去哪 (写文件); 传 nil 表示丢弃
 function Parser.new(sink)
@@ -85,6 +86,17 @@ function Parser:feed(chunk)
 
     while true do
         local st = self.state
+        if st == 'status' or st == 'headers' or st == 'chunk_size' or st == 'trailer' then
+            local ending = self.buf:find("\r\n", 1, true)
+            if (ending and ending - 1 or #self.buf) > Parser.MAX_LINE_BYTES then
+                return false, "响应头过大: HTTP response line too large"
+            end
+            if st == 'headers' or st == 'trailer' then
+                if self.header_bytes + (ending and ending + 1 or #self.buf) > Parser.MAX_HEADER_BYTES then
+                    return false, "响应头过大"
+                end
+            end
+        end
 
         if st == "status" then
             local line = self:_take_line()
@@ -187,6 +199,7 @@ function Parser:feed(chunk)
         elseif st == "trailer" then
             local line = self:_take_line()
             if line == nil then return false end
+            self.header_bytes = self.header_bytes + #line + 2
             if line == "" then self.state = "done" end
 
         elseif st == "done" then

@@ -8,9 +8,9 @@
 
 ## 页面预览
 
-| 主页 | 漫画详情 | 小说详情 | 小说阅读 |
+| 主页 | 详情页 | 漫画阅读 | 小说阅读 |
 |---|---|---|---|
-| ![主页](docs/screenshots/home.png) | ![漫画详情](docs/screenshots/detail.png) | ![小说详情](docs/screenshots/novel-detail.png) | ![小说阅读](docs/screenshots/novel-reader.png) |
+| ![主页](docs/screenshots/home.png) | ![详情页](docs/screenshots/detail.png) | ![漫画阅读](docs/screenshots/comic-reader.png) | ![小说阅读](docs/screenshots/novel-reader.png) |
 
 
 ## 安装

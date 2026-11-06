@@ -305,7 +305,7 @@ function ComicAPI:prepareComic(comicId, order, context)
     if logger.enabled then logger.info(string.format("Picayomi: 流式打开 %s 章节 %s (共 %d 页)",
         tostring(comicId), tostring(order), #images_result.images)) end
 
-    -- 预热第 1 页 + 近邻。**只入队, 一个字节都不等**。
+    -- 预热实际续读页 + 近邻；「开始」仍从第 1 页。只入队，不等待下载。
     --
     -- 关键在**时机**: 这两句在"打开阅读器"之前, 而紧接着的 ReaderUI:showReader 要在
     -- 主线程上做整页排版 (真机实测这一段 ~2s)。下载跑在 fork 出来的子进程里, 两者
@@ -315,10 +315,12 @@ function ComicAPI:prepareComic(comicId, order, context)
     -- 于是"点开始"白等一个网络 RTT 且期间界面冻死 (慢网下点不了也退不出);
     -- 这里 request_page / prefetch 都只入队 + 踢一脚驱动 (见 ui/stream_reader.lua 的注释),
     -- 打开路径上仍然只有"一次图片列表请求"。
-    session:request_page(1)
-    session:prefetch(2)
+    local first=context and context.from_beginning and 1
+        or require("util.reading_position").page(stream_path,#images_result.images)
+    session:request_page(first)
+    session:prefetch(first+1)
 
-    if Diag.enabled then open_mark(comicId, order, "会话就绪, 已预热第1页") end
+    if Diag.enabled then open_mark(comicId, order, "会话就绪, 已预热第"..first.."页") end
 
     return true, stream_path, StreamReader, session
 end

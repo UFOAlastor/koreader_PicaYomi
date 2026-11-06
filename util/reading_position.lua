@@ -78,4 +78,13 @@ function ReadingPosition.restore(path, comic_id, order, source_id, page_count)
     return ok and restored or false
 end
 
+-- Read the same sidecar that ReaderPaging will restore. This is a prefetch
+-- hint only: never modify saved progress or change the reader's own restore.
+function ReadingPosition.page(path,page_count)
+    local ok,value=pcall(function()return require("docsettings"):open(path):readSetting("last_page")end)
+    local page=ok and tonumber(value)
+    if not page or page~=page or page<1 or page==math.huge then return 1 end
+    return math.min(math.floor(page),math.max(1,page_count or 1))
+end
+
 return ReadingPosition

@@ -49,10 +49,12 @@ function M.open(prepared,options)
             reader._picayomi_novel_closing=true
             local UI=require("ui/uimanager")
             local switching=options.is_switching and options.is_switching()
+            local timing=not switching and (reader._picayomi_return_timing or require("util.return_timing").new("novel"))
             local notice=reader._picayomi_return_notice
             if not switching and not notice then
                 notice=require("ui.common.loading_task").showReturning()
             end
+            if timing then timing:stage(reader._picayomi_return_timing and "dispatch" or "notice")end
             local started=require("socket").gettime()
             local function mark(stage)
                 if Diag.enabled then Diag.mark(string.format("novel close stage=%s elapsed=%.3fs",stage,require("socket").gettime()-started))end
@@ -60,6 +62,7 @@ function M.open(prepared,options)
             local args={n=select("#",...),...}
             local ok,result=pcall(function()
                 if not switching and options.on_closing then options.on_closing(reader)end
+                if timing then timing:stage("prepare")end
                 mark("before_native")
                 local function nativeClose()return close(reader,unpack(args,1,args.n))end
                 local result
@@ -75,7 +78,9 @@ function M.open(prepared,options)
                     end
                     if not success then error(value,0)end
                     result=value
+                elseif timing then result=timing:native(reader,nativeClose)
                 else result=nativeClose()end
+                if timing and Diag.enabled then timing:stage("native")end
                 mark("after_native")
                 returned=document_closed
                 -- Restore details in the same frame, while the notice still
@@ -86,7 +91,9 @@ function M.open(prepared,options)
             end)
             if notice then UI:close(notice,"ui")end
             reader._picayomi_return_notice=nil
+            reader._picayomi_return_timing=nil
             reader._picayomi_novel_closing=nil
+            if timing then timing:stage("restore");timing:finish()end
             if Diag.enabled then Diag.mark(string.format("novel close %.3fs",require("socket").gettime()-started))end
             if not ok then error(result,0)end
             return result

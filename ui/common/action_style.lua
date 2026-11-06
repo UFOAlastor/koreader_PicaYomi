@@ -26,7 +26,7 @@ function Style.row(opts)
     local gap,border=Style.GAP,Style.BORDER
     local w,h=opts.width-gap*2-border*2,opts.height-gap*2-border*2
     local padding=Screen:scaleBySize(8)
-    local text=Text:new{text=opts.text,face=Theme.face("row"),bold=true,
+    local text=Text:new{text=opts.text,face=Theme.face("row"),bold=opts.bold~=false,
         fgcolor=opts.enabled~=false and BB.COLOR_BLACK or BB.COLOR_DARK_GRAY,
         max_width=w-padding*2,truncate_with_ellipsis=true,
         picayomi_expandable_text=opts.expandable_text}
@@ -81,14 +81,14 @@ Style.Button.disable=disable
 -- Flow labels use the same native geometry on categories and the home page.
 Style.CloudButton=NativeButton:extend{radius=Style.RADIUS,text_font_bold=false}
 
-local function label_width(text,height)
-    local probe=Style.Button:new{text=text,height=height}
+local function label_width(text,height,bold)
+    local probe=Style.Button:new{text=text,height=height,text_font_bold=bold}
     local width=probe:getSize().w
     probe:free()
     return width
 end
-function Style.compactWidth(text,height)
-    return label_width(text,height)+Screen:scaleBySize(24)
+function Style.compactWidth(text,height,bold)
+    return label_width(text,height,bold)+Screen:scaleBySize(24)
 end
 
 -- Reserve real label width plus breathing room, then share the remaining
@@ -188,7 +188,7 @@ local function decorate_menu(menu)
                 widths[i]=i==#actions and menu.item_dimen.w-width*(i-1)or width
             end
             if entry.picayomi_compact_actions and #actions==2 then
-                widths[2]=math.min(Style.compactWidth(actions[2].text,menu.item_dimen.h),width)
+                widths[2]=math.min(Style.compactWidth(actions[2].text,menu.item_dimen.h,actions[2].bold),width)
                 widths[1]=menu.item_dimen.w-widths[2]
             end
             for i,action in ipairs(actions)do
@@ -201,7 +201,7 @@ local function decorate_menu(menu)
                     outline(group[i],function() return action.enabled~=false end)
                 else
                     group[i]=Style.row{width=widths[i],height=menu.item_dimen.h,
-                        text=action.text,enabled=action.enabled}
+                        text=action.text,enabled=action.enabled,bold=action.bold}
                 end
             end
             row[1]:free();row[1]=group

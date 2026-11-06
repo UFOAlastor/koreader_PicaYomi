@@ -351,29 +351,20 @@ function PicaReader:installEdgeSwipeToExit(reader_ui)
             -- 必须排在整屏翻页区之前 (见上面的说明)
             overrides = { "paging_swipe", "rolling_swipe", "swipe_link" },
             handler = function(ges)
-                -- **先收掉在途的 pan, 再做任何事。**
-                --
-                -- 我们覆盖了 paging_swipe (见上面的 overrides), 于是
-                -- ReaderPaging:onSwipe 里"pan 还在进行 -> onPanRelease()"那段
-                -- 不会跑了。而 _pan_page_states_to_restore 是 pan 开始时记下的
-                -- **page_states 表引用**: 如果 pan 还没滚 (按下不到 500ms 激活
-                -- 延迟) 就先跑了下面那句 onGotoViewRel, onScrollPageRel 会
-                -- table.remove 这张表 —— 一屏只有 1 页时它就被清空了, 而
-                -- _pan_started 还留着。
-                --
-                -- 之后任何一次 HandledAsSwipe (用户的 short_diagonal_swipe =
-                -- 全屏刷新就会发) 会拿这张空表回滚:
-                --   readerpaging.lua:529  page_states[#page_states].page
-                -- -> 索引 nil -> 整个 KOReader 退出。真机 2026-10-18 20:38 即此。
+                -- Native pan cleanup is still required to avoid stale page-state
+                -- rollback references. For a return, show feedback first: cleanup
+                -- can finish a pending scroll and trigger more page work.
                 local paging = reader_ui.paging
-                if paging and paging._pan_started then
-                    pcall(function() paging:onPanRelease() end)
+                local function finishPan()
+                    if paging and paging._pan_started then paging:onPanRelease()end
                 end
                 if SwipeRules.isBackSwipe(ges) then
-                    if logger.enabled then logger.info("Picayomi Reader: 边缘滑动, 退出阅读") end
-                    self_:onReturn()
+                    -- Feedback precedes native pan finalization, which may
+                    -- decode the remaining scroll region or schedule inertia.
+                    self_:onReturn(nil,finishPan)
                     return true
                 end
+                pcall(finishPan)
                 -- 连续滚动模式: 只保留"上下滚动", 左右划不再翻页。
                 --
                 -- 竖划 = 滚一屏 (与点屏幕两侧等价); 横划 = 吃掉。
@@ -1018,6 +1009,7 @@ function PicaReader:switchToChapterLegacy(episode_index)
     local episode_title = episode.title or ("第" .. (episode.order or "?") .. "话")
 
     -- 关闭当前阅读器
+    -- Chapter switches have no return-feedback timing context.
     self:closeReaderUi(function()
         -- 打开新章节
         local success = self:open(self.current_comic, episode, self.episodes_list, self.on_return_callback)
@@ -1122,7 +1114,7 @@ end
 -- @param reason_text 可选: 提示文案。读完最后一章时直接用它把"已结束"和
 --        "正在返回"合成一句话 —— 否则用户要先看 4 秒完结提示, 再等一次
 --        "返回中…" (真机反馈"多此一举, 要多等蛮久")。
-function PicaReader:onReturn(reason_text)
+function PicaReader:onReturn(reason_text, prepare_close)
     -- 关阅读器这一段是**同步**的: 真机 diag 实测 1.3~4.8 秒 (绝大部分是 KOReader
     -- 自己在 onClose 里存设置/写 sqlite/序列化缓存, 我们只占其中 ~0.7s)。期间
     -- 屏幕完全不更新, 用户会以为"点了没反应"而反复点。
@@ -1136,7 +1128,11 @@ function PicaReader:onReturn(reason_text)
         return
     end
 
+    self._return_timing=require("util.return_timing").new("comic")
     local info = require("ui.common.loading_task").showReturning(reason_text)
+    self._return_timing:stage("notice")
+    if prepare_close then pcall(prepare_close)end
+    self._return_timing:stage("pan_finish")
     self._return_info = info
 
     -- 返回前把**精确**页码落一次历史: 翻页时的写入是节流的, 最后几页可能
@@ -1148,13 +1144,16 @@ function PicaReader:onReturn(reason_text)
         end)
     end
 
-    self:closeReaderUi(function()
+    self._return_timing:stage("progress");self:closeReaderUi(function()
         local ok,err=pcall(function()
             if self.on_return_callback then self.on_return_callback()end
         end)
         if self._return_info then
             pcall(function() UIManager:close(self._return_info, "ui") end)
             self._return_info = nil
+        end
+        if self._return_timing then
+            self._return_timing:stage("restore");self._return_timing:finish();self._return_timing=nil
         end
         if not ok then error(err,0)end
     end)
@@ -1200,6 +1199,8 @@ function PicaReader:closeReaderUi(done_callback)
 
     -- 延迟执行，确保所有事件处理程序在关闭ReaderUI之前运行
     UIManager:nextTick(function()
+        local timing=self._return_timing
+        if timing then timing:stage("dispatch")end
         if logger.enabled then logger.info("Picayomi Reader: 关闭ReaderUI实例") end
 
         -- 这是延迟任务, 而且是**返回路径上最关键的一拍**: KOReader 的任务队列不兜异常
@@ -1227,7 +1228,9 @@ function PicaReader:closeReaderUi(done_callback)
         -- 关闭ReaderUI
         step("onClose", function()
             if ReaderUI.instance then
-                ReaderUI.instance:onClose()
+                local reader=ReaderUI.instance
+                if timing then timing:native(reader,function()return reader:onClose()end)
+                else reader:onClose()end
             end
         end)
 
@@ -1239,6 +1242,8 @@ function PicaReader:closeReaderUi(done_callback)
         -- 关掉阅读器后窗口栈为空, UIManager 下一轮就判 "No dialogs left to show"
         -- 把 KOReader 一起退掉。ensureBase 三种情况都兜住, 并且放到栈底。
         step("补回底层", function() require("util.widget_sweep").ensureBase() end)
+
+        if timing then timing:stage("base")end
 
         -- **立刻**恢复 Picayomi 的界面, 不要再等一个 tick:
         -- 上一行刚把 FileManager 放回栈底, 每多等一帧, 用户就多看到一帧

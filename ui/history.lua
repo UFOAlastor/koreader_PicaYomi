@@ -166,8 +166,11 @@ function History:showHistoryList()
         -- 历史记录全部在本地, 没有可补的下一页
         has_more = false,
         on_select = function(comic, navigation)
+            -- Open from local history immediately, just like other list entries.
+            -- ComicDetail owns cached metadata, cancellable refill and retry.
+            -- The list's author/category text is time/progress, not book metadata.
             self:showHistoryDetail(comic._history or { id = comic._id, title = comic.title }, navigation,
-                navigation and navigation.continue_reading and comic or nil)
+                {_id=comic._id,title=comic.title,thumb=comic.thumb,content_type=comic.content_type})
         end,
         -- 删除是**列表**的操作 (只对"这条记录"有意义), 所以放在长按里,
         -- 不塞进详情页 —— 详情页该显示的是漫画本身的信息。

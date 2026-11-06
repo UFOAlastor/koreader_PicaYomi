@@ -44,7 +44,29 @@ end
 -- Shared by comic and novel return paths; paint before blocking reader cleanup.
 function LoadingTask.showReturning(reason)
     local notice=InfoMessage:new{text=reason or require("gettext")("返回中…"),dismissable=false}
-    UIManager:show(notice,"ui")
+    -- A queued ReaderView repaint may decode/filter a large page. The return
+    -- notice must not wait for it: cover that view with its already drawn
+    -- framebuffer instead. One screen only, freed on every close path.
+    local Screen=require("device").screen
+    local ok,background=pcall(function()return Screen.bb:copy()end)
+    if ok and background then
+        notice._return_background=background
+        notice.covers_fullscreen=true
+        local paint,close=notice.paintTo,notice.onCloseWidget
+        notice.paintTo=function(self,bb,x,y)
+            local saved=self._return_background
+            if saved then bb:blitFrom(saved,0,0,0,0,
+                math.min(bb:getWidth(),saved:getWidth()),math.min(bb:getHeight(),saved:getHeight()))end
+            return paint(self,bb,x,y)
+        end
+        notice.onCloseWidget=function(self,...)
+            local saved=self._return_background;self._return_background=nil
+            if saved then saved:free()end
+            return close(self,...)
+        end
+    end
+    local size=notice.movable:getSize();local region=require("ui/geometry"):new{x=math.floor((Screen:getWidth()-size.w)/2),y=math.floor((Screen:getHeight()-size.h)/2),w=size.w,h=size.h}
+    UIManager:show(notice,"ui",region)
     UIManager:forceRePaint()
     return notice
 end

@@ -123,6 +123,7 @@ end
 -- 用户确认过的规则: "未登录用本地, 登录用账号"。
 -- 以前未登录直接弹"请先登录", 于是没账号的人根本用不了收藏。
 function Favorites:loadFavorites()
+    self:cancelLoad()
     local source = self:currentSource()
     if FavoriteActions.backend(source) == "local" then
         self:loadLocalFavorites(source)
@@ -202,65 +203,93 @@ function Favorites:showEmptyLocalFavorites(source)
 end
 
 --- 账号收藏 (已登录)
+function Favorites:cancelLoad()
+    local load=self._favorites_load
+    if not load then return end
+    load.cancelled=true
+    if load.handle then load.handle:cancel() end
+    if load.finish then load.finish() end
+end
+
 function Favorites:loadRemoteFavorites()
+    self:cancelLoad()
     local source = self:currentSource()
-    if not require("ui.common.source_access").check(require("source.registry"):getCurrent(),"favorites") then return end
+    if not require("ui.common.source_access").check(source,"favorites") then return end
     if self._cache_source~=source then self.current_page=1;self._cache_source=source end
     local scope=FavoriteActions.onlineScope(source)
+    local backend=FavoriteActions.backend(source)
     local cached=self.current_page==1 and FavoriteActions.cachedOnline(source)
     if cached then
         self.current_page=cached.page or 1;self.total_pages=cached.pages
-        self:showFavoritesList(cached);return
+        self:showFavoritesList(cached,source);return
     end
-    -- 显示加载消息
-    if logger.enabled then logger.info("Picayomi", "开始加载收藏漫画...") end
-    local loading = InfoMessage:new{
-        text = source and source.content_type=="novel" and _("加载收藏小说...") or _("加载收藏漫画..."),
-    }
-    UIManager:show(loading, "ui")
-    -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
-    -- 不等这一下的话事件循环没机会重绘, 提示等于没显示
-    UIManager:forceRePaint()
+    local page=self.current_page
+    local load={};self._favorites_load=load
+    local function valid()
+        if load.cancelled or self._favorites_load~=load or self:currentSource()~=source
+            or FavoriteActions.backend(source)~=backend then return false end
+        local current=FavoriteActions.onlineScope(source)
+        return not scope or current and current.generation==scope.generation
+            and current.key==scope.key and current.revision==scope.revision
+    end
+    local loading=InfoMessage:new{is_picayomi_page=true,
+        text=source and source.content_type=="novel" and _("加载收藏小说…（点击取消）") or _("加载收藏漫画…（点击取消）")}
+    local function finish()
+        if load.finished then return end
+        load.finished=true
+        if load.unwatch then load.unwatch();load.unwatch=nil end
+        LoadingTask.close(loading)
+        if self._favorites_load==load then self._favorites_load=nil end
+    end
+    load.finish=finish
+    if source and source.watchSession then
+        load.unwatch=source:watchSession(function()if not valid()then self:cancelLoad()end end)
+    end
+    UIManager:show(loading,"ui");UIManager:forceRePaint()
+    local function receive(success,favorites_data,error_msg)
+        local alive=valid();finish()
+        if not alive then return end
+        if success and favorites_data then
+            if page==1 then FavoriteActions.rememberOnline(source,favorites_data,scope)end
+            if logger.enabled then logger.info("Picayomi", "成功获取收藏漫画数据，数量: " .. #(favorites_data.comics or {})) end
 
-    -- 获取收藏列表
-    -- 抛异常时也关掉提示, 否则"加载收藏漫画..."永久盖屏 (见 loading_task 注释)
-    local t0 = Diag.enabled and now_seconds() or 0
-    local success, favorites_data, error_msg = LoadingTask.call(loading, function()
-        return self.comic_api:getFavorites(self.current_page)
-    end)
-    -- 这一段是**主线程同步**等网络 (整页在此期间不响应输入), 所以它多长,
-    -- 用户感受到的"加载收藏慢"就有多长。记下来才能分清是源慢还是我们慢。
-    if Diag.enabled then Diag.mark(string.format("favorites 取列表 %.1fs (第 %d 页)",
-        now_seconds() - t0, self.current_page or 1)) end
+            -- 更新分页信息
+            self.current_page = favorites_data.page or page
+            self.total_pages = favorites_data.pages
 
-    if success and favorites_data then
-        if self.current_page==1 then FavoriteActions.rememberOnline(source,favorites_data,scope)end
-        if logger.enabled then logger.info("Picayomi", "成功获取收藏漫画数据，数量: " .. #(favorites_data.comics or {})) end
-
-        -- 更新分页信息
-        self.current_page = favorites_data.page or self.current_page
-        self.total_pages = favorites_data.pages
-
-        -- 显示收藏列表
-        self:showFavoritesList(favorites_data)
-    else
-        logger.warn("Picayomi", "获取收藏漫画失败: " .. (error_msg or "未知错误"))
-        -- 会话过期也会以 401 出现, 同样引导去登录
-        local message=tostring(error_msg or "")
-        if message:find("401",1,true)or message:find("请先登录",1,true)
-            or message:find("登录状态已失效",1,true)or message:find("登录已过期",1,true)then
-            require("ui.home").refreshShownAccountState()
-            self:promptLogin()
+            -- 显示收藏列表
+            self:showFavoritesList(favorites_data,source)
         else
-            UIManager:show(InfoMessage:new{
-                text = T(source and source.content_type=="novel" and _("获取收藏小说失败: %1") or _("获取收藏漫画失败: %1"), require("ui.common.error_message").describe(error_msg)),
-            }, "ui")
+            logger.warn("Picayomi", "获取收藏漫画失败: " .. tostring(error_msg or "未知错误"))
+            -- 会话过期也会以 401 出现, 同样引导去登录
+            local message=tostring(error_msg or "")
+            if message:find("401",1,true)or message:find("请先登录",1,true)
+                or message:find("登录状态已失效",1,true)or message:find("登录已过期",1,true)then
+                require("ui.home").refreshShownAccountState()
+                self:promptLogin()
+            else
+                UIManager:show(InfoMessage:new{
+                    text = T(source and source.content_type=="novel" and _("获取收藏小说失败: %1") or _("获取收藏漫画失败: %1"), require("ui.common.error_message").describe(error_msg)),
+                }, "ui")
+            end
         end
     end
+    local t0=Diag.enabled and now_seconds() or 0
+    load.handle=LoadingTask.background(loading,function()
+        if not valid()then finish();return end
+        -- Bind to the original source; a later source switch cannot redirect it.
+        local success,data,err
+        if source and source.getFavorites then success,data,err=source:getFavorites(page)
+        else success,data,err=self.comic_api:getFavorites(page)end
+        if Diag.enabled then Diag.mark(string.format("favorites 取列表 %.1fs (第 %d 页)",now_seconds()-t0,page or 1))end
+        receive(success,data,err)
+    end,{timeout=30,reuse_worker=true,is_cancelled=function()return not valid()end,
+        on_cancel=function()load.cancelled=true;finish()end,
+        on_error=function(err)receive(false,nil,err)end})
 end
 
-function Favorites:showFavoritesList(favorites_data)
-    local source = self:currentSource()
+function Favorites:showFavoritesList(favorites_data,source)
+    source = source or self:currentSource()
     if not favorites_data.comics or #favorites_data.comics == 0 then
         UIManager:show(InfoMessage:new{
             text = source and source.content_type=="novel" and _("你还没有收藏小说") or _("你还没有收藏漫画"),
@@ -289,7 +318,11 @@ function Favorites:showFavoritesList(favorites_data)
         has_more = favorites_data.has_more,
         -- 首次进入就要有总条数, 否则界面算不出总屏数 (见 ui/home.lua 同处的说明)
         total_count = favorites_data.total,
-        fetch_page = function(page) return self.comic_api:getFavorites(page) end,
+        fetch_page = function(page)
+            if self:currentSource()~=source then return false,nil,_("源已改变，请重新打开收藏")end
+            if source and source.getFavorites then return source:getFavorites(page)end
+            return self.comic_api:getFavorites(page)
+        end,
         processor = function(raw) return self.comic_model:processComicData(raw) end,
         on_select = function(comic, navigation)
             if logger.enabled then logger.info("Picayomi", "选择了收藏漫画: " .. comic.title) end

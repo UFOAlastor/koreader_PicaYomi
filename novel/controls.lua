@@ -10,7 +10,9 @@ function Controls:actions() return self.options.navigation(self.ui) end
 function Controls:returnToDetails()
     if not self:current() or self.returning then return end
     self.returning=true
+    self.ui._picayomi_return_timing=require("util.return_timing").new("novel")
     self.ui._picayomi_return_notice=require("ui.common.loading_task").showReturning()
+    self.ui._picayomi_return_timing:stage("notice")
     self.return_task=function()
         self.return_task=nil
         if self:current()then

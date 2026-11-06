@@ -754,7 +754,7 @@ local DESC_LINE_H = 24
 --- 构建整页内容
 -- @param keep_screen 可选: 重建后停在第几屏 (缺省 1)。页脚/详情刷新时用 ——
 --        否则每次刷新都会把章节列表跳回第一屏。
-function ComicDetail:buildContent(keep_screen)
+function ComicDetail:buildContent(keep_screen, after_reading)
     local header_h = Screen:scaleBySize(
         136 + HEADER_PADDING * 2 + DESC_LINE_H * DESC_LINES + 6)
     self.page_text = TextWidget:new{
@@ -764,11 +764,14 @@ function ComicDetail:buildContent(keep_screen)
 
     -- 先把行内容算成"数据"(spec), 控件等用到时按屏现建现用。
     -- 不能把控件一次性交给 ListView 让它翻页 —— 见 renderWindow 的注释。
-    self.row_specs = self:buildRowSpecs()
+    local reuse = after_reading and self._content_width==self.width and self._content_height==self.height
+    self.row_specs = self:buildRowSpecs(reuse)
 
     -- FrameContainer:getSize() 忽略 self.height, 故列表高度必须按
     -- header/footer 的真实尺寸计算, 否则页脚会被挤出屏幕。
-    local header = self:createHeader(header_h)
+    local header = reuse and self._content_header or self:createHeader(header_h)
+    self._content_header=header
+    self._content_width,self._content_height=self.width,self.height
     local footer = self:createFooter()
     self.page_status = FrameContainer:new{
         padding=0, margin=0, bordersize=0, width=self.width, self.page_text,
@@ -1131,7 +1134,10 @@ function ComicDetail:cycleViewMode()
     return true
 end
 
-function ComicDetail:buildRowSpecs()
+function ComicDetail:buildRowSpecs(reuse_chapters)
+    if not reuse_chapters or self._chapter_specs_data~=self.episodes_data then
+        self._chapter_specs,self._chapter_specs_data=nil,nil
+    end
     local specs = {}
     local action_rows = true
     local function add(text, callback, height)
@@ -1261,6 +1267,12 @@ function ComicDetail:buildRowSpecs()
             function() self:showChapterJumpDialog() end)
     end
 
+    if reuse_chapters and self._chapter_specs_data==self.episodes_data and self._chapter_specs then
+        for _,spec in ipairs(self._chapter_specs)do specs[#specs+1]=spec end
+        return specs
+    end
+    self._chapter_specs_data=self.episodes_data
+    self._chapter_specs={}
     action_rows=false
     for idx, episode in ipairs(episodes) do
         local current_episode = episode
@@ -1275,6 +1287,7 @@ function ComicDetail:buildRowSpecs()
             -- 是想看第 5 话, 结果落在上次看到的那一页 —— 与「开始」按钮的行为不一致。
             self:openReader(current_episode, { from_beginning = true })
         end)
+        self._chapter_specs[#self._chapter_specs+1]=specs[#specs]
     end
 
     return specs
@@ -1291,7 +1304,7 @@ function ComicDetail:refresh(opts)
     -- Lua 里 "true and nil or x" 恒等于 x (nil 被 or 吃掉), reset 永远不生效。
     local keep = self.screen_index
     if opts and opts.reset_screen then keep = nil end
-    self:buildContent(keep)
+    self:buildContent(keep, opts and opts.after_reading)
     UIManager:setDirty(self, function() return "ui", self.dimen end)
 end
 
@@ -1481,7 +1494,7 @@ function ComicDetail:openReader(episode, opts)
         -- (真机反馈: "新漫画刚看了一点, 回到详情, 不会刷新出继续按钮")。
         --
         -- 保留屏游标 (refresh 默认行为): 用户离开时停在第几屏, 回来还在那一屏。
-        if not self_._closed then self_:refresh();self_:loadDetailsAfterReading() end
+        if not self_._closed then self_:refresh({after_reading=true});self_:loadDetailsAfterReading() end
         if outer_return then outer_return() end
     end
     -- 阅读器要把进度写回**本页的源** (历史按源分桶)。opts 是调用方传进来的,

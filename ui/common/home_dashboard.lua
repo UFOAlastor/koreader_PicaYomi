@@ -50,7 +50,11 @@ function Tile:init()
     self.ges_events={Tap={GestureRange:new{ges="tap",range=self.dimen}}}
 end
 function Tile:setPath(path)
-    if self._closed or path==self.path then return false end
+    if self._closed then return false end
+    local attr=path and require("libs/libkoreader-lfs").attributes(path)
+    local stamp=attr and table.concat({tostring(attr.modification),tostring(attr.change),tostring(attr.ino),tostring(attr.size)},":")
+    if path==self.path and stamp==self._path_stamp and (not path or self.image) then return false end
+    self._path_stamp=stamp
     if self.image then self.image:free();self.image=nil end
     self.path=path
     if path then
@@ -96,8 +100,8 @@ function Strip:init()
     for _,comic in ipairs(self.items)do
         if x>=self.width then break end
         local tile=Tile:new{width=math.min(self.cover_width,self.width-x),height=self.height,
-            cover_width=self.cover_width,cover_height=self.cover_height,comic=comic,
-            callback=function()self.on_select(comic)end}
+            cover_width=self.cover_width,cover_height=self.cover_height,comic=comic}
+        tile.callback=function()self.on_select(tile.comic)end
         tile.offset=x
         local sid=comic.source_id or self.source_id
         tile:setPath(Cover.find(sid,comic._id))
@@ -194,8 +198,37 @@ function Dashboard:refreshData(reset_online)
     local count=math.ceil(self.width/math.max(1,Screen:scaleBySize(106)))+1
     self.snapshot=Data.snapshot(self.source,self.owner.comic_model,math.min(count,16),self.online)
     if self.snapshot.backend~="online"then self._refresh_online=false end
-    self:updateItems()
+    local signature=self:renderSignature()
+    if not signature or signature~=self._render_signature or self._render_source~=self.source then
+        self:updateItems()
+    else
+        -- Keep decoded covers, but honor cache deletion/replacement on return.
+        for kind,shelf in pairs(self.shelves or {})do
+            for i,tile in ipairs(shelf.strip or {})do
+                -- Refresh callback data too: metadata resolved for an older
+                -- preview must not outlive a cache clear or progress update.
+                tile.comic=self.snapshot[kind].items[i]
+                tile:setPath(Cover.find(tile.comic.source_id or self.source.identifier,tile.comic._id))
+            end
+        end
+    end
     if self:isTop()then self:startPreviews();UI:setDirty(self,"ui")end
+end
+function Dashboard:renderSignature()
+    local function spec(value)
+        return {text=value.text,label=value.label,enabled=value.enabled}
+    end
+    local function specs(values)
+        local out={};for i,value in ipairs(values or {})do out[i]=spec(value)end;return out
+    end
+    local ok,key=pcall(require("source.contract").serialize,{
+        snapshot=self.snapshot,width=self.width,height=self.height,font_scale=self.font_scale,
+        source=self.source and self.source.identifier,scope=self._online_scope,
+        refresh=self._refresh_online==true,failed=not not self.online_error,
+        source_spec=spec(self.source_spec),account=spec(self.account_spec),
+        sections=specs(self.section_specs),bubbles=specs(self.bubble_specs),footer=specs(self.footer_specs),
+    })
+    return ok and key or nil
 end
 function Dashboard:updateItems()
     if self._building then return end
@@ -279,6 +312,8 @@ function Dashboard:updateItems()
     end
     for i,r in ipairs(self.layout.bubbles)do add(self.bubble_buttons[i],r.x,r.y)end
     add(self.footer_widget,0,self.height-footer_h)
+    self._render_signature=self:renderSignature()
+    self._render_source=self.source
     self._building=nil
 end
 function Dashboard:paintTo(bb,x,y)

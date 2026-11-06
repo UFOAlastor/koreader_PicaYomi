@@ -120,6 +120,9 @@ end
 function AboutSettings:show()
     self._license_taps=0
     local menu
+    local function automaticText()
+        return T(_("自动检查更新：%1"),self:safeConfigGet("plugin_auto_update") and _("开启") or _("关闭"))
+    end
     local items = {
         { text = T(_("版本 %1"), self:getVersion()), callback = function()
             self:showQr(self.LINKS.plugin, _("PicaYomi GitHub 仓库链接"))
@@ -131,11 +134,10 @@ function AboutSettings:show()
         } },
         {
             text = _("自动检查插件更新"),
-            mandatory_func = function()
-                return self:safeConfigGet("plugin_auto_update") and _("开启") or _("关闭")
-            end,
             callback = function()
                 if self:safeConfigSet("plugin_auto_update",not self:safeConfigGet("plugin_auto_update")) then
+                    local automatic=menu.item_table[2]
+                    automatic.picayomi_actions[1].text=automaticText()
                     menu:updateItems()
                 end
             end,
@@ -170,9 +172,15 @@ function AboutSettings:show()
         end, _license=true },
         self:createBackButton(),
     }
+    local automatic=items[2]
+    automatic.picayomi_compact_actions=true
+    automatic.picayomi_actions={{text=automaticText(),plain=true,callback=function()automatic.callback()end}}
     local state_ok,state=pcall(require("util.plugin_update").state)
     if state_ok and state.previous and not state.pending then
-        table.insert(items,3,{text=_("恢复上一版插件"),callback=function()require("ui.settings.plugin_update").rollback()end})
+        automatic.picayomi_actions[2]={text=_("恢复上一版插件"),bold=false,callback=function()
+            self._license_taps=0
+            require("ui.settings.plugin_update").rollback()
+        end}
     end
     for _,item in ipairs(items) do
         if item.callback and not item._license then
@@ -188,13 +196,19 @@ end
 
 function AboutSettings:showFeatures()
     local items = {
-        { text = _("多源阅读: 漫画源与小说源独立管理"), enabled = false, select_enabled = false },
-        { text = _("漫画: 图片按需加载，支持条漫与横屏"), enabled = false, select_enabled = false },
-        { text = _("小说: 图文阅读，沿用 KOReader 字体与排版"), enabled = false, select_enabled = false },
-        { text = _("浏览: 推荐 / 分类 / 排行榜 / 搜索"), enabled = false, select_enabled = false },
-        { text = _("收藏与历史: 账号或本地收藏、按源保存进度"), enabled = false, select_enabled = false },
-        { text = _("缓存: 统一缓存根, 可在缓存管理查看与清理"), enabled = false, select_enabled = false },
-        { text = _("阅读器菜单: 返回 Picayomi / 上一章 / 下一章"), enabled = false, select_enabled = false },
+        { text = _("多源阅读：漫画与小说分组，按需安装源"), enabled = false, select_enabled = false },
+        { text = _("浏览作品：推荐、最新、分类与排行（依源支持）"), enabled = false, select_enabled = false },
+        { text = _("多源搜索：当前源或全部同类型源，保留搜索历史"), enabled = false, select_enabled = false },
+        { text = _("漫画阅读：按需加载，支持条漫与横屏"), enabled = false, select_enabled = false },
+        { text = _("图像增强：锐化、降噪、色调与小图放大"), enabled = false, select_enabled = false },
+        { text = _("小说阅读：正文与插图，原生字体和排版"), enabled = false, select_enabled = false },
+        { text = _("提前加载：漫画页、小说章节，可选自动下一章"), enabled = false, select_enabled = false },
+        { text = _("下载与续读：章节下载、离线阅读与阅读历史"), enabled = false, select_enabled = false },
+        { text = _("作品收藏：线上或本地收藏（依源支持）"), enabled = false, select_enabled = false },
+        { text = _("作品评论：查看全文与回复（依源支持）"), enabled = false, select_enabled = false },
+        { text = _("手势与刷新：边缘返回、列表翻屏与刷新设置"), enabled = false, select_enabled = false },
+        { text = _("存储管理：查看占用，分别清理缓存与下载"), enabled = false, select_enabled = false },
+        { text = _("插件与源更新：检查、安装与插件版本恢复"), enabled = false, select_enabled = false },
         self:createBackButton(),
     }
     local menu = self:createMenu(_("主要功能"), items)

@@ -52,7 +52,7 @@ function M.open(detail,episode,options)
                 local ok,err=pcall(Sweep.ensureBase)
                 if not ok then require("util.logger").warn("Picayomi: 恢复原生底层失败: "..tostring(err))end
             end)
-            detail.resume_episode_order=nil;detail:refresh()
+            detail.resume_episode_order=nil;detail:refresh({after_reading=true})
             detail:loadDetailsAfterReading()
         end
     end

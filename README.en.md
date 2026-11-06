@@ -2,11 +2,11 @@
 
 [简体中文](README.md)
 
-A manga and novel reader plugin for [KOReader](https://github.com/koreader/koreader), designed primarily for Kindle and other e-ink devices. It supports multiple sources, search, streaming, manga image enhancement, chapter downloads, favorites, and reading history.
+A manga and novel reader plugin for [KOReader](https://github.com/koreader/koreader), designed primarily for Kindle. Search multiple sources, read online, download chapters, and resume from favorites or history. Manga options include image enhancement, webtoon layouts, and e-ink refresh settings.
 
-**The plugin interface currently supports Chinese only.** This page is an introduction; the [Chinese README](README.md) contains the full user guide. Compatibility with devices other than Kindle needs testing.
+**The plugin interface supports Chinese only.** Other devices need testing.
 
-**Sources: [PicaYomi Sources](https://github.com/UFOAlastor/PicaYomi_Sources)** · [Default subscription](https://raw.githubusercontent.com/UFOAlastor/PicaYomi_Sources/main/packages/index.json)
+[Download](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest) · [Content sources](https://github.com/UFOAlastor/PicaYomi_Sources) · [Report an issue](https://github.com/UFOAlastor/koreader_PicaYomi/issues)
 
 ## Preview
 
@@ -14,63 +14,88 @@ A manga and novel reader plugin for [KOReader](https://github.com/koreader/korea
 |---|---|---|---|
 | ![Home](docs/screenshots/home.png) | ![Details](docs/screenshots/detail.png) | ![Manga reading](docs/screenshots/comic-reader.png) | ![Novel reading](docs/screenshots/novel-reader.png) |
 
-
 ## Installation
 
-1. Install and verify KOReader on your device.
-2. Download **`picayomi.koplugin-<version>.zip`** from the [latest release](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest).
-3. Extract it and copy the **`picayomi.koplugin`** folder into **`koreader/plugins/`**.
-4. Restart KOReader, tap the top of the screen to open the menu, select the **crossed wrench and screwdriver icon (Tools / 工具)**, then tap **Picayomi**.
+KOReader must already be installed and working on your device.
 
-The screenshot below shows the plugin entry. Other menu items may vary by device and installed plugins.
+1. Download **`picayomi.koplugin-<version>.zip`** from the [latest release](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest).
+2. Exit KOReader and connect your device by USB. Extract the ZIP and copy **`picayomi.koplugin`** into **`koreader/plugins/`**. The final path should include `koreader/plugins/picayomi.koplugin/main.lua`.
+3. Safely eject the device, start KOReader, tap the top of the screen, and select **Tools (crossed wrench and screwdriver) → Picayomi**.
 
-<img src="docs/screenshots/koreader-tools.png" alt="Picayomi entry in the KOReader Tools menu" width="360">
+Use the plugin ZIP attachment, rather than GitHub's “Source code” archives. Back up an existing installation and important data before updating.
 
-Use the plugin ZIP attached to the release. GitHub's automatically generated “Source code” archives are source snapshots.
+<img src="docs/screenshots/koreader-tools.png" alt="Picayomi in the KOReader Tools menu" width="360">
+
+### Install with an Agent
+
+Connect your device by USB and give the following prompt to an Agent that can download files and access your computer. It can perform the computer-side installation; you will still need to exit KOReader and check the plugin on your device afterward.
+
+```text
+Help me install PicaYomi on the device connected to my computer by USB.
+Official repository: https://github.com/UFOAlastor/koreader_PicaYomi
+Release: https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest
+
+Proceed with safe checks, downloading, backup, and installation:
+1. Identify the mounted device and its KOReader directory. Confirm KOReader
+   is installed and has been exited. Ask me if the device is missing,
+   multiple targets exist, or the path is uncertain. Do not guess.
+   If KOReader is missing, explain the prerequisite and stop; do not
+   jailbreak the device or change its firmware.
+2. Read the official installation and compatibility instructions. Download
+   the compatible picayomi.koplugin-<version>.zip from a stable Release,
+   not a Source code archive. Verify the published SHA256 checksum.
+   Stop if verification fails or compatibility cannot be determined.
+3. Check available space and write access. Back up the existing plugin and
+   related data to my computer and report the backup location. Preserve
+   accounts, settings, favorites, history, and downloads. Upload no device
+   files or logs.
+4. Extract into a temporary folder on the computer and inspect paths before
+   installing picayomi.koplugin into the device's koreader/plugins/.
+   Keep the old plugin for rollback; avoid extra nested directories.
+5. Verify copied files against the package, with main.lua and _meta.lua at
+   the plugin root. Report the version, target, backup, and unfinished checks.
+6. Ask me to safely eject the device, start KOReader normally, and check
+   Tools → Picayomi. File verification proves installation files are ready;
+   I must confirm that the plugin actually starts.
+Do not force a restart, delete reading data, or change other plugins.
+```
 
 ## Getting started
 
-Select a source on the home page and sign in if the source requires it. Supported sources remember your login and try to recover expired sessions; signing out removes saved credentials. Sign in once after updating sources to enable recovery. Open a title to read online or use 下载章节 (Download chapters) to save chapters for offline reading. Offline chapters are available from 已下载 (Downloaded) on the home page. Downloads pause while reading and resume when you leave the reader. Settings → Reading settings → 息屏继续下载 (Continue downloading with the screen off) is enabled by default and controls explicitly requested chapter downloads; disable it to pause until the screen wakes and the network is available. OS deep sleep may still pause downloads. Disconnection preserves queued tasks for reconnection or wake; repeated connection failures stop automatic retries and can be retried from Downloaded. Exiting PicaYomi stops all downloads and keeps saved chapters; retry incomplete chapters from Downloaded.
+1. **Sources**: open **设置 → 源管理 → 更新源（全部订阅）** (Settings → Source management → Update sources, all subscriptions) to install sources from the configured subscription, then restart KOReader. See the [source repository](https://github.com/UFOAlastor/PicaYomi_Sources) for available sources and account requirements.
+2. **Find a title**: select a manga or novel source and sign in if required. Search the current source or all sources of the same content type.
+3. **Read**: **开始** starts from the beginning; **继续** resumes. Home cover previews also open reading directly. Leaving the reader returns to details, then to the original page.
+4. **Save offline**: choose **下载章节** on the details page, then open completed chapters from **已下载** on the home page. Online caches may be cleared; explicitly download chapters you want to keep offline.
 
-The home page places source selection and account access at the top, with Settings, Search, and Exit at the bottom. Favorites, History, and Downloaded show cover previews: tap a heading to open its list, or a cover to start or resume reading. Leaving the reader shows details, then returns to the original home page. Continue Reading in a list opens the reader directly; leaving it shows details, then returns to that list. Landscape layouts reuse available space. On smaller screens, download, history, and favorite previews are hidden in that order while text actions remain visible, without scrolling or pagination.
+## Reading and settings
 
-Sources are managed under 设置 → 源管理 (Settings → Source management). The default subscription is already configured. Automatic source update checks are disabled by default; when enabled, downloading an update still requires confirmation. A successful check prevents another automatic check for six hours; manual checks remain available. Source changes take effect after restarting KOReader.
+- **Browse and search across sources**: switch between manga and novels, with recommendations, latest titles, categories, and rankings where supported. Search the current source or all sources of the same type. Results identify their source; timeouts keep collected results and allow retries. Search history is saved.
+- **Stream manga**: load pages as needed without waiting for a whole chapter. Use full-page, webtoon, or landscape layouts, with per-title layout settings and upcoming-page preloading.
+- **Enhance manga images**: choose sharpening, denoise + sharpening, darkening, or gentle contrast. Small images support edge-preserving upscaling; preloading can prepare the next page's enhancement. Enhancement is off by default, preserves downloaded originals, and may add waiting time.
+- **Read illustrated novels**: use KOReader's native fonts and typography, chapter navigation, progress restoration, and offline reading. Long-press illustrations to view and save them. Fixed-text filters are available in reading or source settings.
+- **Preload and continue chapters**: preload 0–9 manga pages or 0–5 novel chapters (defaults: 3 pages and 1 chapter; 0 disables preloading). Enable automatic next chapter for manga or novels under **设置 → 阅读设置**; it is off by default.
+- **Title details and directories**: view descriptions, authors, categories, tags, and reading progress. Tap long titles or descriptions to expand them. Cached chapters appear first; **刷新信息** refreshes metadata and chapters while preserving existing content on failure.
+- **Manage chapter downloads**: select all or unread chapters without selecting completed downloads again. Delete all downloads or only read chapters, keeping unread and unfinished chapters. Downloads pause while reading and resume afterward; disconnection keeps queued tasks, persistent failures can be retried, and screen-off downloading is configurable.
+- **Favorites and history**: use local favorites, supported online bookshelves, and reading history. Home covers start or resume reading directly. Online favorites require source and account support. Clearing caches keeps accounts, settings, favorites, history, and explicit downloads.
+- **Read title comments**: supported sources offer full comments and replies, subject to source capabilities and login requirements. Posting and chapter comments are not available.
+- **Gestures and storage**: swipe inward from an edge to go back, or left/right in the middle of lists to change pages. Edge gestures can be adjusted or disabled. **设置 → 存储管理** shows manga and novel cache and download usage, with separate cleanup controls.
 
-Check for plugin updates beside the version number in Settings → About. After confirming the download, restart KOReader normally to activate it. Enable automatic plugin update checks below the version row on the same page; they are off by default, and downloads still require confirmation. Failed or cancelled downloads leave the running version intact. An incomplete first startup triggers recovery, and About offers a previous-version recovery option when available. Manual installation remains available if your KOReader version does not support online installation.
+Lower preloading if your network or device struggles. Use full refresh to reduce e-ink ghosting. Reopen a chapter after changing manga display settings.
 
-Choose the current source or all sources of the current manga or novel type. Results appear together, ranked by relevance, after the search finishes. Timeouts preserve collected results; unfinished sources can be retried. Each result shows its source, and reading from another source keeps your home source and search return path. Search, History, and Cancel close the search input. Returning from search history or results goes back to the calling page. Every nonempty submitted keyword is saved to search history, including failed requests, timeouts, and searches with no results.
+## Updates and removal
 
-Long-press an illustration, tap **保存插图 (Save illustration)** in the image viewer, and choose a folder to save it.
+Use **设置 → 关于 → 检查更新** (Settings → About → Check for updates), then restart KOReader normally after downloading. Automatic plugin and source checks are off by default; downloads still require confirmation when enabled. Update sources under Source management.
 
-**Manga display enhancement**: choose sharpening or denoise + sharpening in Settings → Reading settings to reduce noise and emphasize text and line edges; combine it with darkening or gentle contrast. Detail enhancement and tone adjustment are off by default. Small images can be upscaled to fit the screen while preserving edges, independently of detail enhancement; large images support adaptive acceleration. With preloading enabled, PicaYomi also tries to prepare enhancement for the next page before you turn to it. Enhancement may still add waiting time, and some images may skip it when resources are limited. Gentle contrast changes grays and shadows, so you may prefer to leave it off. Downloaded originals are preserved; reopen the chapter after changing these settings.
+For manual updates, exit KOReader, back up, and replace `plugins/picayomi.koplugin` while keeping KOReader's data directory. To uninstall, remove only that plugin folder; saved reading data is not automatically deleted. See [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases) for changes and upgrade notes.
 
-Novels support illustrated novel reading, chapter navigation, typography settings, resume, offline downloads, and configurable chapter preloading (0–5 chapters, default 1). Install **Wenku8**, **BiliNovel**, or **轻之国度 (LightNovel)** from Settings → Source Management → Update Sources (all subscriptions), then restart KOReader. You can also choose Update Sources (including new sources) in the default subscription. If the plugin version is incompatible, update the plugin from [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases/latest) first. Wenku8 browsing requires a personal account; BiliNovel search may be blocked by site verification and its online bookshelf is unavailable. LightNovel supports a personal online bookshelf and read-only comments; use your own site account and follow its download access requirements. Local favorites remain available.
+## Help and limitations
 
-**Automatic next chapter**: enable **设置 → 阅读设置 → 自动下一章** (Settings → Reading settings → Automatic next chapter) to continue to the next chapter without the end-of-chapter prompt. It works for manga and novels and is off by default. If loading fails, retry using manual chapter navigation.
+Source availability, accounts, and download permissions depend on the source website. Wi-Fi connectivity does not guarantee access; large images may also exceed device memory limits.
 
-**Manga preloading**: **提前加载页数** (Pages to preload) defaults to 3 pages and supports 0–9; 0 turns it off. It downloads upcoming images and, when detail enhancement is enabled, tries to prepare the next page's enhanced image too.
-
-**Title comments**: supported sources show comments on the details page. Tap to read the full text; access to full text and replies depends on the source and login status. Copymanga supports title comments. Posting comments and chapter comments are not available.
-
-**Storage management**: **设置 → 存储管理** shows manga and novel cache and download usage. Clear caches or delete downloads separately; clearing caches keeps explicitly downloaded chapters and reading progress. Novel fixed-text filters can be edited in reading settings or the source settings and apply when you reopen a chapter.
-
-See [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases) and the [Chinese changelog](CHANGELOG.md) for version changes and upgrade notes.
-
-To update the plugin, exit KOReader, replace the plugin folder with the new release, and restart. Keep the KOReader data directory to preserve accounts, settings, favorites, history, and downloads; back up important data first.
-
-For ordinary KOReader books, enable **设置 → 操作与手势 → 原生 Reader 边缘返回** (Native Reader edge back, off by default). Swipe inward from an allowed edge to save your reading position and return to the file browser. This switch is independent; reading inside PicaYomi still returns to the work details.
-
-Chapter selection offers **Select all chapters** and **Select unread chapters** on the same row. The download deletion dialog offers **Delete all** and **Delete read**. Partially read chapters and older history without confirmed completion are preserved by Delete read.
-
-## Help and contribution
-
-- [Report a bug or request a feature](https://github.com/UFOAlastor/koreader_PicaYomi/issues): include plugin/source versions, KOReader version, device model, and steps to reproduce. Reports in Chinese or English are welcome.
-- [Contributing](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/CONTRIBUTING.md) · [Security policy](https://github.com/UFOAlastor/koreader_PicaYomi/blob/main/.github/SECURITY.md)
-- [Diagnostic logging (Chinese)](docs/DEBUG.md): release builds disable debug logging by default. Remove credentials, session data, and personal reading information before sharing logs or screenshots.
-- [Source SDK and authoring guides (Chinese)](https://github.com/UFOAlastor/PicaYomi_Sources)
+Check source updates, login status, and connectivity before retrying. [Report issues](https://github.com/UFOAlastor/koreader_PicaYomi/issues) with your device, KOReader/plugin/source versions, reproduction steps, and error message. See [diagnostic logging](docs/DEBUG.md) when needed; remove credentials, sessions, and personal reading information before sharing logs.
 
 ## License and disclaimer
 
-Project code is licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY.md) for bundled components. Thanks to [PicaComic](https://github.com/Pacalini/PicaComic), [rakuyomi](https://github.com/hanatsumi/rakuyomi), and KOReader for design references.
+Project code uses the [MIT License](LICENSE); see [third-party notices](THIRD_PARTY.md) for components. Thanks to [PicaComic](https://github.com/Pacalini/PicaComic), [rakuyomi](https://github.com/hanatsumi/rakuyomi), and KOReader for design references.
 
-This project is for learning and technical exchange. It does not provide or host manga or novel content; copyrights belong to their respective owners. Follow local laws and platform rules, support authorized releases, and use the project at your own responsibility.
+This project is for learning and technical exchange. It does not provide or host manga or novel content. Copyrights belong to their owners. Follow local laws and platform rules, support authorized releases, and use the project at your own responsibility.

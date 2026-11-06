@@ -9,6 +9,7 @@ local ConfirmBox = require("ui.common.action_style").ConfirmBox
 local Device = require("device")
 local Theme = require("ui.common.theme")
 local FrameContainer = require("ui/widget/container/framecontainer")
+local LineWidget = require("ui/widget/linewidget")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
@@ -327,8 +328,8 @@ function ComicDetail:init()
         end
         guarded("loadCover", function() self:loadCover() end)
         -- 入口已提供章节数据 (如历史页 / 渲染测试) 时不再重复拉取
-        if not self:isNovel() and (not self.episodes_data or self._chapters_stale) and not self.offline then
-            guarded("loadChapters", function() self:loadChapters(1) end)
+        if (not self.episodes_data or self._chapters_stale) and not self.offline then
+            guarded("loadChapters", function() self:loadChapters(1,nil,{background=self:isNovel()}) end)
         end
         if not self.offline then
             guarded("syncFromSource", function() self:loadDetails({background=true}) end)
@@ -338,6 +339,7 @@ end
 
 function ComicDetail:loadMissingNovelChapters(opts)
     if self:isNovel() and not self.offline and not self._closed and not self.opening_reader
+        and not self._chapter_error and not self._chapter_cancelled
         and (not self.episodes_data or self._chapters_stale) then self:loadChapters(1,nil,opts) end
 end
 
@@ -430,12 +432,12 @@ function ComicDetail:loadDetails(opts)
         if ok==false and (not background or opts.manual) then LoadingTask.showFailure(err) end
         self:loadMissingNovelChapters(opts)
     end,{
-        delay=.05,timeout=60,
+        delay=.05,timeout=60,reuse_worker=true,
         is_cancelled=cancelled,
         on_cancel=function()
             Cache.cancel(scoped_key,lease)
             reset()
-            if not self.opening_reader then self.auto_continue=nil;self:revealQuickEntry()end
+            if not self.opening_reader then self.auto_continue=nil;self:revealQuickEntry(cancelled())end
             if opts.manual and not self._closed and not self.opening_reader then self:refresh()end
         end,
         on_error=function(err)
@@ -451,21 +453,31 @@ function ComicDetail:loadDetails(opts)
 end
 
 -- 列表快捷入口先保留真实详情页作为返回目标, 只消费一次续读意图。
-function ComicDetail:revealQuickEntry()
+function ComicDetail:revealQuickEntry(skip_load)
     if not self._quick_entry then return end
-    self._quick_entry=nil;self.covers_fullscreen=true
-    if not self._closed then UIManager:setDirty(self,"ui")end
+    self._quick_entry=nil;self.auto_continue=nil;self.covers_fullscreen=true
+    if not self._closed then
+        UIManager:setDirty(self,"ui")
+        if not skip_load then self:loadDetailsAfterReading() end
+    end
 end
 
 -- Both comic and novel quick entries defer metadata. Restore it only after
 -- the reader has gone, and discard the scheduled work if the detail closes.
 function ComicDetail:loadDetailsAfterReading()
     if self._closed or self.offline or self._return_detail_timer then return end
+    local context=detailContext(self)
     self._return_detail_timer=function()
         self._return_detail_timer=nil
-        if self._closed or self.opening_reader or require('apps/reader/readerui').instance
+        if self._closed or self.opening_reader or LoadingTask.suspended or require('apps/reader/readerui').instance
+            or context and not sameDetailContext(context,detailContext(self))
             or not require('util.widget_sweep').isInStack(self) then return end
         self:loadCover()
+        -- A shortcut may end before either directory or reader preparation
+        -- finishes. Refill its visible return page once, without reopening it.
+        if not self._chapter_error and (not self.episodes_data or self._chapters_stale) then
+            self:loadChapters(1,nil,{background=true})
+        end
         self:loadDetails({background=true})
     end
     UIManager:scheduleIn(.05,self._return_detail_timer)
@@ -827,6 +839,7 @@ function ComicDetail:buildWindow()
     local per = self:perScreen()
     local start_i = (self.screen_index - 1) * per + 1
     self.rows = {}
+    local chapter_rows = {}
     local total = #(self.row_specs or {})
     for i = start_i, math.min(start_i + per - 1, total) do
         local spec = self.row_specs[i]
@@ -867,8 +880,20 @@ function ComicDetail:buildWindow()
                 expandable_text = spec.expandable_text,
             })
         end
+        local row = self.rows[#self.rows]
+        if spec.chapter_item then chapter_rows[#chapter_rows + 1] = row end
+        if spec.chapter_header then
+            local paint = row.paintTo
+            row.paintTo = function(widget, bb, x, y)
+                paint(widget, bb, x, y)
+                local size = widget:getSize()
+                local thickness = Size.border.thin
+                bb:paintRect(x, y, size.w, thickness, Blitbuffer.COLOR_BLACK)
+                bb:paintRect(x, y + size.h - thickness, size.w, thickness, Blitbuffer.COLOR_BLACK)
+            end
+        end
     end
-    ActionStyle.separateRows(self.rows)
+    ActionStyle.separateRows(chapter_rows)
     return self.rows
 end
 
@@ -920,13 +945,8 @@ function ComicDetail:createHeader(height)
     local gap = Screen:scaleBySize(12)
     local cover_w = Screen:scaleBySize(96)
     local cover_h = Screen:scaleBySize(136)
-    -- 表头内容可用宽度: 要把表头**自己的 padding 与边框**都扣掉。
-    --   FrameContainer:getSize() 会把 padding 和 bordersize 加在内容宽度之上
-    --   (它忽略传入的 width), 所以内容只能占 self.width - padding*2 - bordersize*2。
-    -- 两处用同一个预算: 之前"右侧文字"漏扣边框、"简介"漏扣边框, 表头实际宽出 4px,
-    -- 右侧边框被挤出屏幕外 (真机 1236 宽时表头实测 1240 宽)。
-    local border = Size.border.thin
-    local inner_w = self.width - (padding + border) * 2
+    -- 无外框，底部分隔线独立绘制；内容宽度只扣内边距。
+    local inner_w = self.width - padding * 2
     local text_w = inner_w - cover_w - gap
     -- 统计行与列表卡片共用同一个函数 (话数 · 页数 · 完结/连载 · 喜欢 · 编号兜底),
     -- 否则同一部作品在列表里显示"5话"、点进去表头却显示"120P"。
@@ -944,13 +964,12 @@ function ComicDetail:createHeader(height)
         description = _("暂无简介")
     end
 
-    return FrameContainer:new{
+    local content = FrameContainer:new{
         padding = padding,
         margin = 0,
-        bordersize = Size.border.thin,
+        bordersize = 0,
         background = Blitbuffer.COLOR_WHITE,
         width = self.width,
-        height = height,
         VerticalGroup:new{
             align = "left",
             HorizontalGroup:new{
@@ -1013,6 +1032,11 @@ function ComicDetail:createHeader(height)
                 return widget
             end)(),
         },
+    }
+    return VerticalGroup:new{
+        align = "left",
+        content,
+        LineWidget:new{dimen = Geom:new{w = self.width, h = Size.border.thin}},
     }
 end
 
@@ -1117,6 +1141,7 @@ function ComicDetail:buildRowSpecs()
             height = height or ROW_H,
             action_button = callback~=nil and action_rows,
             action_align = "left",
+            chapter_item = not action_rows,
         })
     end
     --- 一行多个动作 (等分宽度). 每一格都是独立可点区, 不是"整行一个回调".
@@ -1190,7 +1215,8 @@ function ComicDetail:buildRowSpecs()
 
     local count=self.episodes_data and (self.episodes_data.total or #(self.episodes_data.episodes or {}))
     local chapter_label=self:isNovel() and _("章节列表 · 共 %1 章") or _("章节列表 · 共 %1 话")
-    local summary=count and T(chapter_label,count) or (self._chapter_error and _("章节加载失败") or _("章节加载中…"))
+    local summary=count and T(chapter_label,count) or (self._chapter_error and _("章节加载失败")
+        or self._chapter_cancelled and _("章节加载已取消") or _("章节加载中…"))
     local progress=self:chapterProgressText()
     if progress then summary=summary.." · "..progress end
     if not self.offline then
@@ -1203,6 +1229,7 @@ function ComicDetail:buildRowSpecs()
     else
         add(summary)
     end
+    specs[#specs].chapter_header = true
 
     if self._chapter_error then
         add(_("章节获取失败，点此重试"),function()self:loadChapters(1,true)end)
@@ -1517,9 +1544,12 @@ function ComicDetail:loadChapters(page,force,opts)
         end
     end
     self.loading_chapters = true
+    local was_cancelled=self._chapter_cancelled
+    self._chapter_cancelled=nil
     self._chapter_refresh_manual=force==true
     local background=self.episodes_data~=nil or opts and opts.background==true
-    if force and background then self:refresh();UIManager:forceRePaint() end
+    if force and background then self:refresh();UIManager:forceRePaint()
+    elseif was_cancelled and not self._quick_entry then self:refresh() end
     local generation=source and source.sessionGeneration and source:sessionGeneration()
     local started=require("socket").gettime()
     local timeout=60
@@ -1588,12 +1618,15 @@ function ComicDetail:loadChapters(page,force,opts)
     local function on_cancel()
         -- openReader cancels the completing catalogue task too. That cleanup
         -- must not reveal the return page beneath its loading feedback.
-        if not self.opening_reader then self.auto_continue=nil;self:revealQuickEntry()end
         local manual=self._chapter_refresh_manual
         self._chapter_refresh_manual=nil
         self.loading_chapters=false
         if self._chapter_unwatch then self._chapter_unwatch();self._chapter_unwatch=nil end
-        if manual and background and not self._closed and not self.opening_reader then self:refresh() end
+        if not self._closed and not self.opening_reader then
+            self._chapter_cancelled=true
+            self.auto_continue=nil;self:revealQuickEntry(cancelled())
+            if not self.episodes_data or manual and background then self:refresh() end
+        end
     end
     -- LoadingTask 负责"显示提示 → 延迟一拍 → 取数 → 关提示", 并且**取数抛异常时也关**。
     -- 抛异常时若走不到 close(loading), 后果有两重:

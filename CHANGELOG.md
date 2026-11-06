@@ -1,5 +1,16 @@
 # 更新记录
 
+## 1.5.4 — 2026-11-06
+
+- 修复主页封面续读取消后详情信息和章节停留在加载占位的问题。
+- 小说详情与目录同时加载，减少首次打开时的串行等待，并改善详情刷新效率。
+- 取消目录加载后明确显示取消状态，支持手动重试；关闭页面后不再补载。
+- 详情封面区仅保留底部分隔线，信息行去掉灰线，章节标题上下使用黑色细线。
+- Restore title information and chapters after cancelling a home-cover reading shortcut.
+- Load novel details and chapters concurrently and reduce repeated request setup during metadata refresh.
+- Show cancelled directory loading clearly, allow retries, and discard work after leaving the page.
+- Simplify detail separators and frame the chapter heading with black horizontal rules.
+
 ## 1.5.3 — 2026-11-06
 
 - 七个源统一支持保存登录凭据和会话过期恢复，退出账号时清除；更新源后重新登录一次启用。

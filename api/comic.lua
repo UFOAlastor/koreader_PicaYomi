@@ -447,11 +447,9 @@ function ComicAPI:getAndOpenComic(comicId, order, epId, detail_menu_to_close, co
         Trapper:clear()
         if Diag.enabled then open_mark(comicId, order, "打开阅读器…") end
         local open_ok, open_err = pcall(function()
-            if doc_class then
-                ReaderUI:showReader(path, doc_class)
-            else
-                ReaderUI:showReader(path)
-            end
+            require("ui.common.loading_task").openReader(function(ready)
+                ReaderUI:showReader(path, doc_class, nil, nil, ready)
+            end, opening_text)
         end)
         if not open_ok then
             return fail("打开阅读器失败", open_err)

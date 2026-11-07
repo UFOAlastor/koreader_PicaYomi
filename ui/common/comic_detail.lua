@@ -2256,6 +2256,14 @@ function ComicDetail:showDownloadSelect()
 end
 
 function ComicDetail:goBack()
+    local notice = LoadingTask.showReturning()
+    local ok, err = pcall(self.finishBack, self)
+    LoadingTask.close(notice)
+    if not ok then error(err, 0) end
+    return true
+end
+
+function ComicDetail:finishBack()
     -- 放大层/简介全文盖在本页之上: 本页关掉时必须一起收, 否则它们会留在屏幕上 (点不掉)
     self:closeCoverZoom()
     self:closeTitleViewer()

@@ -270,9 +270,39 @@ DownloadManager.READING_CACHE_KEEP_CHAPTERS = 10
 -- @param keep_chapters: 保留几话, 缺省取 READING_CACHE_KEEP_CHAPTERS
 -- @param protect_comic_id, protect_order: 正在读的那一话, 永远不删
 -- @return: 删掉的话数
-function DownloadManager:trimReadingCache(keep_chapters, protect_comic_id, protect_order, source_id)
+function DownloadManager:trimReadingCache(keep_chapters, protect_comic_id, protect_order, source_id, options)
     keep_chapters = keep_chapters or self.READING_CACHE_KEEP_CHAPTERS
+    options = options or {}
+    local step = options.step or function() end
+    local function entries(path)
+        local iterator,dir=lfs.dir(path)
+        if options.dirs then options.dirs[dir]=true end
+        return function()
+            local name=iterator(dir)
+            if not name and options.dirs then options.dirs[dir]=nil end
+            return name
+        end
+    end
     local root = self.getCacheDir()
+    local function protected(path)
+        return options.protect and options.protect(path)
+    end
+    local function remove_tree(path, chapter)
+        step()
+        if protected(chapter) then return false end
+        local mode=lfs.symlinkattributes(path, "mode")
+        if mode=="directory" then
+            for name in entries(path) do
+                if name~="." and name~=".." then
+                    if not remove_tree(path.."/"..name,chapter) then return false end
+                end
+            end
+            step()
+            if protected(chapter) then return false end
+            return lfs.rmdir(path) ~= nil
+        elseif mode then return os.remove(path) ~= nil end
+        return true
+    end
     if lfs.attributes(root, "mode") ~= "directory" then return 0 end
 
     local protect_key
@@ -283,15 +313,17 @@ function DownloadManager:trimReadingCache(keep_chapters, protect_comic_id, prote
 
     -- 收集所有章节目录 <reading>/<comic_id>/<order>/
     local chapters = {}
-    for comic in lfs.dir(root) do
+    for comic in entries(root) do
+        step()
         -- <...>.stream.sdr 是文档设置目录, 不是章节目录 (见下面"配置项不清理")
         if comic ~= "." and comic ~= ".." and not comic:find("%.sdr$") then
             local comic_dir = root .. "/" .. comic
-            if lfs.attributes(comic_dir, "mode") == "directory" then
-                for order in lfs.dir(comic_dir) do
+            if lfs.symlinkattributes(comic_dir, "mode") == "directory" then
+                for order in entries(comic_dir) do
+                    step()
                     if order ~= "." and order ~= ".." then
                         local chap_dir = comic_dir .. "/" .. order
-                        local attr = lfs.attributes(chap_dir)
+                        local attr = lfs.symlinkattributes(chap_dir)
                         if attr and attr.mode == "directory" then
                             table.insert(chapters, {
                                 key = comic .. "/" .. order,
@@ -309,11 +341,13 @@ function DownloadManager:trimReadingCache(keep_chapters, protect_comic_id, prote
     table.sort(chapters, function(a, b) return a.mtime > b.mtime end)
     local kept, removed = 0, 0
     for _idx, chap in ipairs(chapters) do
-        if chap.key == protect_key or kept < keep_chapters then
+        step()
+        if chap.key == protect_key or protected(chap.path) or kept < keep_chapters then
             kept = kept + 1
         else
-            os.execute("rm -rf \"" .. chap.path .. "\"")
-            removed = removed + 1
+            -- A new download may have touched this chapter since enumeration.
+            if lfs.attributes(chap.path, "modification") == chap.mtime
+                and remove_tree(chap.path, chap.path) then removed = removed + 1 end
         end
     end
 
@@ -333,6 +367,65 @@ function DownloadManager:trimReadingCache(keep_chapters, protect_comic_id, prote
     return removed
 end
 
+-- One cooperative maintenance job; each turn performs at most 16 filesystem
+-- steps or 4 ms. Protection is evaluated again before deletion.
+local function schedule_maintenance(self, key, work, delay)
+    if self[key] and not self[key].done then return self[key] end
+    local UI=require("ui/uimanager")
+    local job={};self[key]=job
+    local cancelled={}
+    local dirs={}
+    local count=0
+    local now=require("socket").gettime
+    local started=now()
+    local co=coroutine.create(function()
+        return work({
+            dirs=dirs,
+            step=function()
+                if job.cancelled then error(cancelled) end
+                count=count+1
+                if count>=16 or now()-started>=0.004 then
+                    count=0;coroutine.yield();started=now()
+                    if job.cancelled then error(cancelled) end
+                end
+            end,
+        })
+    end)
+    function job:cancel() self.cancelled=true end
+    local function run()
+        if job.done then return end
+        if require("ui.common.loading_task").suspended and not job.cancelled then
+            UI:scheduleIn(1,run);return
+        end
+        started=now()
+        local ok,result=coroutine.resume(co)
+        if not ok or coroutine.status(co)=="dead" then
+            for dir in pairs(dirs) do pcall(dir.close,dir) end
+            job.done=true;self[key]=nil
+            if not ok and result~=cancelled then logger.warn("Picayomi: 阅读缓存清理失败",tostring(result)) end
+        else UI:scheduleIn(0.02,run) end
+    end
+    UI:scheduleIn(delay or 0.02,run)
+    return job
+end
+
+function DownloadManager:scheduleReadingCacheTrim(protect, keep)
+    return schedule_maintenance(self,"_reading_trim",function(options)
+        options.protect=protect
+        return self:trimReadingCache(keep or self.READING_CACHE_KEEP_CHAPTERS,nil,nil,nil,options)
+    end)
+end
+
+-- Plugin init runs for every ReaderUI/FileManager instance, not just process
+-- startup. Do not enqueue another full cache scan on every book opening.
+function DownloadManager:scheduleStartupCacheClean()
+    if self._startup_clean_started then return self._startup_clean end
+    self._startup_clean_started=true
+    return schedule_maintenance(self,"_startup_clean",function(options)
+        return self:cleanCache(nil,self.CLEAN_PROTECT_SECONDS,options)
+    end,2)
+end
+
 --- 按总量上限清理可再生缓存，下载内容不参与统计或淘汰
 --
 -- **淘汰顺序 (分层)**: 临时文件 / 封面 (1) -> 阅读页 (2) -> 数据 (3), 同层内
@@ -350,20 +443,26 @@ end
 --        会话中的清理必须传它: 用户正在读的那一页是**刚刚**写进去的, 删掉就会
 --        看到"明明刚看过却又要重新下载"。启动时那次清理不需要 (那时没人正在读)。
 -- @return 实际删掉的字节数
-function DownloadManager:cleanCache(max_size_mb, protect_seconds)
+function DownloadManager:cleanCache(max_size_mb, protect_seconds, options)
+    options=options or {}
+    local step=options.step or function()end
     max_size_mb = max_size_mb or require("util.config"):get("max_cache_size") or 500
     local max_bytes = max_size_mb * 1024 * 1024
     -- A cached chapter can be old even while it is being read. Inspect only
     -- the already-loaded reader; do not load UI modules or retain sessions.
-    local Reader = package.loaded["apps/reader/readerui"]
-    local document = Reader and Reader.instance and Reader.instance.document
-    local session = document and document.session
-    local active_prefix = session and not session.cancelled and type(session.cache_dir)=="string"
-        and (to_abs(session.cache_dir):gsub("/+$", "") .. "/")
     local novel_root=to_abs(Cache.BASE_DIR.."/novels/reading")
-    local document_path=document and document.file
-    local active_novel=type(document_path)=="string" and to_abs(document_path):match("^(.*)/[^/]+$")
-    active_novel=active_novel and active_novel:sub(1,#novel_root+1)==novel_root.."/" and active_novel.."/"
+    local function active_file(path)
+        local Reader = package.loaded["apps/reader/readerui"]
+        local document = Reader and Reader.instance and Reader.instance.document
+        local session = document and document.session
+        local active_prefix = session and not session.cancelled and type(session.cache_dir)=="string"
+            and (to_abs(session.cache_dir):gsub("/+$", "") .. "/")
+        local document_path=document and document.file
+        local active_novel=type(document_path)=="string" and to_abs(document_path):match("^(.*)/[^/]+$")
+        active_novel=active_novel and active_novel:sub(1,#novel_root+1)==novel_root.."/" and active_novel.."/"
+        return active_prefix and path:sub(1,#active_prefix)==active_prefix
+            or active_novel and path:sub(1,#active_novel)==active_novel
+    end
     local cutoff = (protect_seconds and protect_seconds > 0)
         and (os.time() - protect_seconds) or nil
 
@@ -372,11 +471,15 @@ function DownloadManager:cleanCache(max_size_mb, protect_seconds)
     local total_size = 0
     local cover_dir = to_abs(Cache.COVER_CACHE_DIR)
     local function scanDir(dir, tier)
-        if lfs.attributes(dir, "mode") ~= "directory" then return end
-        for name in lfs.dir(dir) do
+        step()
+        if lfs.symlinkattributes(dir, "mode") ~= "directory" then return end
+        local iter,handle=lfs.dir(dir)
+        if options.dirs then options.dirs[handle]=true end
+        for name in iter,handle do
+            step()
             if name ~= "." and name ~= ".." then
                 local fpath = dir .. "/" .. name
-                local attr = lfs.attributes(fpath)
+                local attr = lfs.symlinkattributes(fpath)
                 if attr and attr.mode == "file" then
                     -- 占位文件: 0 字节, 但删了 KOReader 就找不到对应进度
                     if not name:find("%.stream$") then
@@ -396,6 +499,7 @@ function DownloadManager:cleanCache(max_size_mb, protect_seconds)
                 end
             end
         end
+        if options.dirs then options.dirs[handle]=nil end
     end
 
     -- 第 1 层: 临时文件 + 封面 (丢了最不心疼, 也最小)
@@ -420,14 +524,14 @@ function DownloadManager:cleanCache(max_size_mb, protect_seconds)
     end)
     local removed = 0
     for _, file in ipairs(files) do
+        step()
         if total_size <= max_bytes * 0.8 then break end
         -- 刚写进去的 (用户正在读的那一页/那一话) 不删
-        if active_prefix and file.path:sub(1,#active_prefix)==active_prefix
-            or active_novel and file.path:sub(1,#active_novel)==active_novel
+        if active_file(file.path)
             or cutoff and file.mtime and file.mtime > cutoff then
             -- 跳过, 继续看下一个 (旧的在后面对不上就继续往后找)
         else
-            if os.remove(file.path) then
+            if lfs.attributes(file.path,"modification")==file.mtime and os.remove(file.path) then
                 total_size = total_size - file.size
                 removed = removed + file.size
                 if logger.enabled then logger.dbg("Picayomi DownloadManager: 清理缓存: " .. file.path) end

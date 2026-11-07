@@ -127,7 +127,10 @@ function M.open(prepared,options)
         if options.ready then options.ready(ui) end
     end
     local current=Reader.instance
-    if current then current:switchDocument(prepared.path,true,ready)
-    else Reader:showReader(prepared.path,nil,nil,nil,ready) end
+    require("ui.common.loading_task").openReader(function(done)
+        local function opened(ui) ready(ui);done() end
+        if current then current:switchDocument(prepared.path,true,opened)
+        else Reader:showReader(prepared.path,nil,nil,nil,opened) end
+    end)
 end
 return M

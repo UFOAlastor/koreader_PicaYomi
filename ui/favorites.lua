@@ -221,7 +221,7 @@ function Favorites:loadRemoteFavorites()
     local cached=self.current_page==1 and FavoriteActions.cachedOnline(source)
     if cached then
         self.current_page=cached.page or 1;self.total_pages=cached.pages
-        self:showFavoritesList(cached,source);return
+        self:showFavoritesList(cached,source,true);return
     end
     local page=self.current_page
     local load={};self._favorites_load=load
@@ -288,8 +288,9 @@ function Favorites:loadRemoteFavorites()
         on_error=function(err)receive(false,nil,err)end})
 end
 
-function Favorites:showFavoritesList(favorites_data,source)
+function Favorites:showFavoritesList(favorites_data,source,restore_paging)
     source = source or self:currentSource()
+    local generation=source and source.sessionGeneration and source:sessionGeneration()
     if not favorites_data.comics or #favorites_data.comics == 0 then
         UIManager:show(InfoMessage:new{
             text = source and source.content_type=="novel" and _("你还没有收藏小说") or _("你还没有收藏漫画"),
@@ -320,8 +321,19 @@ function Favorites:showFavoritesList(favorites_data,source)
         total_count = favorites_data.total,
         fetch_page = function(page)
             if self:currentSource()~=source then return false,nil,_("源已改变，请重新打开收藏")end
-            if source and source.getFavorites then return source:getFavorites(page)end
-            return self.comic_api:getFavorites(page)
+            local api=source and source.getFavorites and source or self.comic_api
+            -- Cached UI data survives a process restart; runtime continuation
+            -- state does not. Prime it once within the cancellable page task.
+            if restore_paging then
+                local ok,data,err=api:getFavorites(1)
+                if not ok then return ok,data,err end
+                if self:currentSource()~=source or generation and source:sessionGeneration()~=generation then
+                    return false,nil,_("账号或源已改变，请重新打开收藏")
+                end
+                restore_paging=false
+                if page==1 then return ok,data,err end
+            end
+            return api:getFavorites(page)
         end,
         processor = function(raw) return self.comic_model:processComicData(raw) end,
         on_select = function(comic, navigation)

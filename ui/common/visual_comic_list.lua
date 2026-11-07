@@ -864,7 +864,17 @@ end
 -- @param allow_prefetch  为 false 时不触发后台预取 (避免"补货完又预取"的连锁)
 function VisualComicList:renderWindow(allow_prefetch)
     local lv = self.list_view
-    if not lv then return end
+    if not lv or self._closed then return end
+    local top = UIManager._window_stack[#UIManager._window_stack]
+    local notice = allow_prefetch ~= false and top and top.widget == self
+        and LoadingTask.showReturning(_("翻页中…"))
+    local ok, err = pcall(self.renderWindowContent, self, allow_prefetch)
+    if notice then LoadingTask.close(notice) end
+    if not ok then error(err, 0) end
+end
+
+function VisualComicList:renderWindowContent(allow_prefetch)
+    local lv = self.list_view
     local sample
     if list_render_samples < 8 then
         list_render_samples = list_render_samples + 1

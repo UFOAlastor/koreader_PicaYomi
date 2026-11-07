@@ -71,6 +71,23 @@ function LoadingTask.showReturning(reason)
     return notice
 end
 
+-- Native reader construction is queued and can block while input is inhibited.
+-- Keep a painted snapshot notice until the host ready callback. The queued
+-- cleanup is only a failure fallback, and cannot close a later opening notice.
+function LoadingTask.openReader(open, text)
+    local notice=LoadingTask.showReturning(text or require("gettext")("正在打开阅读器…"))
+    local handle={}
+    local function close()
+        if not notice then return end
+        local old=notice;notice=nil;handles[handle]=nil
+        LoadingTask.close(old)
+    end
+    handle.cancel=close;handles[handle]=true
+    local ok,err=pcall(open,close)
+    if not ok then close();error(err,0) end
+    UIManager:nextTick(close)
+end
+
 function LoadingTask.showFailure(err)
     UIManager:show(InfoMessage:new{
         text = require("ui.common.error_message").describe(err,

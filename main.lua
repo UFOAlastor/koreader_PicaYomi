@@ -156,21 +156,9 @@ function Picayomi:init()
         -- 菜单排位: 默认会被追加到「工具」页最末, 这里提到第一项
         promoteInToolsMenu("picayomi")
 
-        -- 缓存清理: 全树递归扫描 (5 个缓存根, 每个文件一次 lfs.attributes) 会明显
-        -- 拖慢 KOReader 启动 —— 而插件 init 正好在启动路径上。改成排到事件循环,
-        -- 让界面先起来, 再在后台把该清的清掉 (清理是纯家务, 不影响任何交互)。
-        local UIManager = require("ui/uimanager")
-        UIManager:scheduleIn(2, function()
-            local clean_ok, clean_err = pcall(function()
-                local DownloadManager = require("network.download_manager")
-                DownloadManager:cleanCache(
-                    require("util.config"):get("max_cache_size") or 500
-                )
-            end)
-            if not clean_ok then
-                logger.warn("Picayomi: 后台缓存清理失败: " .. tostring(clean_err))
-            end
-        end)
+        -- init also runs for each new reader; the manager coalesces startup
+        -- maintenance and yields between bounded batches of filesystem work.
+        require("network.download_manager"):scheduleStartupCacheClean()
 
         if self.ui.name == "ReaderUI" then
             -- 在阅读器中: 注册返回菜单

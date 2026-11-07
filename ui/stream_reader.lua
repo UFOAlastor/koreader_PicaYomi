@@ -2507,23 +2507,20 @@ function StreamDocument.registerSession(session)
 
     active_sessions[session.path] = session
 
-    -- 开新一话时顺手裁剪阅读页缓存: 只留最近若干话, 当前这一话永远保留。
-    -- 放在这里 (而不是退出时) 是因为"开新一话"是天然的、低频的清理时机。
-    --
-    -- **延后 1 秒再跑。** 裁剪要遍历整个 <reading>/ 目录树、并对每一话 os.execute
-    -- 一次 `rm -rf`, 而本函数就在"点开始"到阅读器画完这段等待窗口里 —— 真机日志里
-    -- 00:51:43→45 那两秒正是它。延后之后它落在阅读器已经起来、用户在翻页的空档。
-    -- 当前话由 protect 参数保住, 所以此刻它自己的目录已经建好也不会被误删。
-    -- (先例: main.lua 启动时也是延后 cleanCache。)
+    -- Keep the initial delay, then yield between small filesystem batches.
+    -- A chapter opened while maintenance is pending must also be protected.
     if not trim_scheduled then
         trim_scheduled = true
-        local comic_id, order = session.comic_id, session.order
         UIManager:scheduleIn(StreamDocument.TRIM_DELAY, function()
             trim_scheduled = false
-            pcall(function()
-                DownloadManager:trimReadingCache(
-                    DownloadManager.READING_CACHE_KEEP_CHAPTERS,
-                    comic_id, order, session.source and session.source.identifier)
+            DownloadManager:scheduleReadingCacheTrim(function(path)
+                for _, active in pairs(active_sessions) do
+                    if not active.cancelled and path == DownloadManager.getChapterDir(
+                        active.comic_id, active.order, active.source and active.source.identifier) then
+                        return true
+                    end
+                end
+                return false
             end)
         end)
     end

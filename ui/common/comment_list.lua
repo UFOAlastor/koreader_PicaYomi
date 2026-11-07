@@ -401,6 +401,11 @@ end
 -- 必须显式带 "ui" 刷新模式 —— mode 为 nil 时 UIManager 会丢弃这次刷新
 -- (见 ComicDetail:goBack 的注释)。
 function CommentList:goBack()
+    if self._closed then return true end
+    return require("ui.common.loading_task").withNotice(nil, CommentList._goBackNow, self)
+end
+
+function CommentList:_goBackNow()
     self:closeCommentViewer()
     UIManager:close(self, "ui")
     if self.on_back then

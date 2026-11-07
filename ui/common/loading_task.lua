@@ -71,6 +71,24 @@ function LoadingTask.showReturning(reason)
     return notice
 end
 
+-- Synchronous navigation only: nested parent callbacks share one painted notice.
+-- Network continuations keep using run/background and their cancellation leases.
+local navigation_notice
+function LoadingTask.withNotice(text, fn, ...)
+    if navigation_notice then return fn(...) end
+    local notice=LoadingTask.showReturning(text)
+    navigation_notice=notice
+    local function pack(...) return {n=select('#',...),...} end
+    local result=pack(pcall(fn,...))
+    navigation_notice=nil
+    LoadingTask.close(notice)
+    if not result[1] then error(result[2],0) end
+    -- A page may have deferred background work while the notice covered it.
+    local top=UIManager._window_stack[#UIManager._window_stack]
+    if top and top.widget.onNavigationReady then top.widget:onNavigationReady() end
+    return unpack(result,2,result.n)
+end
+
 -- Native reader construction is queued and can block while input is inhibited.
 -- Keep a painted snapshot notice until the host ready callback. The queued
 -- cleanup is only a failure fallback, and cannot close a later opening notice.

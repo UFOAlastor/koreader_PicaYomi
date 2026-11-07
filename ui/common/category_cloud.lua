@@ -156,7 +156,7 @@ function Cloud:goToPage(page)
     end
     if page ~= self.page then
         self.page = page
-        self:renderPage()
+        require("ui.common.loading_task").withNotice(_("翻页中…"), self.renderPage, self)
         UIManager:setDirty(self, "ui")
     end
     return true
@@ -192,6 +192,11 @@ function Cloud:showJumpDialog()
 end
 
 function Cloud:goBack()
+    if self._closed then return true end
+    return require("ui.common.loading_task").withNotice(nil, Cloud._goBackNow, self)
+end
+
+function Cloud:_goBackNow()
     if self._closed then return true end
     UIManager:close(self, "ui")
     if self.on_back then self.on_back() end

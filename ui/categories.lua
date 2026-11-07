@@ -115,6 +115,10 @@ local function in_stack(widget)
 end
 
 function Categories:showCategoryList()
+    return require("ui.common.loading_task").withNotice(require("gettext")("加载分类…"), Categories._showCategoryListNow, self)
+end
+
+function Categories:_showCategoryListNow()
     -- 分类菜单还在栈里就只重绘: 重建会把它再压一层, 之后每次「返回」只弹掉
     -- 一层长得一模一样的菜单 (与主页/来源切换菜单踩过的是同一个坑)。
     if self.category_menu and in_stack(self.category_menu) then

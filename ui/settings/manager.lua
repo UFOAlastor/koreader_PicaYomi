@@ -34,6 +34,10 @@ function SettingsManager:init()
 end
 
 function SettingsManager:show()
+    return require("ui.common.loading_task").withNotice(_("打开设置…"), SettingsManager._showNow, self)
+end
+
+function SettingsManager:_showNow()
     self:showMainMenu()
 end
 
@@ -115,6 +119,10 @@ function SettingsManager:showMainMenu()
 end
 
 function SettingsManager:navigateTo(module_name)
+    return require("ui.common.loading_task").withNotice(require("gettext")("打开设置…"), SettingsManager._navigateToNow, self, module_name)
+end
+
+function SettingsManager:_navigateToNow(module_name)
     local module = self.modules[module_name]
     if module and module.show then
         local success, err = pcall(function()
@@ -186,12 +194,20 @@ function SettingsManager:closeCurrentMenu()
 end
 
 function SettingsManager:goBack()
+    return require("ui.common.loading_task").withNotice(nil, SettingsManager._goBackNow, self)
+end
+
+function SettingsManager:_goBackNow()
     if not self:popMenu() then
         self:close()
     end
 end
 
 function SettingsManager:close()
+    return require("ui.common.loading_task").withNotice(nil, SettingsManager._closeNow, self)
+end
+
+function SettingsManager:_closeNow()
     self:closeCurrentMenu()
     -- 清空菜单栈
     for _, menu in ipairs(self.menu_stack) do

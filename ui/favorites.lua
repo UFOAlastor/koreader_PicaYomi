@@ -134,6 +134,10 @@ end
 
 --- 本地收藏 (未登录 / 源没有网络收藏能力时的兜底)
 function Favorites:loadLocalFavorites(source)
+    return require("ui.common.loading_task").withNotice(require("gettext")("加载收藏…"), Favorites._loadLocalFavoritesNow, self, source)
+end
+
+function Favorites:_loadLocalFavoritesNow(source)
     local source_id = self:currentSourceId()
     local raw = LocalFavorites.list(source_id)
     if logger.enabled then logger.info(string.format("Picayomi 本地收藏 %s: %d 条", source_id, #raw)) end

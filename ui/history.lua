@@ -60,6 +60,10 @@ function History:show(return_callback)
 end
 
 function History:loadHistory()
+    return require("ui.common.loading_task").withNotice(require("gettext")("加载阅读历史…"), History._loadHistoryNow, self)
+end
+
+function History:_loadHistoryNow()
     local source, source_id = self:currentSource()
     self.source = source
     self.source_id = source_id

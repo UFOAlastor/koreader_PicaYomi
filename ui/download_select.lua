@@ -392,12 +392,22 @@ end
 --- 返回键/关闭后只收尾一次 (Menu 返回键会先自己 close, 再调 close_callback)
 function DownloadSelect:_menuClosed()
     if self._closed_once then return end
+    return require("ui.common.loading_task").withNotice(nil, DownloadSelect.finishMenuClose, self)
+end
+
+function DownloadSelect:finishMenuClose()
+    if self._closed_once then return end
     self._closed_once = true
     self.menu = nil
     if self.on_back then self.on_back() end
 end
 
 function DownloadSelect:goBack()
+    if self._closed_once then return end
+    return require("ui.common.loading_task").withNotice(nil, DownloadSelect._goBackNow, self)
+end
+
+function DownloadSelect:_goBackNow()
     local menu = self.menu
     if menu then
         self.menu = nil

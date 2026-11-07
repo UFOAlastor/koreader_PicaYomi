@@ -153,6 +153,11 @@ end
 --- Every submitted/closed search returns to its caller, without a new input.
 function Search:leave()
     if self._left then return end
+    return require("ui.common.loading_task").withNotice(nil, Search._leaveNow, self)
+end
+
+function Search:_leaveNow()
+    if self._left then return end
     self._left=true
     self._query_generation=(self._query_generation or 0)+1
     if self.search_task then self.search_task:cancel();self.search_task=nil end
@@ -179,6 +184,10 @@ end
 -- 选中条目时不能再触发"关菜单"的收尾 (否则栈里会多压一个一模一样的搜索框,
 -- 用户按「返回」要按好几次才退得出去) —— 由 MenuStyle.disableSelectAutoClose 统一拦住。
 function Search:showHistoryMenu(page)
+    return require("ui.common.loading_task").withNotice(require("gettext")("加载搜索历史…"), Search._showHistoryMenuNow, self, page)
+end
+
+function Search:_showHistoryMenuNow(page)
     local old_menu = self.history_menu
     local items = SearchHistory.list()
     if #items == 0 then

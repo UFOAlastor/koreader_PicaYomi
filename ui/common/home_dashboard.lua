@@ -322,8 +322,10 @@ function Dashboard:paintTo(bb,x,y)
     for i,widget in ipairs(self)do
         local p=self.positions[i];widget:paintTo(bb,x+p.x,y+p.y)
     end
-    -- A transient host dialog can cover the first scheduled load. Resume only
-    -- when this page is painted at the top again; no background polling loop.
+    self:onNavigationReady()
+end
+-- Resume the same bounded preview lease after a paint or navigation notice.
+function Dashboard:onNavigationReady()
     if self:isTop()and self._preview_epoch_started~=self._epoch and not self._start then
         self._start=function()self._start=nil;self:startPreviews()end
         UI:scheduleIn(.05,self._start)

@@ -338,6 +338,10 @@ end
 --- 回到主页 (供子页面 / 登录页调用)
 -- 已经在栈里就只重绘, 否则才新建 —— 绝不无条件 new+show
 function Home.returnToHome()
+    return require("ui.common.loading_task").withNotice(nil, Home._returnToHomeNow)
+end
+
+function Home._returnToHomeNow()
     local UIManager = require("ui/uimanager")
     local shown = Home.findShownMenu()
     if shown then
@@ -354,6 +358,10 @@ function Home.returnToHome()
 end
 
 function Home:show(return_callback)
+    return require("ui.common.loading_task").withNotice(_("加载主页…"), Home._showNow, self, return_callback)
+end
+
+function Home:_showNow(return_callback)
     require("source.extensions.updater").schedule()
     require("ui.settings.plugin_update").schedule()
     self.return_callback = return_callback
@@ -709,6 +717,10 @@ end
 -- 取数失败 / 空列表 / 用户返回时都回到这一层。**不能**无条件 show 主菜单:
 -- 类型菜单还压在栈里时, show 会把主菜单叠到它上面 (看起来像"返回跳了一层")。
 function Home:returnToListBase()
+    return require("ui.common.loading_task").withNotice(_("返回中…"), Home._returnToListBaseNow, self)
+end
+
+function Home:_returnToListBaseNow()
     if self.ranking_type_menu and self:isMenuShown(self.ranking_type_menu) then
         UIManager:setDirty(self.ranking_type_menu, "ui")
         return
@@ -834,6 +846,10 @@ end
 -- ============================================================================
 
 function Home:showSourceSwitcher()
+    return require("ui.common.loading_task").withNotice(require("gettext")("加载内容源…"), Home._showSourceSwitcherNow, self)
+end
+
+function Home:_showSourceSwitcherNow()
     local SourceRegistry = require("source.registry")
     local current_id = SourceRegistry:getCurrentId()
 
@@ -957,6 +973,10 @@ end
 
 -- A book opens reading through a retained detail page; back follows its origin.
 function Home:openHomePreview(kind,comic,online_data)
+    return require("ui.common.loading_task").withNotice(_("打开详情…"), Home._openHomePreviewNow, self, kind, comic, online_data)
+end
+
+function Home:_openHomePreviewNow(kind,comic,online_data)
     if self.source~=SourceRegistry:getCurrent()then self:ensureCurrentSource();return end
     local navigation={open_reading=true,origin_home=self.main_menu,
         source_id=comic.source_id or self.source and self.source.identifier,

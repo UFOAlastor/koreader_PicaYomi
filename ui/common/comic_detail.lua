@@ -937,7 +937,7 @@ function ComicDetail:goToScreen(n)
     if n > total then n = total end
     if n == (self.screen_index or 1) then return true end
     self.screen_index = n
-    self:renderWindow()
+    LoadingTask.withNotice(_("翻页中…"), self.renderWindow, self)
     return true
 end
 
@@ -1997,7 +1997,7 @@ end
 function ComicDetail:nextScreen()
     if (self.screen_index or 1) < self:loadedScreens() then
         self.screen_index = self.screen_index + 1
-        self:renderWindow()
+        LoadingTask.withNotice(_("翻页中…"), self.renderWindow, self)
     end
     return true
 end
@@ -2005,7 +2005,7 @@ end
 function ComicDetail:prevScreen()
     if (self.screen_index or 1) > 1 then
         self.screen_index = self.screen_index - 1
-        self:renderWindow()
+        LoadingTask.withNotice(_("翻页中…"), self.renderWindow, self)
     end
     return true
 end
@@ -2256,11 +2256,7 @@ function ComicDetail:showDownloadSelect()
 end
 
 function ComicDetail:goBack()
-    local notice = LoadingTask.showReturning()
-    local ok, err = pcall(self.finishBack, self)
-    LoadingTask.close(notice)
-    if not ok then error(err, 0) end
-    return true
+    return LoadingTask.withNotice(nil, self.finishBack, self)
 end
 
 function ComicDetail:finishBack()

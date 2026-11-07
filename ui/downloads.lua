@@ -111,6 +111,10 @@ function Downloads:entries()
 end
 
 function Downloads:show(return_callback)
+    return require("ui.common.loading_task").withNotice(require("gettext")("加载下载列表…"), Downloads._showNow, self, return_callback)
+end
+
+function Downloads:_showNow(return_callback)
     self._home_preview=nil
     self.content_type=self.content_type or "comic"
     local section=self.content_type=="novel" and _("小说下载") or _("漫画下载")
@@ -356,6 +360,10 @@ end
 
 --- 重新下载一部漫画的失败章节 (详情页/整行入口)
 function Downloads:retryChapters(comic, chapters)
+    return require("ui.common.loading_task").withNotice(require("gettext")("准备继续下载…"), Downloads._retryChaptersNow, self, comic, chapters)
+end
+
+function Downloads:_retryChaptersNow(comic, chapters)
     local queued,err,skipped = self:_enqueueRetry(comic, chapters)
     self:repaintAfterRetry()
     self:startTimer()
@@ -369,6 +377,10 @@ end
 
 --- 列表页脚「继续下载」: 把所有漫画的失败章节一起重新排队
 function Downloads:retryAllFailed()
+    return require("ui.common.loading_task").withNotice(require("gettext")("准备继续下载…"), Downloads._retryAllFailedNow, self)
+end
+
+function Downloads:_retryAllFailedNow()
     local entries = self:entries()
     local plans = {}
     for _i, e in ipairs(entries) do
@@ -711,6 +723,11 @@ function Downloads:deleteDownload(entry,progress,read_only)
 end
 
 function Downloads:onClose()
+    if self._closed then return true end
+    return require("ui.common.loading_task").withNotice(nil, Downloads._onCloseNow, self)
+end
+
+function Downloads:_onCloseNow()
     self:shutdown()
     if self.list then
         UIManager:close(self.list, "ui")

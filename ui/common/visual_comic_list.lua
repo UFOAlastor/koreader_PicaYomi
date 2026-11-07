@@ -257,6 +257,12 @@ function ComicListItem:buildContent()
                 phase=T(_("插图 %1/%2"),comic.download_prepare_current or 0,comic.download_prepare_total or 0)
             elseif comic.download_prepare_stage=="commit"or comic.download_prepare_stage=="ready"then phase=_("保存章节…")end
         end
+    elseif download_state=="downloading" then
+        phase=_("下载中…")
+        if (comic.download_retryable or 0)>0 then
+            phase=phase.." · "..T(_("待重试 %1"),comic.download_retryable)
+        end
+    elseif (comic.download_pending or 0)>0 then phase=_("排队中…")
     elseif (comic.download_failed or 0)>0 then phase=T(_("失败 %1"),comic.download_failed)
     elseif (comic.download_retryable or 0)>0 then phase=T(_("待重试 %1"),comic.download_retryable)
     elseif download_state=="partial"or download_state=="failed"then phase=_("部分未完成")end
@@ -406,7 +412,7 @@ function ComicListItem:select(continue_reading)
     -- before navigating so it cannot rebuild a hidden list or compete for RAM.
     if self.list_ui and self.list_ui.fetch_task then self.list_ui.fetch_task:cancel() end
     if self.on_select then
-        self.on_select(self.comic, {
+        LoadingTask.withNotice(_("打开详情…"), self.on_select, self.comic, {
             continue_reading = continue_reading == true,
             origin_list = self.list_ui,
             source_id = self:itemSourceId(),
@@ -1700,6 +1706,11 @@ function VisualComicList:onPageBackward()
 end
 
 function VisualComicList:goBack()
+    if self._closed then return true end
+    return require("ui.common.loading_task").withNotice(nil, VisualComicList._goBackNow, self)
+end
+
+function VisualComicList:_goBackNow()
     if self.on_back then
         self.on_back(self)
     else

@@ -82,8 +82,6 @@ function ReadingSettings:show()
                 self:setLandscapeRotation()
             end,
         },
-        {text=_("小说阅读沿用 KOReader 设置"),enabled=false,select_enabled=false},
-        {text=_("阅读时打开顶部菜单调整字体与排版"),enabled=false,select_enabled=false},
         {text=_("提前加载章节数"),mandatory_func=function()
             local n=self:safeConfigGet("novel_prefetch_chapters",1)
             return n==0 and _("关闭")or T(_("%1 章"),n)

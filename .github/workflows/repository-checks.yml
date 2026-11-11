@@ -18,9 +18,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install LuaJIT
+      - name: Build pinned LuaJIT
+        env:
+          LUAJIT_REVISION: c6ffc141a8762b41703f9287d63d93622a13dd8f
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends luajit
+          set -euo pipefail
+          pica_jit_root="$RUNNER_TEMP/picayomi-luajit"
+          git init "$pica_jit_root/source"
+          git -C "$pica_jit_root/source" remote add origin https://github.com/LuaJIT/LuaJIT.git
+          git -C "$pica_jit_root/source" -c credential.helper= fetch --depth=1 origin "$LUAJIT_REVISION"
+          git -C "$pica_jit_root/source" checkout --detach FETCH_HEAD
+          test "$(git -C "$pica_jit_root/source" rev-parse HEAD)" = "$LUAJIT_REVISION"
+          make -C "$pica_jit_root/source" -j2 BUILDMODE=static PREFIX="$pica_jit_root/prefix"
+          make -C "$pica_jit_root/source" install BUILDMODE=static PREFIX="$pica_jit_root/prefix"
+          "$pica_jit_root/prefix/bin/luajit" -v
+          echo "$pica_jit_root/prefix/bin" >> "$GITHUB_PATH"
       - name: Check release snapshot
-        run: python3 .github/scripts/check_repository.py
+        run: |
+          test "$(command -v luajit)" = "$RUNNER_TEMP/picayomi-luajit/prefix/bin/luajit"
+          python3 .github/scripts/check_repository.py

@@ -256,10 +256,10 @@ function ComicAPI:prepareComic(comicId, order, context)
         -- (2026-10-18)。崩溃前的可用内存只能靠这一行留下来。
         if Diag.enabled then pcall(Diag.snapshot,"准备打开阅读器") end
         if Diag.enabled then open_mark(comicId, order, "取图片列表…") end
-        local ok, fetched = source:getAllChapterImages(comicId, order)
+        local ok, fetched, fetch_error = source:getAllChapterImages(comicId, order)
         if not ok or not fetched or not fetched.images or #fetched.images == 0 then
             if Diag.enabled then open_mark(comicId, order, "图片列表失败") end
-            return false, nil, nil, nil, "获取漫画图片失败"
+            return false, nil, nil, nil, (type(fetch_error)=="string" and fetch_error~="" and fetch_error) or "获取漫画图片失败"
         end
         images_result = fetched
         if Diag.enabled then open_mark(comicId, order,

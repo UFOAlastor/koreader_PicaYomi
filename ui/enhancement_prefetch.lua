@@ -61,6 +61,9 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation,ready_event)
     -- The host also hints previous/farther pages. They must not cancel or
     -- overwrite the single next-page job/evidence owned by this document.
     if doc._last_render_page and n~=doc._last_render_page+1 then return end
+    if doc._enhancement_backoff_until and clock()<doc._enhancement_backoff_until then
+        observe(doc,n,'cooldown');return
+    end
     local spec,key=doc:prefetch_spec(n,zoom,rotation,gamma,saturation)
     if not spec then M.cancel(doc);observe(doc,n,key or 'ineligible');return end
     local current=doc._enhancement_job
@@ -142,6 +145,7 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation,ready_event)
             -- No event yield between revalidation and ownership transfer.
             doc:accept_prefetch(n,spec,bb,result.bypass)
             job.observation.bitmap=setmetatable({bb},{__mode='v'})
+            doc._enhancement_failures=0;doc._enhancement_backoff_until=nil
             observe(doc,n,'ready',job);count(doc,'ready')
             clean()
         end,{admit=function()
@@ -157,6 +161,22 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation,ready_event)
                 local message=tostring(err)
                 local reason=message:find('memory',1,true) or message:find('budget',1,true) or message:find('内存',1,true)
                 local kind=reason and 'memory' or message:find('超时',1,true) and 'timeout' or 'worker_error'
+                -- Stable categories only: worker messages can contain private paths/URLs.
+                local detail=kind
+                if message:find('No space left',1,true) then detail='storage_full'
+                elseif message:find('Permission denied',1,true) then detail='storage_permission'
+                elseif message:find('raster',1,true) then detail='raster_output'
+                elseif message:find('fork',1,true) then detail='process_start' end
+                local delay=0
+                if kind~='memory' then
+                    doc._enhancement_failures=math.min(6,(doc._enhancement_failures or 0)+1)
+                    if doc._enhancement_failures>=3 then
+                        delay=math.min(30,5*2^(doc._enhancement_failures-3))
+                        doc._enhancement_backoff_until=clock()+delay
+                    end
+                end
+                require('util.logger').warn('Picayomi: enhancement failed',
+                    'reason',detail,'page',n,'cooldown_s',delay)
                 local previous=doc._prediction_refusal
                 doc._prediction_refusal={key=key,kind=kind,budget=spec.budget or 0,
                     required=tonumber(message:match('speculation_budget:(%d+)')),

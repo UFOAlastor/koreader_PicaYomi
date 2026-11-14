@@ -83,7 +83,7 @@ function R.wrap(source,ctx,hooks)
   if flight==attempt then
    flight=nil;next_attempt=ctx.clock.now()+R.COOLDOWN
    if ok then revision=revision+1
-   elseif err and err.code~='network' and err.code~='timeout' and err.code~='rate_limited' and err.code~='cancelled' then forget()end
+   elseif err and (err.code=='auth_required' or err.code=='auth_expired') then forget()end
   end
   return ok,data,err
  end

@@ -226,6 +226,16 @@ function pump(ch)
     if next(pauses) or not ch.transport then ch.driving=false; return end
     ch.driving = false
 
+    -- Retain the original subscription during one bounded retry. Keeping the
+    -- delay on the job lets cancellation and reading pauses own its lifetime.
+    for _,job in pairs(ch.jobs) do
+        if job.retry_at and now() >= job.retry_at then
+            job.retry_at = nil
+            local started = pcall(ch.transport.start, ch.transport, job.request)
+            if not started then release_channel(ch); return end
+        end
+    end
+
     -- 必须 pcall 兜住整段: 这里抛异常的话, ch.jobs 里挂着的条目永远不会被释放,
     -- 于是那张封面 (连同它挂着的回调闭包) **永久**留在 inflight 里 ——
     -- 之后每次对它调 ensure 都只会往那个死条目上追加回调, 这张封面再也加载不出来。
@@ -241,7 +251,6 @@ function pump(ch)
 
     for _i, item in ipairs(res.done or {}) do
         local job = ch.jobs[item.page]
-        ch.jobs[item.page] = nil
         if job then
             if Diag.enabled then
                 Diag.mark(string.format("cover source=%s ok=%s elapsed=%.2fs bytes=%d",
@@ -249,8 +258,14 @@ function pump(ch)
                     tonumber(item.elapsed) or 0,tonumber(item.size) or 0))
             end
             if item.ok then
+                ch.jobs[item.page] = nil
                 pcall(job.finish, item.path)
+            elseif item.retryable == true and (item.code == "network" or item.code == "timeout")
+                    and not job.retried then
+                job.retried = true
+                job.retry_at = now() + 0.75
             else
+                ch.jobs[item.page] = nil
                 logger.warn("Picayomi CoverCache: 封面下载失败 " ..
                     tostring(job.title) .. ": " .. tostring(item.err))
                 pcall(job.finish, nil)
@@ -261,7 +276,7 @@ function pump(ch)
     if next(pauses) or not ch.transport then return end
     if res.idle and not next(ch.jobs) and #waiting>0 then
         release_channel(ch)
-    elseif res.idle then
+    elseif res.idle and not next(ch.jobs) then
         -- 空闲就准备关掉通道: fork 出来的子进程不该常驻。
         -- 用户补完一屏封面后可能马上进阅读页, 那时列表页的下载子进程若还在,
         -- 就是"阅读时多一个进程抢内存" —— 真机 OOM 排查里踩过这一类。
@@ -310,7 +325,9 @@ function CoverCache.pause(nonblocking)
         local ids={}
         for id in pairs(ch.jobs) do ids[#ids+1]=id end
         table.sort(ids)
-        for _,id in ipairs(ids) do ch.transport:start(ch.jobs[id].request) end
+        for _,id in ipairs(ids) do
+            if not ch.jobs[id].retry_at then ch.transport:start(ch.jobs[id].request) end
+        end
         kick(ch)
     end
 end

@@ -16,11 +16,13 @@
 - Fewer repeated subscription checks, with stale dialogs prevented from starting downloads.
 - Faster aggregate search ranking and improved favorites refresh and detail layout.
 
-
 ## 1.5.12 — 2026-11-14
 
 - 封面加载遇到暂时网络错误时自动补试，改善多个来源的偶发缺图。
 - 修复自动恢复登录遇到响应异常后丢失保存凭据的问题。
+
+- Retry temporary cover-loading failures to reduce intermittent missing covers across sources.
+- Keep saved credentials when automatic sign-in recovery encounters an unexpected response.
 
 ## 1.5.11 — 2026-11-13
 

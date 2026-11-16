@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline static checks for the public plugin snapshot; no Lua is executed."""
 import hashlib
+from datetime import date
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -33,6 +34,40 @@ def require(condition, message):
 def version(value):
     require(isinstance(value, str) and SEMVER.fullmatch(value), "invalid version")
     return tuple(map(int, value.split(".")))
+
+
+def release_notes(changelog, value):
+    version(value)
+    headings = list(re.finditer(r"^## " + re.escape(value) + r"(?:[ \t].*)?$", changelog, re.M))
+    require(len(headings) == 1, "release notes require exactly one version heading")
+    heading = headings[0]
+    stamp = re.fullmatch(r"## " + re.escape(value) + r" — (\d{4}-\d{2}-\d{2})", heading[0])
+    require(stamp, "release heading must use version and ISO date")
+    try:
+        date.fromisoformat(stamp[1])
+    except ValueError:
+        raise CheckFailure("invalid release date")
+    remaining = changelog[heading.end():]
+    boundary = re.search(r"^## ", remaining, re.M)
+    body = (remaining[:boundary.start()] if boundary else remaining).strip()
+    groups = body.split("\n\n")
+    require(len(groups) == 2, "release notes require Chinese then English bullet groups")
+    chinese, english = (group.splitlines() for group in groups)
+    require(chinese and len(chinese) == len(english), "release translation counts must match")
+    for line in chinese:
+        require(line.startswith("- ") and line.endswith("。") and re.search(r"[\u4e00-\u9fff]", line),
+                "invalid Chinese release bullet")
+    for line in english:
+        require(re.match(r"^- [A-Za-z]", line) and line.endswith("."), "invalid English release bullet")
+    return {"title": "PicaYomi " + value, "tag": "v" + value,
+            "date": stamp[1], "body": body + "\n"}
+
+
+def check_release_notes(actual, expected):
+    require(actual.get("tag_name") == expected["tag"], "release tag differs from changelog")
+    require(actual.get("name") == expected["title"], "release title differs from canonical title")
+    require((actual.get("body") or "").replace("\r\n", "\n") == expected["body"],
+            "release body differs from changelog")
 
 
 def files():
@@ -133,6 +168,7 @@ def main():
     match = re.search(r'\bversion\s*=\s*"([^"\n]+)"', (ROOT / "_meta.lua").read_text())
     require(match, "missing plugin version")
     host = version(match[1])
+    release_notes((ROOT / "CHANGELOG.md").read_text(), match[1])
     gate = (ROOT / "util/log_config.lua").read_text()
     require(re.fullmatch(r"\s*return\s*\{\s*debug\s*=\s*false\s*,\s*allow_env\s*=\s*false\s*\}\s*",
                          re.sub(r"--[^\n]*", "", gate)), "release debug gate must be disabled")

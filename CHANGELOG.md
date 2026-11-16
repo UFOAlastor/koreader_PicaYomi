@@ -63,6 +63,7 @@
 - 优化在线收藏、历史条目打开和漫画续读准备，保留取消与重试。
 - 调整关于页更新选项布局，并更新主要功能介绍。
 - 下载删除选项改为“删除整本”，明确只删除当前作品。
+
 - Improve reading-return feedback and reduce repeated work when restoring details and home.
 - Improve online favorites, history entry loading and comic resume preparation while preserving cancellation and retry.
 - Refine About-page update controls and refresh the feature overview.

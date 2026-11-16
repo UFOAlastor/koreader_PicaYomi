@@ -82,6 +82,12 @@ def compile_lua(path, label):
 
 def check_bundles(host):
     folder = ROOT / "bundled"
+    if host >= (1, 6, 0):
+        require(not folder.exists(), "source-free release must not contain bundled sources")
+        require((ROOT / "source/extensions/default_repository.lua").is_file(),
+                "source-free release requires the default subscription")
+        return 0
+    require((folder / "index.json").is_file(), "missing bundled source inventory")
     index = json.loads((folder / "index.json").read_text())
     expected = {"picacg", "jm", "htcomic"}
     require(isinstance(index, list) and len(index) == len(expected), "invalid bundle inventory")

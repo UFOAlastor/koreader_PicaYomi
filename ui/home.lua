@@ -564,9 +564,7 @@ function Home:showRanking()
             UIManager:close(self.ranking_type_menu, "ui")
             self.ranking_type_menu = nil
         end
-        if not self:isMenuShown(self.main_menu) then
-            UIManager:show(self.main_menu, "ui")
-        end
+        self:returnToListBase()
     end
 
     table.insert(item_table, {
@@ -724,6 +722,12 @@ function Home:_returnToListBaseNow()
     if self.ranking_type_menu and self:isMenuShown(self.ranking_type_menu) then
         UIManager:setDirty(self.ranking_type_menu, "ui")
         return
+    end
+    -- Repainting retained controls does not re-read the local shelves. Refresh
+    -- their snapshot on arrival, while preserving the original home window.
+    local labels_changed = self:refreshFavoritesLabel()
+    if not labels_changed and self.main_menu.refreshData then
+        self.main_menu:refreshData(false)
     end
     if self:isMenuShown(self.main_menu) then
         UIManager:setDirty(self.main_menu, "ui")

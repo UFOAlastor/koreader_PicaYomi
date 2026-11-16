@@ -304,10 +304,10 @@ function Sources:repository(url)
             items[#items+1]={text="源："..chosen.name.." "..chosen.version.." · "..status.label,
                 enabled=status.code=="update",callback=function()
                     self:perform(function()
+                        local added=m.state.sources[id]==nil
                         local ok,err=m:installFromRepository(url,id)
-                        return ok,err,true
-                    end,
-                        "更新成功："..chosen.name.." "..chosen.version.."，重启 KOReader 后生效")
+                        return ok,ok and ((added and "新增成功：" or "更新成功：")..chosen.name.." "..chosen.version.."，重启 KOReader 后生效") or err,true
+                    end)
                 end}
         end
     end
@@ -337,14 +337,15 @@ function Sources:updateRepository(url)
     m:acceptRepository(url,preview,not repo.public_key and true or nil)
     local results=m:updateAll(url,false,true)
     local lines={}
-    local stats={updated=0,failed=0,skipped=0}
+    local stats={updated=0,added=0,failed=0,skipped=0}
     local attempted={}
     for _,r in ipairs(results) do
         attempted[r.id]=true
         local rec=m.state.sources[r.id]
         if r.ok then
-            stats.updated=stats.updated+1
-            lines[#lines+1]="更新成功："..(rec and rec.manifest.name or r.id).." "..(rec and rec.manifest.version or "")
+            local kind=r.added and "added" or "updated"
+            stats[kind]=stats[kind]+1
+            lines[#lines+1]=(r.added and "新增成功：" or "更新成功：")..(rec and rec.manifest.name or r.id).." "..(rec and rec.manifest.version or "")
         else
             stats.failed=stats.failed+1
             lines[#lines+1]="更新失败："..r.id.." — "..require("ui.common.error_message").describe(r.error)
@@ -364,7 +365,7 @@ function Sources:updateRepository(url)
     if #results==0 then
         return true,#lines>0 and ("本次未安装或更新源\n"..table.concat(lines,"\n")) or "源已是最新，无需更新",false,stats
     end
-    return true,table.concat(lines,"\n"),stats.updated>0,stats
+    return true,table.concat(lines,"\n"),stats.updated+stats.added>0,stats
 end
 
 function Sources:updateSubscriptions(redraw)
@@ -377,7 +378,7 @@ function Sources:updateRepositories()
     for url in pairs(m.state.repositories) do urls[#urls+1]=url end
     table.sort(urls)
     if #urls==0 then return true,"还没有订阅，请到源管理中添加订阅" end
-    local updated,failed,skipped,repo_failed=0,0,0,0
+    local updated,added,failed,skipped,repo_failed=0,0,0,0,0
     local lines={}
     local unchanged={}
     for _,url in ipairs(urls) do
@@ -385,7 +386,8 @@ function Sources:updateRepositories()
         local ok,result,message,_,stats=pcall(self.updateRepository,self,url)
         if ok and result then
             updated=updated+stats.updated;failed=failed+stats.failed;skipped=skipped+stats.skipped
-            if stats.updated==0 and stats.failed==0 and stats.skipped==0 and message=="源已是最新，无需更新" then
+            added=added+(stats.added or 0)
+            if stats.updated==0 and (stats.added or 0)==0 and stats.failed==0 and stats.skipped==0 and message=="源已是最新，无需更新" then
                 unchanged[#unchanged+1]=name
             else lines[#lines+1]=name.."："..message end
         else
@@ -396,12 +398,12 @@ function Sources:updateRepositories()
     if #unchanged>0 then
         lines[#lines+1]=(#unchanged==1 and unchanged[1].."：" or #unchanged.." 个订阅均：").."源已是最新，无需更新"
     end
-    local summary="已检查 "..#urls.." 个订阅，更新 "..updated.." 个源"
+    local summary="已检查 "..#urls.." 个订阅，新增 "..added.." 个源，更新 "..updated.." 个源"
     if failed>0 then summary=summary.."，更新失败 "..failed.." 个源" end
     if skipped>0 then summary=summary.."，跳过 "..skipped.." 个源" end
     if repo_failed>0 then summary=summary.."，检查失败 "..repo_failed.." 个订阅" end
-    if updated>0 then summary=summary.."\n成功更新的源将在重启 KOReader 后生效" end
-    return true,summary.."\n\n"..table.concat(lines,"\n"),updated>0
+    if updated+added>0 then summary=summary.."\n源变更将在重启 KOReader 后生效" end
+    return true,summary.."\n\n"..table.concat(lines,"\n"),updated+added>0
 end
 
 return Sources

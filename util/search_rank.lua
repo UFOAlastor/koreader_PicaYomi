@@ -2,8 +2,12 @@
 local M={}
 local function normalized(value)
     if type(value)~="string" then return "" end
+    value=value:sub(1,4096)
+    if not value:find("[\128-\255]")then
+        return (value:lower():gsub("%s+"," "):gsub("^ ",""):gsub(" $",""))
+    end
     local out={}
-    for c in value:sub(1,4096):gmatch("[%z\1-\127\194-\244][\128-\191]*")do
+    for c in value:gmatch("[%z\1-\127\194-\244][\128-\191]*")do
         local a,b,d=c:byte(1,3)
         if a==239 and b and d then
             local cp=(a-224)*4096+(b-128)*64+d-128
@@ -46,29 +50,50 @@ function M.rank(items,query,current_source,yield_fn)
     local terms,unique={},{}
     for _,term in ipairs(tokens(q,chars==1))do if not unique[term]then unique[term]=true;terms[#terms+1]=term end end
     local docs,df,lengths={},{},{0,0,0}
+    -- Only this invocation owns the cache. Repeated short author/alias fields
+    -- share immutable query statistics; titles and long fields are not retained.
+    local field_cache,cache_count={},0
+    local function field(raw,cacheable)
+        local cached=cacheable and field_cache[raw]
+        if cached then return cached end
+        local value=normalized(raw)
+        local ts=tokens(value,chars==1);local tf={}
+        for _,term in ipairs(ts)do if unique[term]then tf[term]=(tf[term]or 0)+1 end end
+        local result={tf=tf,len=#ts,value=value}
+        if cacheable and #raw<=256 and cache_count<64 then
+            field_cache[raw]=result;cache_count=cache_count+1
+        end
+        return result
+    end
     for i,item in ipairs(items)do
-        local fields={normalized(item.title),normalized(text(item.author)),normalized(text(item.aliases or item.alias))}
-        local doc={item=item,fields={},exact=q~=""and fields[1]==q,contains=q~=""and fields[1]:find(q,1,true)~=nil}
+        local title=field(type(item.title)=="string"and item.title or "",false)
+        local doc={item=item,fields={title,field(text(item.author),true),field(text(item.aliases or item.alias),true)},
+            exact=q~=""and title.value==q,contains=q~=""and title.value:find(q,1,true)~=nil}
         local seen={}
-        for f,value in ipairs(fields)do
-            local ts=tokens(value,chars==1);local tf={}
-            for _,term in ipairs(ts)do if unique[term]then tf[term]=(tf[term]or 0)+1;seen[term]=true end end
-            doc.fields[f]={tf=tf,len=#ts};lengths[f]=lengths[f]+#ts
+        for f,value in ipairs(doc.fields)do
+            lengths[f]=lengths[f]+value.len
+            for term in pairs(value.tf)do seen[term]=true end
         end
         for term in pairs(seen)do df[term]=(df[term]or 0)+1 end
         docs[i]=doc
         if yield_fn and i%64==0 then yield_fn()end
     end
     local n=#docs;local weights={3,1,1.5}
+    -- Corpus statistics do not change between documents or fields.
+    local idfs,averages={},{}
+    for _,term in ipairs(terms)do
+        idfs[term]=math.log(1+(n-(df[term]or 0)+.5)/((df[term]or 0)+.5))
+    end
+    for f,length in ipairs(lengths)do averages[f]=math.max(1,length/math.max(1,n))end
     for i,doc in ipairs(docs)do
         local score=doc.contains and 8 or 0
         for f,field in ipairs(doc.fields)do
-            local avg=lengths[f]/math.max(1,n)
+            local avg=averages[f]
             for _,term in ipairs(terms)do
                 local tf=field.tf[term]or 0
                 if tf>0 then
-                    local idf=math.log(1+(n-(df[term]or 0)+.5)/((df[term]or 0)+.5))
-                    score=score+weights[f]*idf*(tf*2.2)/(tf+1.2*(.25+.75*field.len/math.max(1,avg)))
+                    local idf=idfs[term]
+                    score=score+weights[f]*idf*(tf*2.2)/(tf+1.2*(.25+.75*field.len/avg))
                 end
             end
         end

@@ -18,7 +18,7 @@ local function version()
     local path=assert(debug.getinfo(1,"S").source:match("^@(.*)/[^/]+$"))
     return assert(dofile(path.."/../../_meta.lua").version)
 end
-local function blank() return {format=2,sources={},repositories={},removed={},archives={},auto_check=false,update_policy_version=1} end
+local function blank() return {format=2,sources={},repositories={},removed={},archives={},auto_check=true,onboarding_pending=true,update_policy_version=1} end
 function Manager.new(opts)
     opts=opts or {}
     local self=setmetatable({root=opts.root or os.getenv("PICAYOMI_EXTENSION_DATA_DIR") or require("datastorage"):getDataDir().."/picayomi/extensions",
@@ -212,6 +212,12 @@ function Manager:install(raw,origin,expected,trust_legacy)
     local repo=self.state.repositories[origin]
     local bootstrap=trust_legacy==true and not old and origin=="local" and expected==nil
         and Bundle.legacy(m.id) and m.identity_policy=="legacy" and m.publisher_id=="picayomi.legacy"
+    local config=self.default_repository
+    local trusted_bootstrap=not old and expected and repo and config and origin==config.url
+        and repo.public_key==config.public_key and repo.publisher_id==config.publisher_id
+        and config.publishers[m.id]==m.publisher_id and Catalog.owns(repo,m.id,m.publisher_id)
+        and Bundle.legacy(m.id) and m.identity_policy=="legacy" and m.publisher_id=="picayomi.legacy"
+    bootstrap=bootstrap or trusted_bootstrap
     if expected then
         for _,k in ipairs({"id","version","api_version","min_app_version","max_app_version","publisher_id"}) do
             assert(expected[k]==m[k],"源包与订阅条目不符: "..k)
@@ -567,11 +573,12 @@ end
 function Manager:updateAll(url,automatic,include_new)
     local results={}; local repo=assert(self.state.repositories[url],"订阅不存在"); local seen={}
     for _,entry in ipairs(repo.sources) do
-        if not seen[entry.id] and (self.state.sources[entry.id] or include_new and not automatic and not Bundle.legacy(entry.id)) then
+        if not seen[entry.id] and (self.state.sources[entry.id] or include_new and (not automatic or not self.state.removed[entry.id])) then
             seen[entry.id]=true
             if self:candidate(url,entry.id).code=="update" then
+                local added=self.state.sources[entry.id]==nil
                 local ok,err=pcall(self.installFromRepository,self,url,entry.id,automatic)
-                results[#results+1]={id=entry.id,ok=ok,error=not ok and tostring(err) or nil}
+                results[#results+1]={id=entry.id,ok=ok,added=added,error=not ok and tostring(err) or nil}
             end
         end
     end
@@ -580,13 +587,24 @@ end
 function Manager:updateCount()
     local seen={}; local count=0
     for url,repo in pairs(self.state.repositories) do
+        local visited={}
         for _,entry in ipairs(repo.sources) do
-            if self.state.sources[entry.id] and not seen[entry.id] and self:candidate(url,entry.id).code=="update" then
-                seen[entry.id]=true; count=count+1
+            if not visited[entry.id] and not self.state.removed[entry.id] and not seen[entry.id] then
+                visited[entry.id]=true
+                if self:candidate(url,entry.id).code=="update" then seen[entry.id]=true;count=count+1 end
             end
         end
     end
     return count
+end
+function Manager:needsOnboarding()
+    local config=self.default_repository
+    return not self.state_error and self.state.onboarding_pending==true
+        and not next(self.state.sources) and not next(self.state.removed)
+        and config and self.state.repositories[config.url]~=nil
+end
+function Manager:completeOnboarding()
+    local state=copy(self.state);state.onboarding_pending=false;return self:_save(state)
 end
 function Manager:due(url,force)
     local r=self.state.repositories[url]; if not r then return false end

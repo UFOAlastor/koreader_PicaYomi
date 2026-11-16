@@ -12,7 +12,7 @@ local ConfigDefaults = {}
 -- 已全部清理; 新增配置项时必须同时接上读取方, 否则
 -- test/static_check.py 的"设置项接线检查"会直接报错。
 ConfigDefaults.defaults = {
-    plugin_auto_update = false,
+    plugin_auto_update = true,
     -- 阅读设置
     -- 图片质量: source/picacg/api.lua 的 preferOriginal() 读取。
     -- 只有两档 (原图 / 缩略图), 因为源那边就只有两档 (见 ui/settings/reading.lua)。

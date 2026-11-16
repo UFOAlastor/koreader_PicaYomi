@@ -36,8 +36,10 @@ local function candidates(m)
     local out,seen={},{}
     local urls={};for url in pairs(m.state.repositories) do urls[#urls+1]=url end;table.sort(urls)
     for _,url in ipairs(urls) do
+        local visited={}
         for _,entry in ipairs(m.state.repositories[url].sources or {}) do
-            if not seen[entry.id] and m.state.sources[entry.id] then
+            if not visited[entry.id] and not seen[entry.id] and not m.state.removed[entry.id] then
+                visited[entry.id]=true
                 local c=m:candidate(url,entry.id)
                 if c.code=="update" and c.entry and U.asked[entry.id]~=c.entry.sha256 then
                     seen[entry.id]=true
@@ -55,7 +57,7 @@ local function notify(m)
     if not idle() or U.prompt or U.downloading then return end
     local available=m.state.auto_check and candidates(m) or {}
     if #available>0 then
-        local lines={"发现 "..#available.." 个源有更新，是否下载？"}
+        local lines={"发现 "..#available.." 个源可安装或更新，是否下载？"}
         for _,r in ipairs(available) do
             lines[#lines+1]=r.name.." "..r.version
             U.asked[r.id]=r.hash
@@ -65,13 +67,14 @@ local function notify(m)
             lines[#lines+1]="另有 "..waiting.." 个源已下载，等待重启。"
             U.acknowledgePending()
         end
-        local prompt=require("ui.common.action_style").ConfirmBox:new{
+        local generation=U.generation
+        local prompt
+        prompt=require("ui.common.action_style").ConfirmBox:new{
             is_picayomi_page=true,text=table.concat(lines,"\n"),
             ok_text="下载更新",cancel_text="稍后",
             ok_callback=function()
-                if U.downloading then return end
+                if U.downloading or U.prompt~=prompt or generation~=U.generation then return end
                 U.downloading=true
-                local generation=U.generation
                 UI:nextTick(function()
                     if generation~=U.generation then U.downloading=false;return end
                     local ok,err=pcall(U.downloadUpdates,m,available)
@@ -81,6 +84,11 @@ local function notify(m)
         }
         local close=prompt.onCloseWidget
         prompt.onCloseWidget=function(self)
+            if U.stopping then
+                for _,r in ipairs(available) do
+                    if U.asked[r.id]==r.hash then U.asked[r.id]=nil end
+                end
+            end
             if U.prompt==self then U.prompt=nil end
             close(self);refresh()
         end
@@ -92,6 +100,7 @@ local function notify(m)
     local count=unnotified(m)
     if count>0 then
         local text="已下载 "..#pending(m).." 个源更新，重启 KOReader 后生效"
+        if U.result then text=text.."\n"..U.result;U.result=nil end
         if U.error then text=text.."\n另有更新未完成："..require("ui.common.error_message").describe(U.error) end
         U.error=nil
         require("ui.settings.sources"):offerRestart(text)
@@ -108,15 +117,18 @@ function U.downloadUpdates(m,available)
         message="正在下载源更新…\n点击取消",async=true,delay=.1,timeout=180,
         set_busy=function(value) U.downloading=value;if not value then U.download=nil end end,
         fetch=function()
-            local stats={updated=0,failed=0,skipped=0}
+            local stats={updated=0,failed=0,skipped=0,lines={}}
             for _,r in ipairs(available) do
                 local status=m:candidate(r.url,r.id)
                 if status.code=="latest" then stats.skipped=stats.skipped+1
                 elseif status.code~="update" or not status.entry or status.entry.sha256~=r.hash then
                     stats.failed=stats.failed+1;stats.error="可用版本已变化，请重新检查"
                 else
+                    local added=m.state.sources[r.id]==nil
                     local ok,err=pcall(m.installFromRepository,m,r.url,r.id,false)
-                    if ok then stats.updated=stats.updated+1
+                    if ok then
+                        stats.updated=stats.updated+1
+                        stats.lines[#stats.lines+1]=(added and "新增成功：" or "更新成功：")..r.name.." "..r.version
                     else stats.failed=stats.failed+1;stats.error=err end
                 end
             end
@@ -130,6 +142,7 @@ function U.downloadUpdates(m,available)
             if logger.enabled then logger.info("Picayomi source check: download result",ok,stats and stats.updated or 0,stats and stats.failed or 0) end
             U.error=ok and stats and stats.error or err
             if ok and stats and stats.updated>0 then
+                U.result=table.concat(stats.lines,"\n")
                 for _,r in ipairs(pending(m)) do U.notified[r.id]=nil end
             elseif ok and stats and stats.failed==0 and #pending(m)==0 then
                 require("ui.settings.sources"):showInfo("源已是最新，无需下载")
@@ -149,11 +162,45 @@ function U.cancel()
     if U.prompt then UI:close(U.prompt,"ui") end
     U.stopping=false
 end
+local function onboarding(m)
+    if not m:needsOnboarding() then return false end
+    if U.onboarding_deferred then return true end
+    if not idle() then return true end
+    local generation=U.generation
+    local chosen=false
+    local prompt
+    prompt=require("ui.common.action_style").ConfirmBox:new{
+        is_picayomi_page=true,text="是否安装内置订阅的漫画和小说源？",
+        ok_text="安装",cancel_text="稍后",
+        ok_callback=function()
+            if chosen or U.prompt~=prompt or generation~=U.generation then return end
+            chosen=true
+            UI:nextTick(function()
+                if generation~=U.generation then return end
+                local ok,err=pcall(function()
+                    m:completeOnboarding()
+                    require("ui.settings.sources"):updateSubscriptions()
+                end)
+                if not ok then require("ui.common.loading_task").showFailure(err) end
+            end)
+        end,
+    }
+    local close=prompt.onCloseWidget
+    prompt.onCloseWidget=function(self)
+        if not chosen and not U.stopping then U.onboarding_deferred=true end
+        if U.prompt==self then U.prompt=nil end
+        close(self);refresh()
+    end
+    U.prompt=prompt;UI:show(prompt,"full");refresh()
+    return true
+end
 function U.schedule()
     if U.stopping then return end
     local m=manager()
     if U.start or U.prompt or U.downloading or U.task and not U.task.done then return end
-    local notices=unnotified(m)>0 or U.error~=nil
+    local first=m:needsOnboarding()
+    if first and U.onboarding_deferred then return end
+    local notices=first or unnotified(m)>0 or U.error~=nil
         or m.state.auto_check and #candidates(m)>0
     if not notices and not due(m) then return end
     local generation=U.generation
@@ -161,6 +208,8 @@ function U.schedule()
         U.start=nil
         if generation~=U.generation or not shownHome() then return end
         local current=manager()
+        if current:needsOnboarding() and not idle() then U.start=start;UI:scheduleIn(1,start);return end
+        if onboarding(current) then return end
         if not current.state.auto_check or not due(current) then notify(current);return end
         local ok,network=pcall(require,"ui/network/manager")
         if not ok or not network:isConnected() then

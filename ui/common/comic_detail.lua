@@ -670,7 +670,7 @@ end
 
 --- 点简介区 -> 弹全文 (可滚动)
 --
--- 简介区只有两行, 长简介会被省略号截断; 站点上的简介动辄几百字, 没有出口的话
+-- 简介区只有一行, 长简介会被省略号截断; 站点上的简介动辄几百字, 没有出口的话
 -- 用户永远看不到全文。
 function ComicDetail:descriptionText()
     local comic = self.comic or {}
@@ -750,10 +750,10 @@ function ComicDetail:coverWidget()
     }
 end
 
---- 简介区固定显示两行 (用户要求), 点一下看全文
--- 表头高度 = 封面高 + 上下内边距 + 简介两行 + 与封面的间距
+--- 简介区使用紧凑单行预览，点一下看全文。
+-- TextBoxWidget 会保留实际字体的一整行，避免裁切或多留空行。
 local HEADER_PADDING = 10
-local DESC_LINES = 2
+local DESC_LINES = 1
 local DESC_LINE_H = 24
 
 --- 构建整页内容
@@ -1025,7 +1025,7 @@ function ComicDetail:createHeader(height)
                 },
             },
             (function()
-                -- 两行 + 省略号; 点一下弹全文 (TextViewer)。
+                -- 单行 + 省略号; 点一下弹全文 (TextViewer)。
                 -- 记下实例: tap 走本页的兜底消费者 (onTapConsume), 按绘制区命中,
                 -- 与封面放大同一套做法 (子控件先收到事件, 这里只处理落空的 tap)。
                 local widget = TextBoxWidget:new{
@@ -1034,6 +1034,7 @@ function ComicDetail:createHeader(height)
                     face = Theme.face("info"),
                     width = inner_w,
                     height = Screen:scaleBySize(DESC_LINE_H * DESC_LINES),
+                    height_adjust = true,
                     height_overflow_show_ellipsis = true,
                 }
                 self.description_widget = widget

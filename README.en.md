@@ -62,7 +62,7 @@ Do not force a restart, delete reading data, or change other plugins.
 
 ## Getting started
 
-1. **Sources**: open **设置 → 源管理 → 更新源（全部订阅）** (Settings → Source management → Update sources, all subscriptions) to install sources from the configured subscription, then restart KOReader. See the [source repository](https://github.com/UFOAlastor/PicaYomi_Sources) for available sources and account requirements.
+1. **Sources**: choose **安装** (Install) on first entry to get manga and novel sources from the built-in subscription, then restart KOReader. If you choose **稍后** (Later), use **设置 → 源管理 → 更新源（全部订阅）** to install them when ready. See the [source repository](https://github.com/UFOAlastor/PicaYomi_Sources) for available sources and account requirements.
 2. **Find a title**: select a manga or novel source and sign in if required. Search the current source or all sources of the same content type.
 3. **Read**: **开始** starts from the beginning; **继续** resumes. Home cover previews also open reading directly. Leaving the reader returns to details, then to the original page.
 4. **Save offline**: choose **下载章节** on the details page, then open completed chapters from **已下载** on the home page. Online caches may be cleared; explicitly download chapters you want to keep offline.
@@ -84,7 +84,7 @@ Lower preloading if your network or device struggles. Use full refresh to reduce
 
 ## Updates and removal
 
-Use **设置 → 关于 → 检查更新** (Settings → About → Check for updates), then restart KOReader normally after downloading. Automatic plugin and source checks are off by default; downloads still require confirmation when enabled. Update sources under Source management.
+Use **设置 → 关于 → 检查更新** (Settings → About → Check for updates), then restart KOReader normally after downloading. Automatic plugin and source checks are on by default; existing settings are preserved. Confirming an update also installs newly available subscribed sources without individual selection. Update sources under Source management.
 
 For manual updates, exit KOReader, back up, and replace `plugins/picayomi.koplugin` while keeping KOReader's data directory. To uninstall, remove only that plugin folder; saved reading data is not automatically deleted. See [Releases](https://github.com/UFOAlastor/koreader_PicaYomi/releases) for changes and upgrade notes.
 

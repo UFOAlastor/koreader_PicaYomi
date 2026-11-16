@@ -113,6 +113,7 @@ local function idle()
  return Home and top and top.widget==Home.findShownMenu() and (not Queue or not Queue.instance():is_active())
 end
 function U.schedule()
+ if require('source.extensions.manager').instance():needsOnboarding()then return end
  if U.busy or U.prompt or U.transition or not Core.autoEnabled()then return end
  local ok,state=pcall(Core.state)
  local now=os.time()

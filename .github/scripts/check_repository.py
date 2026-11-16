@@ -51,8 +51,9 @@ def release_notes(changelog, value):
     boundary = re.search(r"^## ", remaining, re.M)
     body = (remaining[:boundary.start()] if boundary else remaining).strip()
     groups = body.split("\n\n")
-    require(len(groups) == 2, "release notes require Chinese then English bullet groups")
-    chinese, english = (group.splitlines() for group in groups)
+    require(len(groups) == 4 and groups[0] == "### 中文" and groups[2] == "### English",
+            "release notes require Chinese then English headings and bullet groups")
+    chinese, english = groups[1].splitlines(), groups[3].splitlines()
     require(chinese and len(chinese) == len(english), "release translation counts must match")
     for line in chinese:
         require(line.startswith("- ") and line.endswith("。") and re.search(r"[\u4e00-\u9fff]", line),
@@ -61,6 +62,20 @@ def release_notes(changelog, value):
         require(re.match(r"^- [A-Za-z]", line) and line.endswith("."), "invalid English release bullet")
     return {"title": "PicaYomi " + value, "tag": "v" + value,
             "date": stamp[1], "body": body + "\n"}
+
+
+def check_changelog(changelog, current):
+    headings = re.findall(r"^## (.*)$", changelog, re.M)
+    require(headings, "missing release headings")
+    versions = []
+    for heading in headings:
+        match = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+) — \d{4}-\d{2}-\d{2}", heading)
+        require(match, "invalid changelog version heading")
+        versions.append(match[1])
+        release_notes(changelog, match[1])
+    require(versions[0] == current, "current release must be first in changelog")
+    require(len(versions) == len(set(versions)), "duplicate changelog release")
+    return versions
 
 
 def check_release_notes(actual, expected):
@@ -168,7 +183,7 @@ def main():
     match = re.search(r'\bversion\s*=\s*"([^"\n]+)"', (ROOT / "_meta.lua").read_text())
     require(match, "missing plugin version")
     host = version(match[1])
-    release_notes((ROOT / "CHANGELOG.md").read_text(), match[1])
+    check_changelog((ROOT / "CHANGELOG.md").read_text(), match[1])
     gate = (ROOT / "util/log_config.lua").read_text()
     require(re.fullmatch(r"\s*return\s*\{\s*debug\s*=\s*false\s*,\s*allow_env\s*=\s*false\s*\}\s*",
                          re.sub(r"--[^\n]*", "", gate)), "release debug gate must be disabled")

@@ -406,7 +406,7 @@ function Picayomi:onResume()
     require("ui.enhancement_prefetch").setSuspended(false)
     updateBackgroundState(self)
     q:kick(was_asleep)
-    if not self._picayomi_offline then require("source.extensions.updater").schedule();require("ui.settings.plugin_update").schedule()end
+    if not self._picayomi_offline then require("source.extensions.updater").schedule(true);require("ui.settings.plugin_update").schedule()end
 end
 function Picayomi:onNetworkDisconnected()
     self._picayomi_offline=true
@@ -426,7 +426,7 @@ function Picayomi:onNetworkConnected()
     updateBackgroundState(self)
     q:kick()
     if not self._picayomi_asleep and not self._picayomi_offline then
-        require("source.extensions.updater").schedule();require("ui.settings.plugin_update").schedule()
+        require("source.extensions.updater").schedule(true);require("ui.settings.plugin_update").schedule()
     end
 end
 

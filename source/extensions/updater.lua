@@ -1,6 +1,8 @@
 -- Check catalogs on idle home. Package downloads require an explicit choice.
 local U={generation=0,asked={},notified={}}
 local UI=require("ui/uimanager")
+local Async=require("network.async_task")
+local clock=require("socket").gettime
 local logger=require("util.logger")
 local function shownHome()
     local Home=package.loaded["ui.home"]
@@ -153,6 +155,7 @@ function U.downloadUpdates(m,available)
     }
 end
 function U.cancel()
+    U.recovery_until=nil
     U.stopping=true
     U.generation=U.generation+1
     if U.start then UI:unschedule(U.start);U.start=nil end
@@ -194,8 +197,46 @@ local function onboarding(m)
     U.prompt=prompt;UI:show(prompt,"full");refresh()
     return true
 end
-function U.schedule()
+local function wakeTransportError(reason)
+    local detail=tostring(reason):match("HTTPS 获取失败: ([^\n]+)$")
+    return detail=="temporary failure in name resolution" or detail=="Network is unreachable"
+end
+
+local function refreshDue(m,recovering,network)
+    local urls,retry={},{}
+    local errors={}
+    for url in pairs(m.state.repositories) do urls[#urls+1]=url end
+    table.sort(urls)
+    for _,url in ipairs(urls) do
+        if m:due(url) then
+            local ok,reason=pcall(m.refreshRepository,m,url)
+            if not ok then
+                local repo=m.state.repositories[url]
+                if recovering and wakeTransportError(reason) and repo then
+                    retry[url]=repo
+                else errors[#errors+1]=reason end
+            end
+        end
+    end
+    -- A durable failure cooldown already exists for each entry. Permit only
+    -- this task to retry its own first failure, once, after the link settles.
+    if #errors>0 or not next(retry) then return errors end
+    Async.wait(5)
+    for _,url in ipairs(urls) do
+        if not m.state.auto_check or not idle() or not network:isConnected() then break end
+        local repo=m.state.repositories[url]
+        local failed=retry[url]
+        if failed and repo and repo.last_attempt==failed.last_attempt and repo.failures==failed.failures then
+            local ok,reason=pcall(m.refreshRepository,m,url)
+            if not ok then errors[#errors+1]=reason end
+        end
+    end
+    return errors
+end
+
+function U.schedule(network_restored)
     if U.stopping then return end
+    if network_restored then U.recovery_until=clock()+10 end
     local m=manager()
     if U.start or U.prompt or U.downloading or U.task and not U.task.done then return end
     local first=m:needsOnboarding()
@@ -220,15 +261,10 @@ function U.schedule()
         if not idle() then U.start=start;UI:scheduleIn(1,start);return end
         if current.state_error then return end
         if logger.enabled then logger.info("Picayomi source check: catalog start") end
-        U.task=require("network.async_task").run(function()
-            local errors={}
-            local urls={};for url in pairs(current.state.repositories) do urls[#urls+1]=url end;table.sort(urls)
-            for _,url in ipairs(urls) do
-                if current:due(url) then
-                    local refreshed,reason=pcall(current.refreshRepository,current,url)
-                    if not refreshed then errors[#errors+1]=reason end
-                end
-            end
+        local recovering=U.recovery_until and clock()<=U.recovery_until
+        U.recovery_until=nil
+        U.task=Async.run(function()
+            local errors=refreshDue(current,recovering,network)
             U.error=errors[1]
             if logger.enabled then logger.info("Picayomi source check: catalog done",#candidates(current),#errors) end
             notify(current)

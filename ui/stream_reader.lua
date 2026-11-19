@@ -2257,6 +2257,9 @@ function StreamDocument:renderPage(pageno, rect, zoom, rotation, gamma, saturati
     raw.render_request=previous
     raw:releaseSub()
     if not ok then error(tile) end
+    -- registerSession rewrites the chapter placeholder on open, changing the
+    -- host tile key. Keep rendered pages in RAM like prefetched pages.
+    if tile then tile.persistent=false end
     require("ui.enhancement_prefetch").used(self,pageno,tile)
     if tile and not bypass_before and enhancement_bypassed(self.session,pageno) then
         local cached_key=old_hash

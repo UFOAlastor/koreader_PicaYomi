@@ -1,5 +1,17 @@
 # 更新记录
 
+## 1.6.2 — 2026-11-20
+
+### 中文
+
+- 唤醒或重新联网后，源订阅自动检查遇到短暂网络故障时会稍后重试一次，减少刚亮屏就出现的失败提示。
+- 减少退出漫画时的缓存写入，缩短返回上一页的等待。
+
+### English
+
+- Automatic source checks retry once after a temporary network failure on wake or reconnection, reducing error messages just after wake-up.
+- Reduced cache writes when closing a comic so you can return to the previous screen sooner.
+
 ## 1.6.1 — 2026-11-20
 
 ### 中文

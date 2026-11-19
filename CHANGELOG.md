@@ -1,5 +1,17 @@
 # 更新记录
 
+## 1.6.1 — 2026-11-20
+
+### 中文
+
+- 修复取消聚合搜索后仍可能向下一个来源发出请求的问题。
+- 减少聚合搜索翻查多页结果时的重复调度和清理。
+
+### English
+
+- Fixed an issue where cancelling a search across sources could still send a request to the next source.
+- Reduced redundant work when searching through multiple pages of results across sources.
+
 ## 1.6.0 — 2026-11-16
 
 ### 中文

@@ -63,9 +63,32 @@ function M:start(opts)
     self.active=true;self.tasks={};self.timers={};self.running=0
     local deadline=clock()+(opts.batch_timeout or M.BATCH_TIMEOUT)
     local pump,finish
-    local function schedule(delay,fn)
-        self.timers[fn]=true
-        UI:scheduleIn(delay,fn)
+    -- Each timer owns one host callback, even across many pages.
+    local function timer(fn)
+        local function fire()
+            if not self.timers[fire] then return end
+            self.timers[fire]=nil
+            fn()
+        end
+        return fire
+    end
+    local function schedule(delay,callback)
+        if self.active and not self.timers[callback] then
+            self.timers[callback]=true
+            UI:scheduleIn(delay,callback)
+        end
+    end
+    local pump_timer=timer(function() pump() end)
+    local page_timers={}
+    local function wait_page(state,delay)
+        state.status="waiting"
+        if not page_timers[state] then
+            page_timers[state]=timer(function()
+                state.status="queued"
+                pump()
+            end)
+        end
+        schedule(delay,page_timers[state])
     end
     local function progress()if opts.on_progress then opts.on_progress(self:summary())end end
     local function stop_tasks()
@@ -89,7 +112,7 @@ function M:start(opts)
         if not self.active or state.status~="running"then return end
         state.task=nil;state.status="failed"
         state.error=require("ui.common.error_message").describe(err)
-        self.running=self.running-1;progress();schedule(0,pump)
+        self.running=self.running-1;progress();schedule(0,pump_timer)
     end
     local function receive(state,data)
         assert(type(data)=="table"and type(data.comics)=="table","搜索结果格式错误")
@@ -122,15 +145,12 @@ function M:start(opts)
         if not self.active then return end
         if clock()>=deadline then finish(true);return end
         for _,source in ipairs(self.sources)do
-            if self.running>=(opts.concurrency or M.CONCURRENCY)then break end
+            if not self.active or self.running>=(opts.concurrency or M.CONCURRENCY)then break end
             local state=self.states[source.identifier]
             if state.status=="queued"and last_request[source] then
                 local remaining=(opts.page_delay or M.PAGE_DELAY)-(clock()-last_request[source])
                 if remaining>0 then
-                    state.status="waiting"
-                    schedule(remaining,function()
-                        if self.active then state.status="queued";pump()end
-                    end)
+                    wait_page(state,remaining)
                 end
             end
             if state.status=="queued"then
@@ -146,14 +166,10 @@ function M:start(opts)
                     local more=receive(state,data)
                     state.task=nil;self.running=self.running-1
                     if more then
-                        state.page=state.page+1;state.status="waiting"
-                        local ready=function()
-                            if not self.active then return end
-                            state.status="queued";pump()
-                        end
-                        schedule(opts.page_delay or M.PAGE_DELAY,ready)
+                        state.page=state.page+1
+                        wait_page(state,opts.page_delay or M.PAGE_DELAY)
                     else state.status="complete"end
-                    progress();schedule(0,pump)
+                    progress();schedule(0,pump_timer)
                 end,{timeout=math.min(opts.request_timeout or M.REQUEST_TIMEOUT,deadline-clock()),
                     on_error=function(err)failed(state,err)end,
                     on_cancel=function()failed(state,"搜索已中断，请重试")end})
@@ -163,8 +179,8 @@ function M:start(opts)
         end
         if self:summary().finished==#self.sources then finish(false)end
     end
-    schedule(opts.batch_timeout or M.BATCH_TIMEOUT,function()finish(true)end)
-    progress();schedule(0,pump)
+    schedule(opts.batch_timeout or M.BATCH_TIMEOUT,timer(function() finish(true) end))
+    progress();schedule(0,pump_timer)
     return self
 end
 return M

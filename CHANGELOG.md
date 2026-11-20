@@ -1,5 +1,15 @@
 # 更新记录
 
+## 1.6.3 — 2026-11-20
+
+### 中文
+
+- 黑白阅读时，部分原先因内存不足而打不开的大幅渐进式 JPEG 漫画现在可以按原图清晰度显示，无需切换缩略图。
+
+### English
+
+- In grayscale reading, some large progressive JPEG comic pages that previously ran out of memory can now open at their original resolution without switching to thumbnails.
+
 ## 1.6.2 — 2026-11-20
 
 ### 中文

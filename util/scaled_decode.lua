@@ -540,7 +540,7 @@ function ScaledDecode.region_input(path, budget)
     return read_all(path)
 end
 
-function ScaledDecode.decode_region(path, format, y, height, color, budget, display_zoom, input)
+function ScaledDecode.decode_region(path, format, y, height, color, budget, display_zoom, input, luma_state)
     local output, full_output, handle, lib, cfg, raw_height
     local ok, result, origin, source_height, capacity = pcall(function()
         budget = tonumber(budget) or 0
@@ -555,7 +555,8 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
         if data and #data~=size then return nil,"read_failed" end
         if not data then data,err=read_all(path) end
         if not data then return nil, err end
-        local width, full_h, workspace
+        local data_length = #data
+        local width, full_h, workspace, original_minimum
         if format == "jpeg" then
             lib, err = load_turbojpeg()
             if not lib then return nil, err end
@@ -574,8 +575,38 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             -- when cropped. Enforce the codec's own limit before decompressing.
             workspace = width * 256 + 1024 * 1024
             if lib.tj3Get(handle, lib.TJPARAM_PROGRESSIVE) ~= 0 then
-                workspace = ScaledDecode.jpeg_workspace(width,full_h,lib.tj3Get(handle,lib.TJPARAM_SUBSAMP),
-                    lib.tj3Get(handle,lib.TJPARAM_COLORSPACE),data)
+                local sampling = lib.tj3Get(handle,lib.TJPARAM_SUBSAMP)
+                local colorspace = lib.tj3Get(handle,lib.TJPARAM_COLORSPACE)
+                workspace = ScaledDecode.jpeg_workspace(width,full_h,sampling,colorspace,data)
+                -- A smaller strip cannot remove progressive coefficient planes.
+                -- Only foreground grayscale draws may project, once per paint.
+                if luma_state and not color and sampling == 0 and colorspace == 1
+                        and (luma_state.projected or input_bytes + workspace > budget) then
+                    local gray_work = ScaledDecode.jpeg_workspace(width,full_h,3,2)
+                    local spare = budget - input_bytes
+                    if spare < gray_work then
+                        -- Recheck when one gray plane could fit. Waiting for all
+                        -- three planes would miss a real foreground recovery.
+                        return nil,"memory_budget",input_bytes+gray_work+width,0
+                    end
+                    if luma_state.source ~= data then
+                        luma_state.source, luma_state.projected, luma_state.tried = data, nil, false
+                    end
+                    if not luma_state.tried then
+                        luma_state.projected = require("util.jpeg_luma").prepare(data,width,full_h,spare)
+                        luma_state.tried = true
+                    end
+                    local gray = luma_state.projected
+                    if gray then
+                        original_minimum = input_bytes + workspace + width
+                        data, data_length = gray, #gray
+                        input_bytes = input_bytes + data_length
+                        if lib.tj3DecompressHeader(handle,data,data_length) < 0 then
+                            return nil,"memory_budget",original_minimum,0
+                        end
+                        workspace = gray_work
+                    end
+                end
             end
             y = math.max(0, math.floor(y))
             height = math.min(math.ceil(height), full_h-y)
@@ -597,7 +628,12 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             local full_fallback=lib.tj3Get(handle,lib.TJPARAM_SUBSAMP)<0
             local full_scaled_h=math.ceil(full_h/denom)
             local bytes = width * (height+(full_fallback and full_scaled_h or 0)) * (color and 3 or 1)
-            if input_bytes + bytes + workspace > budget then return nil, "memory_budget",input_bytes+bytes+workspace end
+            if input_bytes + bytes + workspace > budget then
+                local minimum = input_bytes + workspace + width * (color and 3 or 1)
+                    * (1 + (full_fallback and full_scaled_h or 0))
+                if minimum > budget then return nil,"memory_budget",minimum,0 end
+                return nil,"memory_budget",input_bytes+bytes+workspace
+            end
             local limit = math.floor((budget-input_bytes-bytes)/1048576)
             if limit < 1 or lib.tj3Set(handle, lib.TJPARAM_MAXMEMORY, limit) < 0 then return nil, "memory_budget" end
             if not full_fallback and crop(handle, ffi.new("picayomi_tjregion", {0,y,width,height})) < 0 then
@@ -606,10 +642,15 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             output = BB.new(width,height,color and BB.TYPE_BBRGB24 or BB.TYPE_BB8)
             if full_fallback then full_output=BB.new(width,full_scaled_h,color and BB.TYPE_BBRGB24 or BB.TYPE_BB8) end
             local decoded=full_output or output
-            if lib.tj3Decompress8(handle,data,#data,ffi.cast("unsigned char*",decoded.data),decoded.stride,
+            if lib.tj3Decompress8(handle,data,data_length,ffi.cast("unsigned char*",decoded.data),decoded.stride,
                     color and lib.TJPF_RGB or lib.TJPF_GRAY) < 0 then
                 local message=ffi.string(lib.tj3GetErrorStr(handle)):lower()
-                return nil, message:find("memory",1,true) and "memory_budget" or "corrupt_image"
+                if message:find("memory",1,true) or message:find("backing store",1,true) then
+                    return nil,"memory_budget"
+                end
+                -- A derived stream failure must not invalidate the on-disk source.
+                if original_minimum then return nil,"memory_budget",original_minimum,0 end
+                return nil,"corrupt_image"
             end
             if full_output then output:blitFrom(full_output,0,0,0,y,width,height) end
             y=y*denom

@@ -130,6 +130,7 @@ function M.draw(o,dc,target,ox,oy)
         region_input,err,required=read_input(path,decode_budget())
         if not region_input then failed(err,required,true);return end
     end
+    local luma_state = o.foreground and format=="jpeg" and not color and {} or nil
     local native_batch=th
     while row<th do
         -- Each native strip restarts the codec. Start with the visible
@@ -159,7 +160,7 @@ function M.draw(o,dc,target,ox,oy)
                         return range(lines)
                     end)
             else
-                local bb,start,raw_height,fit=region_decode(format,y0,height,decode_budget(),zoom,region_input)
+                local bb,start,raw_height,fit=region_decode(format,y0,height,decode_budget(),zoom,region_input,luma_state)
                 if bb then success,required=draw_strip(bb,start,raw_height,lines);reason="memory_budget"
                 else reason=start;required=raw_height;capacity=fit end
             end
@@ -170,6 +171,7 @@ function M.draw(o,dc,target,ox,oy)
                 return M.draw(o,dc,target,ox,oy)
             end
             if success or reason~="memory_budget" or lines==1 then break end
+            if format=="jpeg" and capacity==0 then break end
             if plan_webp and not o.post_plan and capacity then
                 -- Find the largest display strip whose complete source halo
                 -- fits, including WebP's even crop origin. This search does

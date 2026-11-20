@@ -3,12 +3,12 @@ local Blitbuffer=require('ffi/blitbuffer')
 local PngDecode=require('util.png_decode')
 local ScaledDecode=require('util.scaled_decode')
 local M={}
-function M.decode(path,sz,color,post_plan,format,y,height,current_budget,zoom,region_input)
+function M.decode(path,sz,color,post_plan,format,y,height,current_budget,zoom,region_input,luma_state)
         local function read_piece(py,ph,remaining,pzoom)
             if format=="png" then return PngDecode.decode_region(path,py,ph,color,remaining) end
             -- WebP region scaling depends on crop height; resample below
             -- in page coordinates so pressure crops keep identical pixels.
-            return ScaledDecode.decode_region(path,format,py,ph,color,remaining,format=="webp" and 1 or pzoom,region_input)
+            return ScaledDecode.decode_region(path,format,py,ph,color,remaining,format=="webp" and 1 or pzoom,region_input,luma_state)
         end
         if not post_plan then return read_piece(y,height,current_budget,zoom) end
         -- Assemble only the requested output strip. Source rows may be far

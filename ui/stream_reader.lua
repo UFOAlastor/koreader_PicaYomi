@@ -1635,7 +1635,7 @@ function MultiImageDoc:openPage(n)
                 end
             end
             local ok=require("util.image_region_render").draw({
-                size=sz,path=path,format=format,color=color,
+                size=sz,path=path,format=format,color=color,foreground=true,
                 mode=self.session.display_enhancement,adaptive=self.session.adaptive_enhancement,
                 budget=decode_budget,filter=filter_source,decode=region_decode,
                 bypassed=function()return enhancement_bypassed(self.session,n)end,

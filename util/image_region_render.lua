@@ -130,7 +130,7 @@ function M.draw(o,dc,target,ox,oy)
         region_input,err,required=read_input(path,decode_budget())
         if not region_input then failed(err,required,true);return end
     end
-    local luma_state = o.foreground and format=="jpeg" and not color and {} or nil
+    local luma_state = o.foreground and format=="jpeg" and {timings=timings} or nil
     local native_batch=th
     while row<th do
         -- Each native strip restarts the codec. Start with the visible

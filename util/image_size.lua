@@ -239,4 +239,14 @@ function ImageSize.jpeg_coefficients(data,width,height)
     if w==width and h==height then return bytes end
 end
 
+-- Speculative JPEG decoding retains all components. A short or unfamiliar
+-- header supplies no lower bound; the worker still enforces its own budget.
+function ImageSize.jpeg_prediction_minimum(path,size)
+    local f=io.open(path,"rb")
+    if not f then return end
+    local data=f:read(4096)
+    f:close()
+    return ImageSize.jpeg_coefficients(data,size.w,size.h)
+end
+
 return ImageSize

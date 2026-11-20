@@ -1586,7 +1586,7 @@ function MultiImageDoc:openPage(n)
             getUsedBBox=function() return 0.01,0.01,-0.01,-0.01 end}
         page.draw=function(_,dc,target,ox,oy)
             local started=now_seconds()
-            local timings={}
+            local timings=format=="jpeg" and {jpeg_strips=0,jpeg_luma="unused"} or {}
             local zoom=dc:getZoom()
             local display_filter=not enhancement_bypassed(self.session,n) and ImageEnhance.at_display(self.session.display_enhancement,zoom,self.session.adaptive_enhancement)
             local function record(reason)
@@ -1596,6 +1596,7 @@ function MultiImageDoc:openPage(n)
                     logger.warn("Picayomi: slow page render", "page", n, "format", format,
                         "width", sz.w, "height", sz.h, "ms", math.floor(elapsed), "result", reason, "filter_space", display_filter and "display" or "source",
                         "decode_ms",math.floor(timings.decode or 0),"filter_ms",math.floor(timings.filter or 0),"resize_ms",math.floor(timings.resize or 0),
+                        "jpeg_strips",timings.jpeg_strips or "n/a","jpeg_luma",timings.jpeg_luma or "n/a",
                         "prediction",prediction,"prediction_ms",prediction_ms,"grant_kib",grant,
                         "prefetch",self.session:prefetch_count(),"cancelled",self.session.cancelled==true,
                         "suspended",self.session.suspended==true,"memory_wait",self.session.memory_wait~=nil)
@@ -1608,7 +1609,8 @@ function MultiImageDoc:openPage(n)
                 page.is_placeholder=true
                 logger.warn("Picayomi region decode:",reason,"page",n,"format",format,
                     "width",sz.w,"height",sz.h,"budget_kib",math.floor(decode_budget()/1024),
-                    "stage_required_kib",required and math.ceil(required/1024) or "unknown")
+                    "stage_required_kib",required and math.ceil(required/1024) or "unknown",
+                    "jpeg_strips",timings.jpeg_strips or "n/a","jpeg_luma",timings.jpeg_luma or "n/a")
                 if reason=="corrupt_image" then
                     pcall(function()
                         DownloadManager.forgetImage(path)

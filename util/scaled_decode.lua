@@ -571,6 +571,16 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
             if lib.tj3DecompressHeader(handle, data, #data) < 0 then return nil, "corrupt_image" end
             width, full_h = lib.tj3Get(handle, lib.TJPARAM_JPEGWIDTH), lib.tj3Get(handle, lib.TJPARAM_JPEGHEIGHT)
             if lib.tj3Get(handle, lib.TJPARAM_LOSSLESS) ~= 0 then return nil, "unsupported JPEG coding" end
+            y = math.max(0, math.floor(y))
+            height = math.min(math.ceil(height), full_h-y)
+            if height < 1 or width < 1 then return nil, "invalid region" end
+            local denom=1
+            for _,d in ipairs({2,4,8}) do
+                if display_zoom and 1/d>=display_zoom then denom=d end
+            end
+            local bottom=math.min(full_h,y+height)
+            y=math.floor(y/denom);height=math.ceil(bottom/denom)-y
+            local scaled_width=math.ceil(width/denom)
             -- Progressive JPEG retains coefficients for the whole image even
             -- when cropped. Enforce the codec's own limit before decompressing.
             workspace = width * 256 + 1024 * 1024
@@ -578,10 +588,11 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
                 local sampling = lib.tj3Get(handle,lib.TJPARAM_SUBSAMP)
                 local colorspace = lib.tj3Get(handle,lib.TJPARAM_COLORSPACE)
                 workspace = ScaledDecode.jpeg_workspace(width,full_h,sampling,colorspace,data)
-                -- A smaller strip cannot remove progressive coefficient planes.
-                -- Only foreground grayscale draws may project, once per paint.
+                -- Include the actual scaled crop: restarting a progressive
+                -- decoder for smaller strips rereads the full scan data.
                 if luma_state and not color and sampling == 0 and colorspace == 1
-                        and (luma_state.projected or input_bytes + workspace > budget) then
+                        and (luma_state.source == data and luma_state.projected
+                            or input_bytes + workspace + scaled_width * height > budget) then
                     local gray_work = ScaledDecode.jpeg_workspace(width,full_h,3,2)
                     local spare = budget - input_bytes
                     if spare < gray_work then
@@ -593,7 +604,8 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
                         luma_state.source, luma_state.projected, luma_state.tried = data, nil, false
                     end
                     if not luma_state.tried then
-                        luma_state.projected = require("util.jpeg_luma").prepare(data,width,full_h,spare)
+                        local gray = require("util.jpeg_luma").prepare(data,width,full_h,spare)
+                        if gray and #gray + gray_work < workspace then luma_state.projected = gray end
                         luma_state.tried = true
                     end
                     local gray = luma_state.projected
@@ -608,16 +620,7 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
                     end
                 end
             end
-            y = math.max(0, math.floor(y))
-            height = math.min(math.ceil(height), full_h-y)
-            if height < 1 or width < 1 then return nil, "invalid region" end
-            local denom=1
-            for _,d in ipairs({2,4,8}) do
-                if display_zoom and 1/d>=display_zoom then denom=d end
-            end
-            local bottom=math.min(full_h,y+height)
-            y=math.floor(y/denom);height=math.ceil(bottom/denom)-y
-            width=math.ceil(width/denom)
+            width=scaled_width
             if lib.tj3SetScalingFactor(handle,ffi.new("picayomi_tjscalingfactor",{1,denom}))<0 then
                 return nil,"JPEG scale failed"
             end
@@ -653,6 +656,11 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
                 return nil,"corrupt_image"
             end
             if full_output then output:blitFrom(full_output,0,0,0,y,width,height) end
+            if luma_state and luma_state.timings then
+                local timings=luma_state.timings
+                timings.jpeg_strips=(timings.jpeg_strips or 0)+1
+                if original_minimum then timings.jpeg_luma="used" end
+            end
             y=y*denom
         elseif format == "webp" then
             lib, err = load_webp()

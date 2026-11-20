@@ -142,6 +142,40 @@ function PicaReader:hookPageTurns(ui)
     local paging = ui and ui.paging
     if not paging then return end
 
+    -- KOReader dispatches a whole input batch between repaints. Keep its
+    -- tap zones, precedence and settings when it rebuilds the paging layout.
+    if paging.setupTouchZones and not paging._picayomi_tap_batch then
+        local setup=paging.setupTouchZones
+        paging.setupTouchZones=function(self,...)
+            setup(self,...)
+            local last_tick,last_zone,last_page,reported
+            for _,id in ipairs({"tap_forward","tap_backward"}) do
+                local zone=ui._zones and ui._zones[id]
+                if zone then
+                    local handle=zone.handler
+                    zone.handler=function(gesture)
+                        if self.view.page_scroll then return handle(gesture) end
+                        local tick=UIManager:getTime()
+                        local page=self.current_page
+                        if last_tick==tick and last_zone==zone and last_page==page then
+                            if not reported then
+                                logger.notice("Picayomi: coalesced page taps","page",page)
+                                reported=true
+                            end
+                            return true
+                        end
+                        local handled=handle(gesture)
+                        if self.current_page~=page then
+                            last_tick,last_zone,last_page,reported=tick,zone,self.current_page,false
+                        end
+                        return handled
+                    end
+                end
+            end
+        end
+        paging._picayomi_tap_batch=true
+    end
+
     -- 取当前流式会话: 优先用传进来的 ui (真实 ReaderUI 有 .document),
     -- 退回 ReaderUI.instance —— 测试里常常只有一个带 paging 的桩。
     local function stream_session()
@@ -519,8 +553,8 @@ end
 --     自己的 settings/kosync.lua, 我们改的这一份会在退出时被它自己写回原值。
 --   * readest: self.settings 是 **G_reader_settings 里那张表的引用**, 而
 --     G_reader_settings 会被 KOReader 随时落盘 —— 改它等于**永久**关掉用户的
---     同步, 一旦中途落盘就再也回不来。所以这里改成**包一层方法**: 只丢掉
---     "非交互"(自动)的那次 pullBookConfig, 菜单里手点"立即拉取"照常工作,
+--     同步, 一旦中途落盘就再也回不来。所以这里改成**包一层方法**: 拦截
+--     当前文档的自动同步及联网准备, 菜单里手点"立即拉取"照常工作,
 --     设置一个字都不碰。
 --
 -- 只认 name, 不 require 那个插件的模块: 没装/改名/版本不同时静默跳过,
@@ -564,55 +598,7 @@ function PicaReader:suppressForeignSync(reader_ui)
         end
     end
 
-    for _i, child in ipairs(reader_ui) do
-        if type(child) == "table" and plugin_base_name(child) == "readest"
-           and type(child.pullBookConfig) == "function"
-           and not child._picayomi_pull_blocked then
-            local orig = child.pullBookConfig
-            child.pullBookConfig = function(inst, interactive, ...)
-                if not interactive then
-                    -- 非交互 = 打开/唤醒/联网时自己拉的那次。它拉到远端页码就
-                    -- GotoPage, 而且**不管我们有没有拦下跳转都会弹
-                    -- 「阅读进度已同步」** —— 那个提示是假的, 页码根本没动。
-                    if logger.enabled then logger.info("Picayomi Reader: 忽略 Readest 的自动进度拉取"
-                        .. " (它会拨走页码并弹「进度已同步」)") end
-                    return
-                end
-                return orig(inst, interactive, ...)
-            end
-            child._picayomi_pull_blocked = true
-            undo[#undo + 1] = function()
-                child.pullBookConfig = orig
-                child._picayomi_pull_blocked = nil
-            end
-            if logger.enabled then logger.info("Picayomi Reader: 已屏蔽 Readest 的自动进度拉取 [" .. tostring(child.name) .. "]") end
-            break
-        end
-    end
-
-    -- 自动上传会 fork 同步 worker, 在低内存阅读时与下载/解码争用内存。
-    -- 关闭文档还会上传笔记/统计/书目, 也要挡住这些非交互入口。
-    -- 与 pull 一样只挡非交互调用, 不改共享的持久设置。
-    for _i, child in ipairs(reader_ui) do
-        if type(child) == "table" and plugin_base_name(child) == "readest"
-           and not child._picayomi_push_blocked then
-            for _j, method in ipairs({ "pushBookConfig", "pushBookNotes", "pushBookStats", "pushOpenBook" }) do
-                local orig = child[method]
-                if type(orig) == "function" then
-                    child[method] = function(inst, interactive, ...)
-                        if not interactive then return end
-                        return orig(inst, interactive, ...)
-                    end
-                    undo[#undo + 1] = function() child[method] = orig end
-                end
-            end
-            child._picayomi_push_blocked = true
-            undo[#undo + 1] = function()
-                child._picayomi_push_blocked = nil
-            end
-            if logger.enabled then logger.info("Picayomi Reader: 已屏蔽 Readest 的自动进度上传") end
-        end
-    end
+    require("ui.readest_sync").install(reader_ui,undo)
 
     if #undo > 0 then self._foreign_sync = undo end
 end

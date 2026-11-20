@@ -110,19 +110,7 @@ function M.install(ui,options)
     end
     -- Keep automatic Readest sync from moving temporary chapter documents or
     -- blocking their close on a network request. Manual sync remains available.
-    for _,child in ipairs(ui) do
-        if child.name=="readerreadest" or child.name=="readest" then
-            for _,name in ipairs({"pullBookConfig","pushBookConfig","pushBookNotes","pushBookStats","pushOpenBook"}) do
-                local original=child[name]
-                if type(original)=="function" then
-                    child[name]=function(instance,interactive,...)
-                        if interactive then return original(instance,interactive,...) end
-                    end
-                    self.sync_undo[#self.sync_undo+1]=function()child[name]=original end
-                end
-            end
-        end
-    end
+    require("ui.readest_sync").install(ui,self.sync_undo)
     return self
 end
 return M

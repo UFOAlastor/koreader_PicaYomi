@@ -4,21 +4,27 @@ local function pack(...)return {n=select('#',...),...}end
 function M.run(reader,callback,mark,clock,doccache,settings)
     local undo={}
     local wrapped={}
+    local function install(obj,key,handler)
+        local own=rawget(obj,key)
+        obj[key]=handler
+        undo[#undo+1]=function()
+            if rawget(obj,key)==handler then obj[key]=own end
+        end
+    end
     local function wrap(obj,key,label)
         if not obj or type(obj[key])~='function' then return end
         wrapped[obj]=wrapped[obj]or {}
         if wrapped[obj][key]then return end
         wrapped[obj][key]=true
-        local own,original=rawget(obj,key),obj[key]
-        obj[key]=function(...)
+        local original=obj[key]
+        install(obj,key,function(...)
             local started=clock()
             local result=pack(pcall(original,...))
             -- Report only method names/times; no paths, settings or arguments.
             pcall(mark,label,clock()-started,result[1])
             if not result[1] then error(result[2],0)end
             return unpack(result,2,result.n)
-        end
-        undo[#undo+1]=function()obj[key]=own end
+        end)
     end
     wrap(reader,'saveSettings','save_settings')
     wrap(reader,'closeDocument','document_release')
@@ -49,9 +55,9 @@ function M.run(reader,callback,mark,clock,doccache,settings)
     -- perform synchronous network work even without a named reader.ui field.
     registered(reader,'child_')
     registered(reader.active_widgets or {},'active_')
-    local original,own=reader.handleEvent,rawget(reader,'handleEvent')
+    local original=reader.handleEvent
     if type(original)=='function' then
-        reader.handleEvent=function(self,event,...)
+        install(reader,"handleEvent",function(self,event,...)
             local name=event and event.handler
             local started=clock();local result=pack(pcall(original,self,event,...))
             if name=='onCloseDocument' or name=='onSaveSettings' or name=='onFlushSettings' then
@@ -59,8 +65,7 @@ function M.run(reader,callback,mark,clock,doccache,settings)
             end
             if not result[1] then error(result[2],0)end
             return unpack(result,2,result.n)
-        end
-        undo[#undo+1]=function()reader.handleEvent=own end
+        end)
     end
     local result=pack(pcall(callback))
     for i=#undo,1,-1 do undo[i]()end

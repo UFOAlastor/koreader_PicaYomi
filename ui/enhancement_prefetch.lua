@@ -112,9 +112,11 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation,ready_event)
             if spec.budget<(retry_minimum or MIN_BUDGET) or not room(doc,bytes)then observe(doc,n,'memory',job);clean();return end
             if spec.format=='webp' then
                 spec.minimum_budget=require('util.scaled_decode').webp_minimum(spec.input,spec.size,spec.color,spec.zoom)
-                if spec.minimum_budget and spec.budget<spec.minimum_budget then
-                    error('speculation_budget:'..math.ceil(spec.minimum_budget),0)
-                end
+            elseif spec.format=='jpeg' then
+                spec.minimum_budget=require('util.image_size').jpeg_prediction_minimum(spec.input,spec.size)
+            end
+            if spec.minimum_budget and spec.budget<spec.minimum_budget then
+                error('speculation_budget:'..math.ceil(spec.minimum_budget),0)
             end
             spec.output=os.tmpname();job.output=spec.output
             local result=Async.await(function()return require('util.enhancement_worker').render(spec)end,spec)
@@ -176,7 +178,7 @@ function M.hint(doc,n,zoom,rotation,gamma,saturation,ready_event)
                     end
                 end
                 require('util.logger').warn('Picayomi: enhancement failed',
-                    'reason',detail,'page',n,'cooldown_s',delay)
+                    'reason',detail,'page',n,'cooldown_s',delay,'stage',job.observation.state=='running' and 'worker' or 'admission')
                 local previous=doc._prediction_refusal
                 doc._prediction_refusal={key=key,kind=kind,budget=spec.budget or 0,
                     required=tonumber(message:match('speculation_budget:(%d+)')),

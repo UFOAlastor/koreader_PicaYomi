@@ -1,5 +1,21 @@
 # 更新记录
 
+## 1.6.4 — 2026-11-21
+
+### 中文
+
+- 黑白阅读大型渐进式 JPEG 漫画时，部分页面可减少重复解码，更快显示。
+- 分页漫画卡顿期间连续点击同一方向时，同一批积压的点击只翻一页，减少意外跳页。
+- 内存不足时，会跳过已确定无法完成的大图后台预处理，为当前页保留资源。
+- 阅读漫画或小说章节时，避免 Readest 在打开或唤醒时自动拉取数据，以及在退出时为自动同步检查 Wi-Fi；仍可手动同步。
+
+### English
+
+- Some large progressive JPEG comic pages display faster in grayscale thanks to fewer repeated decodes.
+- In paginated comics, repeated taps in the same direction that were queued together during a stall now turn just one page.
+- When memory is low, background processing skips large pages that cannot fit, leaving resources for the current page.
+- Readest now skips automatic pulls when opening or waking a comic or novel chapter and avoids checking Wi-Fi for automatic sync on exit. Manual sync remains available.
+
 ## 1.6.3 — 2026-11-20
 
 ### 中文

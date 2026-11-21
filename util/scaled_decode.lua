@@ -635,7 +635,13 @@ function ScaledDecode.decode_region(path, format, y, height, color, budget, disp
                 local minimum = input_bytes + workspace + width * (color and 3 or 1)
                     * (1 + (full_fallback and full_scaled_h or 0))
                 if minimum > budget then return nil,"memory_budget",minimum,0 end
-                return nil,"memory_budget",input_bytes+bytes+workspace
+                -- The renderer plans in source rows. At native scale a cropped
+                -- JPEG row has exactly this cost, independent of its origin.
+                local rows
+                if luma_state and not color and denom==1 and not full_fallback then
+                    rows=math.floor((budget-input_bytes-workspace)/width)
+                end
+                return nil,"memory_budget",input_bytes+bytes+workspace,rows
             end
             local limit = math.floor((budget-input_bytes-bytes)/1048576)
             if limit < 1 or lib.tj3Set(handle, lib.TJPARAM_MAXMEMORY, limit) < 0 then return nil, "memory_budget" end

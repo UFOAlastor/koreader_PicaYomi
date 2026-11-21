@@ -846,12 +846,17 @@ function StreamSession:wait_for_memory(n, can_retry, required)
         wait.checks = wait.checks + 1
         local before=MemoryGuard.instance():snapshot().available
         local reclaimed=TransportWorker.reclaim_idle("read")
-        if wait.checks==1 or reclaimed>0 then MemoryGuard.instance():reclaim_for_decode() end
         local after=MemoryGuard.instance():snapshot().available
         if reclaimed>0 and before and after then
             self.memory_worker_cost=math.max(self.memory_worker_cost or 0,after-before)
         end
         local ok, ready = pcall(wait.can_retry)
+        -- A completed paint or a released worker can already have freed
+        -- enough memory. Preserve resident back-turn tiles in that case.
+        if not (ok and ready) and (wait.checks==1 or reclaimed>0) then
+            MemoryGuard.instance():reclaim_for_decode()
+            ok,ready=pcall(wait.can_retry)
+        end
         if ok and ready then
             if Diag.enabled then Diag.mark(string.format("decode recovery p%d checks=%d reclaimed_workers=%d need=%s",wait.page,wait.checks,reclaimed,tostring(wait.required or "planner"))) end
             self.memory_wait, self.memory_retry = nil, nil

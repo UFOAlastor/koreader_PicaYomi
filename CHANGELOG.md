@@ -1,5 +1,17 @@
 # 更新记录
 
+## 1.6.5 — 2026-11-22
+
+### 中文
+
+- 黑白阅读时，部分大型 JPEG 漫画页显示更快，在可用内存较少时也能直接打开。
+- 翻页后若可用内存已经恢复，回翻时可以直接显示仍在缓存中的上一页。
+
+### English
+
+- Some large JPEG comic pages render faster in grayscale and can open with less available memory.
+- When memory has already recovered after a page turn, turning back can immediately show the previous page if it is still cached.
+
 ## 1.6.4 — 2026-11-21
 
 ### 中文

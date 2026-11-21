@@ -56,7 +56,7 @@ local function project(data, width, height, output, capacity)
         used = used + 1
     end
     local tables = {}
-    local function write_dc(first, stop, selectors, refinement)
+    local function write_dc(first, stop, selectors, refinement, block_count)
         local pos, remaining, value = first, 0, 0
         local function read_bit()
             if remaining == 0 then
@@ -84,7 +84,7 @@ local function project(data, width, height, output, capacity)
                 buffer = buffer % 2 ^ count
             end
         end
-        for _ = 1, blocks do
+        for _ = 1, block_count do
             for component = 1, 3 do
                 if refinement then
                     local b = read_bit()
@@ -108,6 +108,27 @@ local function project(data, width, height, output, capacity)
         end
         assert(pos == stop)
         if count > 0 then put(2 ^ (8 - count) - 1, 8 - count) end
+    end
+
+    -- In 4:4:4 each MCU contains one block per participating component.
+    -- Dropping chroma preserves MCU counts, restart positions and DC resets.
+    local interval = 0
+    local function scan_end(first, selectors, refine)
+        local remaining, restart = blocks, 0
+        while true do
+            local last = assert(data:find("\255[^%z]", first))
+            local count = interval > 0 and math.min(interval, remaining) or remaining
+            if selectors then write_dc(first, last, selectors, refine, count) end
+            remaining = remaining - count
+            local marker = data:byte(last + 1)
+            if remaining == 0 then
+                assert(marker < 208 or marker > 215)
+                return last
+            end
+            assert(marker == 208 + restart)
+            if selectors then copy(last, 2) end
+            first, restart = last + 2, (restart + 1) % 8
+        end
     end
 
     copy(1, 2)
@@ -137,15 +158,18 @@ local function project(data, width, height, output, capacity)
         elseif marker == 196 or marker == 219 then
             if marker == 196 then read_tables(data, first, stop, tables) end
             copy(pos, stop-pos)
+        elseif marker == 221 then
+            assert(length == 4)
+            interval = u16(data, first)
+            copy(pos, stop-pos)
         elseif marker == 218 then
             scans = scans + 1
             assert(frame and scans <= 32)
             local components = data:byte(first)
             assert((components == 1 or components == 3) and length == 6 + 2*components)
-            -- Unstuffed marker ends the scan. Restart intervals are outside
-            -- this fast path and must never be interpreted as entropy data.
-            local last = assert(data:find("\255[^%z]", stop))
+            local last
             if components == 1 then
+                last = scan_end(stop)
                 local id = data:byte(first+1)
                 assert(id >= 1 and id <= 3)
                 if id == 1 then
@@ -165,7 +189,7 @@ local function project(data, width, height, output, capacity)
                 end
                 copy(pos, 2); write(0); write(8); write(1)
                 copy(first+1, 2); copy(stop-3, 3)
-                write_dc(stop, last, selectors, refine)
+                last = scan_end(stop, selectors, refine)
                 dc_seen = true
             end
             stop = last

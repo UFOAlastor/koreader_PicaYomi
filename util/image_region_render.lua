@@ -172,7 +172,7 @@ function M.draw(o,dc,target,ox,oy)
             end
             if success or reason~="memory_budget" or lines==1 then break end
             if format=="jpeg" and capacity==0 then break end
-            if plan_webp and not o.post_plan and capacity then
+            if (plan_webp or format=="jpeg") and not o.post_plan and capacity then
                 -- Find the largest display strip whose complete source halo
                 -- fits, including WebP's even crop origin. This search does
                 -- not start a codec or allocate pixels. A new decode always
@@ -181,7 +181,8 @@ function M.draw(o,dc,target,ox,oy)
                 while lo<hi do
                     local mid=math.ceil((lo+hi)/2)
                     local first,count=range(mid)
-                    if count+first%2<=capacity then lo=mid else hi=mid-1 end
+                    if format=="webp" then count=count+first%2 end
+                    if count<=capacity then lo=mid else hi=mid-1 end
                 end
                 lines=lo
             else

@@ -139,7 +139,7 @@ function ReadingSettings:setDisplayEnhancement(tone)
             return checkLabel(selected()==option.value,option.text)
         end,callback=function()
             if option.value~="off" and not E.available(option.value) then
-                UIManager:show(require("ui/widget/infomessage"):new{
+                UIManager:show(require("ui.common.result_notice"):new{
                     text=_("显示增强暂不可用，请稍后重试或更新 KOReader。")},"ui")
                 return
             end

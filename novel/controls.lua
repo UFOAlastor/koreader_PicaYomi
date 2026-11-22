@@ -40,7 +40,7 @@ function Controls:onEndOfBook()
     if self.returning or self.end_dialog then return true end
     local next_chapter=self:actions()[3]
     if next_chapter and next_chapter.pending then
-        UI:show(require("ui/widget/infomessage"):new{text=next_chapter.pending=="loading"and "章节目录仍在后台加载，请稍候。"or "章节目录加载失败，请返回详情重试。",timeout=3},"ui")
+        UI:show(require("ui.common.result_notice"):new{text=next_chapter.pending=="loading"and "章节目录仍在后台加载，请稍候。"or "章节目录加载失败，请返回详情重试。",timeout=next_chapter.pending=="loading" and 1 or nil},"ui")
         return true
     end
     if next_chapter and next_chapter.enabled~=false then
@@ -59,7 +59,7 @@ function Controls:onEndOfBook()
         UI:show(self.end_dialog,"ui")
     else
         self:returnToDetails()
-        UI:nextTick(function()UI:show(require("ui/widget/infomessage"):new{text="已到最后一章",timeout=2},"ui")end)
+        UI:nextTick(function()UI:show(require("ui.common.result_notice"):new{text="已到最后一章",timeout=1},"ui")end)
     end
     return true
 end

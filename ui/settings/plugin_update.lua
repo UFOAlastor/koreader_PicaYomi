@@ -2,7 +2,7 @@ local U={}
 local UI=require('ui/uimanager')
 local Core=require('util.plugin_update')
 local Style=require('ui.common.action_style')
-local function info(text)UI:show(require('ui/widget/infomessage'):new{text=text,timeout=require('ui.common.loading_task').brief_seconds},'ui')end
+local function info(text,timeout)UI:show(require('ui.common.result_notice'):new{text=text,timeout=timeout},'ui')end
 local function online()return require('ui/network/manager'):isConnected()end
 local function manualCooling(state,now)
  local remaining=(tonumber(state.manual_check_after)or 0)-now
@@ -40,7 +40,7 @@ function U.pending()
  if require('device'):canRestart() then
   buttons[#buttons+1]={{text='立即重启',callback=function()
    if not close()then return end
-   info('正在重启 KOReader…');UI:forceRePaint()
+   info('正在重启 KOReader…',1);UI:forceRePaint()
    UI:nextTick(function()UI:broadcastEvent(require('ui/event'):new('Restart'))end)
   end}}
  end
@@ -104,7 +104,7 @@ function U.check()
  state.manual_check_after=now+30
  if not pcall(Core.save,state)then info('无法保存更新状态，请稍后重试。');return end
  run('正在检查插件更新…',Core.check,function(result)
-  if result.latest then info('已是最新版本（'..result.version..'）')else U.offer(result)end
+  if result.latest then info('已是最新版本（'..result.version..'）',1)else U.offer(result)end
  end)
 end
 local function idle()

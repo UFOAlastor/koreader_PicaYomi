@@ -13,7 +13,7 @@
 -- 服务端总页数 (可信时), 也可能压根未知; 详情页则是内存里的章节屏数。所以这里
 -- 只做最基本的"是 >=1 的整数", 其余由 on_jump 返回 (ok, err) 表达。
 
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local InputDialog = require("ui.common.action_style").InputDialog
 local UIManager = require("ui/uimanager")
 local _ = require("gettext")
@@ -58,7 +58,6 @@ function PageJump.show(opts)
                         if not n or n ~= math.floor(n) or n < 1 then
                             UIManager:show(InfoMessage:new{
                                 text = _("请输入 1 以上的整数页码"),
-                                timeout = 3,
                             }, "ui")
                             return
                         end
@@ -68,7 +67,6 @@ function PageJump.show(opts)
                         if not ok and err then
                             UIManager:show(InfoMessage:new{
                                 text = require("ui.common.error_message").describe(err),
-                                timeout = 3,
                             }, "ui")
                         end
                     end,

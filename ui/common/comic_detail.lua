@@ -15,7 +15,7 @@ local GestureRange = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local ImageWidget = require("ui/widget/imagewidget")
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local InputDialog = require("ui.common.action_style").InputDialog
 local InputContainer = require("ui/widget/container/inputcontainer")
 local ListView = require("ui/widget/listview")
@@ -534,7 +534,7 @@ function ComicDetail:tryAutoContinue()
     end
     self:revealQuickEntry()
     UIManager:show(InfoMessage:new{
-        text = _("上次阅读的章节暂不可用，请在详情页选择章节。"), timeout = 3,
+        text = _("上次阅读的章节暂不可用，请在详情页选择章节。"),
     }, "ui")
 end
 
@@ -1381,7 +1381,7 @@ function ComicDetail:startReading()
     local episode = self:findInitialEpisode()
     if not episode then
         self:revealQuickEntry()
-        UIManager:show(InfoMessage:new{ text = self:isNovel() and _("该小说没有可阅读的章节") or _("该漫画没有可阅读的章节"), timeout = 2 }, "ui")
+        UIManager:show(InfoMessage:new{ text = self:isNovel() and _("该小说没有可阅读的章节") or _("该漫画没有可阅读的章节") }, "ui")
         return
     end
     -- 按阅读历史/上次页码接着读 (from_beginning 为假)
@@ -1401,7 +1401,7 @@ function ComicDetail:startReadingFromBeginning()
     local episode = self:findFirstEpisode()
     if not episode then
         self:revealQuickEntry()
-        UIManager:show(InfoMessage:new{ text = self:isNovel() and _("该小说没有可阅读的章节") or _("该漫画没有可阅读的章节"), timeout = 2 }, "ui")
+        UIManager:show(InfoMessage:new{ text = self:isNovel() and _("该小说没有可阅读的章节") or _("该漫画没有可阅读的章节") }, "ui")
         return
     end
     if logger.enabled then logger.info("Picayomi Detail: 「开始」= 从第 " .. tostring(episode.order)
@@ -1540,7 +1540,7 @@ function ComicDetail:loadChapters(page,force,opts)
                 local total=episodes_data.total or #(episodes_data.episodes or {})
                 UIManager:show(InfoMessage:new{
                     text=changed and T(self:isNovel() and _("章节已更新，共 %1 章") or _("章节已更新，共 %1 话"),total)
-                        or T(self:isNovel() and _("章节已是最新，共 %1 章") or _("章节已是最新，共 %1 话"),total),timeout=2,
+                        or T(self:isNovel() and _("章节已是最新，共 %1 章") or _("章节已是最新，共 %1 话"),total),timeout=1,
                 },"ui")
             end
             self:tryAutoContinue()
@@ -1551,7 +1551,7 @@ function ComicDetail:loadChapters(page,force,opts)
             if manual and self.episodes_data then self:refresh() end
             UIManager:show(InfoMessage:new{
                 text=T(manual and _("刷新信息失败: %1") or _("获取章节列表失败: %1"),require("ui.common.error_message").describe(err))
-                    ..(background and _("\n已保留原有章节，可点击“刷新信息”重试。") or ""),timeout=3,
+                    ..(background and _("\n已保留原有章节，可点击“刷新信息”重试。") or ""),
             },"ui")
             if not self.episodes_data then
                 self:refresh()
@@ -1650,7 +1650,6 @@ function ComicDetail:showChapterJumpDialog()
                         if not n or n ~= math.floor(n) or n < 1 or n > pages then
                             UIManager:show(InfoMessage:new{
                                 text = T(_("请输入 1 ~ %1 之间的页码"), pages),
-                                timeout = 3,
                             }, "ui")
                             return
                         end
@@ -1906,7 +1905,7 @@ function ComicDetail:runFavoriteAction()
             end,
             on_done = function(ok, _data, err)
                 if ok then
-                    UIManager:show(InfoMessage:new{ text = self.favorite_action.success_text or _("操作成功"), timeout = 2 }, "ui")
+                    UIManager:show(InfoMessage:new{ text = self.favorite_action.success_text or _("操作成功"), timeout = 1 }, "ui")
                     if self.favorite_action.after_success then
                         self.favorite_action.after_success(self)
                     end
@@ -1915,7 +1914,6 @@ function ComicDetail:runFavoriteAction()
                 else
                     UIManager:show(InfoMessage:new{
                         text = T(_("操作失败: %1"), require("ui.common.error_message").describe(err)),
-                        timeout = 3,
                     }, "ui")
                 end
             end,
@@ -2137,13 +2135,12 @@ function ComicDetail:showComments()
     if not require("ui.common.source_access").check(self.source,"comments") then return end
     local status = require("source.capabilities").query(self.source, "comments")
     if not status.available then
-        UIManager:show(InfoMessage:new{ text = status.reason, timeout = 3 }, "ui")
+        UIManager:show(InfoMessage:new{ text = status.reason }, "ui")
         return
     end
     if not (self.source and self.source.getComments and self.comic and self.comic._id) then
         UIManager:show(InfoMessage:new{
             text = _("当前源不支持评论"),
-            timeout = 3,
         }, "ui")
         return
     end
@@ -2170,7 +2167,7 @@ function ComicDetail:showDownloadSelect()
     if not require("ui.common.source_access").check(self.source,"download") then return end
     local status = require("source.capabilities").query(self.source, "download")
     if not status.available then
-        UIManager:show(InfoMessage:new{ text = status.reason, timeout = 3 }, "ui")
+        UIManager:show(InfoMessage:new{ text = status.reason }, "ui")
         return
     end
     if not self.episodes_data then

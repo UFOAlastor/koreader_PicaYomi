@@ -11,7 +11,7 @@ local Device = require("device")
 local Menu = require("ui.common.action_style").Menu
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local Screen = Device.screen
 local _ = require("gettext")
 local T = require("ffi/util").template
@@ -328,7 +328,6 @@ function DownloadSelect:startDownload()
     if #chapters == 0 then
         UIManager:show(InfoMessage:new{
             text = _("还没有选中章节。\n先点下面任意章节，行首变成「[已选]」后再点开始下载。"),
-            timeout = 5,
         }, "ui")
         return false, 0
     end
@@ -340,7 +339,6 @@ function DownloadSelect:startDownload()
         logger.warn("Picayomi DownloadSelect: 加入队列失败: " .. tostring(queued))
         UIManager:show(InfoMessage:new{
             text = T(_("加入下载队列失败：%1"), require("ui.common.error_message").describe(queued)),
-            timeout = 5,
         }, "ui")
         return false, 0
     end
@@ -354,14 +352,14 @@ function DownloadSelect:startDownload()
     if (queued or 0) == 0 then
         UIManager:show(InfoMessage:new{
             text = _("所选章节都已下载"),
-            timeout = 3,
+            timeout = 1,
         }, "ui")
         return true, 0
     end
 
     UIManager:show(InfoMessage:new{
         text = self:downloadStartedText(queued),
-        timeout = 2,
+        timeout = 1,
     }, "ui")
 
     -- 立刻进入「已下载」: 进度条在那里。停在选择页会让用户觉得"点了没反应"。

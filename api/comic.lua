@@ -257,9 +257,14 @@ function ComicAPI:prepareComic(comicId, order, context)
         if Diag.enabled then pcall(Diag.snapshot,"准备打开阅读器") end
         if Diag.enabled then open_mark(comicId, order, "取图片列表…") end
         local ok, fetched, fetch_error = source:getAllChapterImages(comicId, order)
-        if not ok or not fetched or not fetched.images or #fetched.images == 0 then
+        if not ok or type(fetched)~="table" or type(fetched.images)~="table" or #fetched.images == 0 then
             if Diag.enabled then open_mark(comicId, order, "图片列表失败") end
-            return false, nil, nil, nil, (type(fetch_error)=="string" and fetch_error~="" and fetch_error) or "获取漫画图片失败"
+            local reason = fetch_error or (type(fetched)=="string" and fetched)
+            if not reason or reason=="" then
+                reason = ok and "漫画源没有返回本章可读的图片列表。"
+                    or "漫画源未能获取本章图片列表，也没有返回具体原因。"
+            end
+            return false, nil, nil, nil, reason
         end
         images_result = fetched
         if Diag.enabled then open_mark(comicId, order,
@@ -328,9 +333,7 @@ end
 -- 打开一话: 可取消, 且不阻塞调用方
 --
 -- 「取章节列表 → 取图片列表 → 打开文档」整条链跑在一个 Trapper 协程里:
---   * 每步之间 `Trapper:info()` 把控制权交回 UIManager, 界面保持可响应;
---   * 恢复时它顺带报告"等待期间用户有没有点屏幕" —— 点了就弹 Paused/Continue/Abort,
---     选 Abort 即中止本次打开。
+-- 步骤之间交回控制权，点掉加载提示即取消本次打开。
 --
 -- 取消只能在**步骤之间**生效: 单条 HTTP 请求是同步的, 中途打不断 (Lua 单线程 +
 -- 同步 socket)。所以要压缩的是"步数 × 每步耗时" —— 这也是上面 prepareComic 里
@@ -347,7 +350,7 @@ end
 --                 "返回本话详情 / 下一话"菜单, 不要这个菜单的调用方不必多花一次请求。
 function ComicAPI:getAndOpenComic(comicId, order, epId, detail_menu_to_close, context, on_done)
     local UIManager = require("ui/uimanager")
-    local InfoMessage = require("ui/widget/infomessage")
+    local InfoMessage = require("ui.common.result_notice")
     local Trapper = require("ui/trapper")
     local _ = require("gettext")
     local T = require("ffi/util").template
@@ -379,35 +382,57 @@ function ComicAPI:getAndOpenComic(comicId, order, epId, detail_menu_to_close, co
         Trapper:reset()
         UIManager:show(InfoMessage:new{
             text = T(_("%1: %2"), _(prefix), require("ui.common.error_message").describe(reason)),
-            timeout = 3,
         }, "ui")
         return finish(false, reason)
+    end
+
+    local function continueOpening()
+        local previous = Trapper.current_widget
+        if previous then
+            local thread = coroutine.running()
+            local waiting = true
+            local function advance()
+                if waiting then coroutine.resume(thread, true) end
+            end
+            previous.dismiss_callback = function()
+                if waiting then coroutine.resume(thread, false) end
+            end
+            UIManager:scheduleIn(0.1, advance)
+            local uninterrupted = coroutine.yield()
+            waiting = false
+            previous.dismiss_callback = nil
+            if not uninterrupted then
+                UIManager:unschedule(advance)
+                Trapper:clear()
+                UIManager:show(InfoMessage:new{text=_("已取消打开漫画"), timeout=1}, "ui")
+                return false
+            end
+        end
+        return true
     end
 
     local function run()
         -- 上一次任务可能被中止过, 会留下未关闭的控件与自定义文案
         Trapper:reset()
-        Trapper:setPausedText(_("已暂停"), _("中止"), _("继续"))
+
+        local opening_text = _("正在打开漫画…")
+        Trapper:info(opening_text, false, true)
 
         -- 步骤 1: 章节列表 (只在调用方要阅读器内导航时才取)
         local episodes
         if context then
             episodes = context.episodes
             if not episodes then
-                Trapper:info(_("正在加载漫画…"))
                 local s, data = self:getComicEpisodes(comicId)
                 if s and data and data.episodes and #data.episodes > 0 then
                     episodes = data.episodes
                     context.episodes = episodes
                 end
+                if not continueOpening() then return finish(false, nil) end
             end
         end
 
         -- 步骤 2: 取图片列表 + 建流式会话 (取消点)
-        if not Trapper:info(_("正在打开漫画…")) then
-            if logger.enabled then logger.info("Picayomi: 用户中止了本次打开 (取章节列表之后)") end
-            return finish(false, nil)
-        end
         local ok, path, doc_class, _session, err = self:prepareComic(comicId, order, context)
         opening_session = _session
         if not ok then
@@ -415,18 +440,7 @@ function ComicAPI:getAndOpenComic(comicId, order, epId, detail_menu_to_close, co
         end
         if _session then _session.release_downloads = release_downloads end
 
-        -- 步骤 3: 打开阅读器 (取消点)
-        --
-        -- 条漫: 把"会进滚动模式"写进这条加载文案 —— 它正好显示在
-        -- "opening file …/reading/xxx.stream" 那几秒里, 用户不用等阅读器起来
-        -- 再被一个弹窗挡一下 (真机反馈: 打开后每次都提示有点烦)。
-        local opening_text = _("正在打开阅读器…")
-        if _session and _session.view_mode == ViewMode.SCROLL then
-            opening_text = _("正在打开阅读器…（条漫：上下滑动阅读，设置可改）")
-        elseif _session and _session.view_mode == ViewMode.LANDSCAPE then
-            opening_text = _("正在打开阅读器…（横屏：已旋转 90°）")
-        end
-        if not Trapper:info(opening_text) then
+        if not continueOpening() then
             if logger.enabled then logger.info("Picayomi: 用户中止了本次打开 (取图片列表之后)") end
             -- 会话已经建好, 而且 prepareComic 里已经把它预热了 (第 1 页在下载中)。
             -- 中止就得收掉: 否则预取与下载子进程会挂在一个永远不会被打开的文档上。
@@ -446,11 +460,8 @@ function ComicAPI:getAndOpenComic(comicId, order, epId, detail_menu_to_close, co
         -- 更新覆盖全部像素, 不会有残留。
         Trapper:clear()
         if Diag.enabled then open_mark(comicId, order, "打开阅读器…") end
-        local open_ok, open_err = pcall(function()
-            require("ui.common.loading_task").openReader(function(ready)
-                ReaderUI:showReader(path, doc_class, nil, nil, ready)
-            end, opening_text)
-        end)
+        -- KOReader paints its opening-file notice before constructing the reader.
+        local open_ok, open_err = pcall(ReaderUI.showReader, ReaderUI, path, doc_class)
         if not open_ok then
             return fail("打开阅读器失败", open_err)
         end

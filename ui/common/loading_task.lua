@@ -22,7 +22,7 @@
 --   * `run{...}`           —— 连"显示提示 → 延迟一拍 → 取数 → 关提示 → 复位守卫 → 回调"
 --                             整套时序一起管。新代码优先用 `run`。
 
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local UIManager = require("ui/uimanager")
 local logger = require("util.logger")
 
@@ -43,31 +43,35 @@ end
 
 -- Shared by comic and novel return paths; paint before blocking reader cleanup.
 function LoadingTask.showReturning(reason, until_ready)
-    local notice=InfoMessage:new{text=reason or require("gettext")("返回中…"),dismissable=false,
+    local notice=require("ui/widget/infomessage"):new{text=reason or require("gettext")("返回中…"),dismissable=false,
         timeout=not until_ready and LoadingTask.brief_seconds or nil}
     -- A queued ReaderView repaint may decode/filter a large page. The return
     -- notice must not wait for it: cover that view with its already drawn
     -- framebuffer instead. One screen only, freed on every close path.
     local Screen=require("device").screen
-    local ok,background=pcall(function()return Screen.bb:copy()end)
-    if ok and background then
+    local ok,background=pcall(function()
+        if not until_ready then return Screen.bb:copy() end
+    end)
+    if until_ready or (ok and background) then
         notice._return_background=background
         notice.covers_fullscreen=true
         local paint,close=notice.paintTo,notice.onCloseWidget
         notice.paintTo=function(self,bb,x,y)
             local saved=self._return_background
-            if saved then bb:blitFrom(saved,0,0,0,0,
+            if until_ready then bb:fill(require("ffi/blitbuffer").COLOR_WHITE)
+            elseif saved then bb:blitFrom(saved,0,0,0,0,
                 math.min(bb:getWidth(),saved:getWidth()),math.min(bb:getHeight(),saved:getHeight()))end
             return paint(self,bb,x,y)
         end
         notice.onCloseWidget=function(self,...)
             local saved=self._return_background;self._return_background=nil
             if saved then saved:free()end
+            if until_ready then UIManager:setDirty("all","ui",Screen:getSize()) end
             return close(self,...)
         end
     end
     local size=notice.movable:getSize();local region=require("ui/geometry"):new{x=math.floor((Screen:getWidth()-size.w)/2),y=math.floor((Screen:getHeight()-size.h)/2),w=size.w,h=size.h}
-    UIManager:show(notice,"ui",region)
+    UIManager:show(notice,"ui",until_ready and Screen:getSize() or region)
     UIManager:forceRePaint()
     return notice
 end
@@ -91,7 +95,7 @@ function LoadingTask.withNotice(text, fn, ...)
 end
 
 -- Native reader construction is queued and can block while input is inhibited.
--- Keep a painted snapshot notice until the host ready callback. The queued
+-- Keep the painted opening notice until the host ready callback. The queued
 -- cleanup is only a failure fallback, and cannot close a later opening notice.
 function LoadingTask.openReader(open, text)
     local notice=LoadingTask.showReturning(text or require("gettext")("正在打开阅读器…"), true)
@@ -109,7 +113,6 @@ end
 
 function LoadingTask.showFailure(err)
     UIManager:show(InfoMessage:new{
-        timeout = LoadingTask.brief_seconds,
         text = require("ui.common.error_message").describe(err,
             require("gettext")("加载失败，请检查网络后重试；若仍失败，请重新打开此页面。")),
     }, "ui")
@@ -242,7 +245,7 @@ function LoadingTask.run(opts)
     local loading
     if opts.progress then
         loading=require("ui.common.loading_progress"):new{title=opts.message,progress={message=opts.stage}}
-    else loading=InfoMessage:new{text=opts.message}end
+    else loading=require("ui/widget/infomessage"):new{text=opts.message}end
     UIManager:show(loading, "ui")
     -- 同步刷一次: show 只是把刷新入队, 而后面马上就要阻塞做网络请求,
     -- 不等这一下的话事件循环没机会重绘, 提示等于没显示。

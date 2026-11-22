@@ -110,7 +110,7 @@ local function notify(m)
     elseif U.error then
         local err=U.error;U.error=nil
         require("ui.settings.sources"):showInfo("检查或下载更新未完成："
-            ..require("ui.common.error_message").describe(err).."\n可在源管理中手动重试。", require("ui.common.loading_task").brief_seconds)
+            ..require("ui.common.error_message").describe(err).."\n可在源管理中手动重试。", false)
     end
 end
 function U.downloadUpdates(m,available)

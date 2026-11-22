@@ -75,7 +75,7 @@ end
 function Sources:offerRestart(message)
     require("source.extensions.updater").acknowledgePending()
     local text=message or "源变更将在重启 KOReader 后生效"
-    if not require("device"):canRestart() then return self:showInfo(text) end
+    if not require("device"):canRestart() then return self:showInfo(text,false) end
     UIManager:show(self:createConfirmBox{
         text=text,ok_text="立即重启 KOReader",cancel_text="稍后",
         ok_callback=function()

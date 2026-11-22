@@ -1,7 +1,7 @@
 local UIManager = require("ui/uimanager")
 local Menu = require("ui.common.action_style").Menu
 local Screen = require("device").screen
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local SpinWidget = require("ui.common.action_style").SpinWidget
 local ToggleSwitch = require("ui/widget/toggleswitch")
 local MultiInputDialog = require("ui.common.action_style").MultiInputDialog
@@ -104,14 +104,13 @@ end
 
 function BaseSettingsModule:showInfo(text, timeout)
     UIManager:show(InfoMessage:new{
-        text = text, timeout = timeout,
+        text = text, timeout = timeout == nil and 1 or timeout,
     }, "ui")
 end
 
 function BaseSettingsModule:showError(text)
     logger.err("Settings error:", text)
     UIManager:show(InfoMessage:new{
-        timeout = require("ui.common.loading_task").brief_seconds,
         text = _("错误：") .. require("ui.common.error_message").describe(text),
     }, "ui")
 end

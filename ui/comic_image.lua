@@ -1,6 +1,6 @@
 local UIManager = require("ui/uimanager")
 local ReaderUI = require("apps/reader/readerui")
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local Config = require("util.config")
 local lfs = require("libs/libkoreader-lfs")
 local _ = require("gettext")
@@ -51,7 +51,7 @@ function M.chooseAndSave(ui)
                         local remembered = Config:set("comic_image_save_dir", directory)
                         local text = _("原图已保存到：") .. "\n" .. target
                         if not remembered then text = text .. "\n\n" .. _("保存目录未能记住，下次请重新选择。") end
-                        UIManager:show(InfoMessage:new{ text = text }, "ui")
+                        UIManager:show(InfoMessage:new{ text = text, timeout = remembered and 1 or nil }, "ui")
                     elseif failure then
                         UIManager:show(InfoMessage:new{ text = _("保存原图失败：") .. "\n" .. failure }, "ui")
                     end

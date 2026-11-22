@@ -11,7 +11,7 @@ end
 -- 移植 PicaComic 到 KOReader 的漫画阅读插件
 
 local Device = require("device")
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -601,7 +601,6 @@ function Picayomi:openEpisodeAt(index)
     if not ctx or not ctx.episodes or not ctx.comic then
         UIManager:show(InfoMessage:new{
             text = _("无法获取章节列表，请从漫画详情页进入"),
-            timeout = 3,
         }, "ui")
         return
     end
@@ -734,14 +733,13 @@ function Picayomi:checkNetwork()
         text = _("当前没有网络连接。\n\n"
             .. "请先在 KOReader 里打开 Wi-Fi 再浏览/阅读；\n"
             .. "已缓存的作品与浏览历史仍可查看。"),
-        timeout = 6,
     }, "ui")
     return false
 end
 
 --- 打开主界面
 function Picayomi:openHome()
-    local loading = InfoMessage:new{ text = _("Picayomi 启动中...") }
+    local loading = require("ui/widget/infomessage"):new{ text = _("Picayomi 启动中...") }
     UIManager:show(loading, "ui")
     -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
     -- 不等这一下的话事件循环没机会重绘, 提示等于没显示
@@ -766,7 +764,6 @@ function Picayomi:openHome()
             logger.err("Picayomi: openHome failed: " .. tostring(err))
             UIManager:show(InfoMessage:new{
                 text = T(_("Picayomi 启动失败: %1"), require("ui.common.error_message").describe(err)),
-                timeout = 5,
             }, "ui")
         end
 

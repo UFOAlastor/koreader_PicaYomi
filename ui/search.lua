@@ -1,5 +1,5 @@
 local InputDialog = require("ui.common.action_style").InputDialog
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local Menu = require("ui.common.action_style").Menu
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
@@ -239,7 +239,7 @@ function Search:_showHistoryMenuNow(page)
                     self.history_menu = nil
                     UIManager:show(InfoMessage:new{
                         text = _("已清空搜索历史"),
-                        timeout = 3,
+                        timeout = 1,
                     }, "ui")
                     self:leave()
                 end,
@@ -344,7 +344,7 @@ function Search:performSearch()
     -- failed, cancelled or empty response must never decide history retention.
     local saved,save_error=SearchHistory.add(keyword)
     if not saved then
-        UIManager:show(InfoMessage:new{text=T(_("搜索历史保存失败：%1"),save_error),timeout=3},"ui")
+        UIManager:show(InfoMessage:new{text=T(_("搜索历史保存失败：%1"),save_error)},"ui")
     end
     local source=require("source.registry"):getCurrent()
     self:ensureSourceSort(source)
@@ -358,7 +358,7 @@ function Search:performSearch()
         return not self._left and self._query_generation==generation
             and require("source.registry"):getCurrent()==source
     end
-    local loading=InfoMessage:new{text=T(_("搜索【%1】…（点击取消）"),keyword)}
+    local loading=require("ui/widget/infomessage"):new{text=T(_("搜索【%1】…（点击取消）"),keyword)}
     UIManager:show(loading,"ui");UIManager:forceRePaint()
     local page,sort=self.current_page,self.current_sort
     self.search_task=LoadingTask.background(loading,function()
@@ -382,7 +382,7 @@ function Search:performSearch()
         end,
         on_error=function(err)
             if current()then UIManager:show(InfoMessage:new{
-                text=T(_("搜索失败: %1"),require("ui.common.error_message").describe(err)),timeout=3},"ui")end
+                text=T(_("搜索失败: %1"),require("ui.common.error_message").describe(err))},"ui")end
         end,
     })
 end

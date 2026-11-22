@@ -95,7 +95,24 @@ function Runtime.new(source,manifest,digest,extension_context)
         if type(fn)~="function" then return false,nil,Contract.error("unsupported","当前源不支持此功能",method) end
         local sdk=require("source.extensions.sdk")
         local ctx=extension_context and extension_context.ctx
-        local previous=ctx and sdk.enter(ctx,context)
+        local transport_reason
+        local http_context=context
+        if ctx and method=="getPages" then
+            http_context={}
+            for key,value in pairs(context) do http_context[key]=value end
+            http_context.isCancelled=function()
+                return context.cancelled or context.isCancelled and context.isCancelled()
+            end
+            http_context.page_response=function(response,err)
+                transport_reason=nil
+                if not response and type(err)=="string" then transport_reason=err
+                elseif type(response)=="table" then
+                    local status=tonumber(response.status_code)
+                    if status and status>=400 then transport_reason="HTTP "..status end
+                end
+            end
+        end
+        local previous=ctx and sdk.enter(ctx,http_context)
         local parameters={unpack(args,1,args.n or #args)}
         local count=not legacy and arity[method] or args.n or #args
         if not legacy then count=count+1; parameters[count]=context end
@@ -122,7 +139,16 @@ function Runtime.new(source,manifest,digest,extension_context)
             if ok==nil then return false,nil,Contract.sourceError(data,method) end
             data,ok=ok,true
         end
-        if ok~=true then return false,nil,Contract.sourceError(err,method) end
+        if ok~=true then
+            if method=="getPages" and type(err)=="table" and err.code=="network" and err.message=="获取图片失败" then
+                local reason="漫画源没有返回本章图片列表，也没有提供具体原因。"
+                if transport_reason then
+                    reason=require("ui.common.error_message").describe(transport_reason,reason)
+                end
+                err=Contract.error("network",reason,method,nil,true)
+            end
+            return false,nil,Contract.sourceError(err,method)
+        end
         return true,data,nil
     end
     function handle:invoke(method,args,context)

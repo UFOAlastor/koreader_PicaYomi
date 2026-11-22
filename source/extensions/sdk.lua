@@ -96,6 +96,7 @@ function SDK.create(id, settings, trusted_legacy, cache_version, api_version, ma
                         results=pack(value(http,unpack(args,1,math.max(select("#",...),at))))
                     end
                     check_call(call)
+                    if call and call.page_response then call.page_response(results[1],results[2]) end
                     return unpack(results,1,results.n)
                 end
             end

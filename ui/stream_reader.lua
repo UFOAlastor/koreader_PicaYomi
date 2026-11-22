@@ -2206,6 +2206,35 @@ end
 -- buffer. No full-page/tile allocation and no retained DocCache copy. The
 -- normal host path remains responsible for caching when memory recovers.
 function StreamDocument:drawPage(target, x, y, rect, pageno, zoom, rotation, gamma, saturation)
+    -- Give a large, uncached foreground page one screen update before the
+    -- synchronous decoder takes over. This frame never enters the tile cache.
+    local screen = require("device").screen
+    if target == screen.bb and self.session.view_mode ~= ViewMode.SCROLL and self._visible_page ~= pageno then
+        self._visible_page = pageno
+        local size = self.session:ensure_size(pageno)
+        local ui = (package.loaded["apps/reader/readerui"] or {}).instance
+        if size and size.w * size.h >= 4000000 and ui and ui.document == self
+                and ui.paging and ui.paging.current_page == pageno
+                and UIManager:getTopmostVisibleWidget() == ui then
+            local key = rect.scaled_rect and self:getPagePartHash(pageno,zoom,rotation,gamma,saturation,rect)
+                or self:getFullPageHash(pageno,zoom,rotation,gamma,saturation)
+            local left, top = math.max(0,x), math.max(0,y)
+            local w = math.min(x+rect.w,target:getWidth())-left
+            local h = math.min(y+rect.h,target:getHeight())-top
+            if w>0 and h>0 and not touch_render_tile(self,require("document/doccache"),key,rect) then
+                local viewport = target:viewport(left,top,w,h)
+                placeholder_page("loading"):draw(nil,viewport)
+                viewport:free()
+                UIManager:nextTick(function()
+                    if ui.document == self and self.session and not self.session.cancelled
+                            and ui.paging.current_page == pageno and self._visible_page == pageno then
+                        UIManager:setDirty(ui,"partial")
+                    end
+                end)
+                return
+            end
+        end
+    end
     local guard = MemoryGuard.instance()
     if not guard:under_pressure() or rotation ~= 0 then
         return Document.drawPage(self,target,x,y,rect,pageno,zoom,rotation,gamma,saturation)

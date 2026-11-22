@@ -54,15 +54,16 @@ function M.install(ui,title)
                     Loading.close(notice);record.task=nil
                     if not current(viewer)then return end
                     local text=target and "插图已保存到：\n"..target or "保存插图失败：\n"..tostring(err)
-                    if target and not Config:set("comic_image_save_dir",directory)then text=text.."\n保存目录未能记住，下次请重新选择。"end
-                    record.message=require("ui/widget/infomessage"):new{text=text}
+                    local remembered=target and Config:set("comic_image_save_dir",directory)
+                    if target and not remembered then text=text.."\n保存目录未能记住，下次请重新选择。"end
+                    record.message=require("ui.common.result_notice"):new{text=text,timeout=remembered and 1 or nil}
                     UI:show(record.message,"ui")
                 end,{delay=.05,is_cancelled=function()return not current(viewer)end,
                     on_cancel=function()record.task=nil end,
                     on_error=function(err)
                         record.task=nil
                         if current(viewer)then
-                            record.message=require("ui/widget/infomessage"):new{text="保存插图失败，请检查目录或存储空间。"}
+                            record.message=require("ui.common.result_notice"):new{text="保存插图失败，请检查目录或存储空间。"}
                             UI:show(record.message,"ui")
                         end
                     end})

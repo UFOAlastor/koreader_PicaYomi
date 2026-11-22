@@ -56,7 +56,7 @@ local function default_error_notifier(job, msg)
     local top=UIManager._window_stack[#UIManager._window_stack]
     if not top or not top.widget.is_picayomi_page then return false end
     if error_notice then return false end
-    local ok2, InfoMessage = pcall(require, "ui/widget/infomessage")
+    local ok2, InfoMessage = pcall(require, "ui.common.result_notice")
     if not ok2 or not InfoMessage then return end
     local name = (job and (job.title or (job.order and ("第" .. tostring(job.order) .. (job.source and job.source.content_type=="novel" and "章" or "话")))))
         or "章节"
@@ -64,7 +64,6 @@ local function default_error_notifier(job, msg)
         error_notice=InfoMessage:new{
             is_picayomi_page=true,
             text = string.format("「%s」下载失败：%s\n\n失败章节可在下载页查看并重试。", tostring(name), require("ui.common.error_message").describe(msg)),
-            timeout = 5,
             dismiss_callback=function()error_notice=nil end,
         }
         UIManager:show(error_notice, "ui")

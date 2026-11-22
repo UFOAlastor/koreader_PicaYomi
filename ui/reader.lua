@@ -6,7 +6,7 @@
 --   * "打开一话"的时序 (可取消协程) -> api/comic.lua:getAndOpenComic
 --   * 本文件只负责和 KOReader 阅读器打交道的那部分
 
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
 local Screen = require("device").screen
@@ -876,7 +876,7 @@ function PicaReader:switchToChapter(episode_index)
     -- switchDocument closes the old reader before asynchronously opening the
     -- new one. Keep a fullscreen loading layer over the detail page throughout
     -- that gap, including KOReader's forced repaint while opening a document.
-    local loading = InfoMessage:new{
+    local loading = require("ui/widget/infomessage"):new{
         text = T(_("正在加载 %1…"), episode_title),
         dismissable = false,
         covers_fullscreen = true,
@@ -884,7 +884,7 @@ function PicaReader:switchToChapter(episode_index)
     function loading:paintTo(bb, x, y)
         bb:paintRect(0, 0, Screen:getWidth(), Screen:getHeight(),
             require("ffi/blitbuffer").COLOR_WHITE)
-        InfoMessage.paintTo(self, bb, x, y)
+        require("ui/widget/infomessage").paintTo(self, bb, x, y)
     end
     function loading:getVisibleArea() return Screen:getSize() end
     self._chapter_loading = loading
@@ -931,7 +931,6 @@ function PicaReader:switchToChapter(episode_index)
         logger.err("PicaReader", "准备章节失败: " .. tostring(err))
         UIManager:show(InfoMessage:new{
             text = require("ui.common.error_message").describe(err, _("加载章节失败，请重试。")),
-            timeout = 3,
         }, "ui")
         return false
     end
@@ -968,7 +967,7 @@ function PicaReader:switchToChapter(episode_index)
         if new_session then new_session:cancel() end
         self.current_episode, self.current_episode_index = previous_episode, previous_index
         logger.err("PicaReader", "切换章节失败: " .. tostring(switch_err))
-        UIManager:show(InfoMessage:new{ text = _("加载章节失败"), timeout = 3 }, "ui")
+        UIManager:show(InfoMessage:new{ text = _("加载章节失败") }, "ui")
         return false
     end
     -- KOReader queues doShowReader before returning from switchDocument. This
@@ -1331,7 +1330,7 @@ function PicaReader:onEndOfBook()
                 UIManager:show(InfoMessage:new{
                     text = _("已阅读全部章节\n\n总共阅读了 "
                         .. #self.episodes_list .. " 话"),
-                    timeout = 2,
+                    timeout = 1,
                 }, "ui")
                 self.on_end_of_book_callback(self.current_comic, self.current_episode)
             else

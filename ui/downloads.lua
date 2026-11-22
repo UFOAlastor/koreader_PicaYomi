@@ -11,7 +11,7 @@
 local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local ButtonDialog = require("ui.common.action_style").ButtonDialog
 local ConfirmBox = require("ui.common.action_style").ConfirmBox
 local Screen = Device.screen
@@ -132,7 +132,6 @@ function Downloads:_showNow(return_callback)
         if old_list then UIManager:close(old_list, "ui") end
         UIManager:show(InfoMessage:new{
             text = section.._("为空。\n在作品详情页点「下载章节」即可离线保存。"),
-            timeout = 4,
         }, "ui")
         if self.return_callback then self.return_callback() end
         return false
@@ -345,7 +344,7 @@ end
 -- that completed or entered the queue while a dialog was open.
 function Downloads:retryStatusMessage(err, skipped, comic)
     if err then return require("ui.common.error_message").describe(err, _("重新下载失败")) end
-    if (skipped or 0)>0 then return _("这些章节已完成或已在队列中，无需重复加入。") end
+    if (skipped or 0)>0 then return _("这些章节已完成或已在队列中，无需重复加入。"),1 end
     local pending, unfinished = 0, 0
     for _,entry in ipairs(self:entries()) do
         if not comic or entry.source_id==comic.source_id and entry._id==comic._id then
@@ -353,8 +352,8 @@ function Downloads:retryStatusMessage(err, skipped, comic)
             unfinished=unfinished+math.max(0,(entry.download_total or 0)-(entry.download_done or 0))
         end
     end
-    if pending>0 then return _("其余章节正在排队或下载，当前没有需要重试的章节。") end
-    if unfinished==0 then return _("全部章节已下载完成。") end
+    if pending>0 then return _("其余章节正在排队或下载，当前没有需要重试的章节。"),1 end
+    if unfinished==0 then return _("全部章节已下载完成。"),1 end
     return _("下载状态已变化，请刷新后重试。")
 end
 
@@ -367,11 +366,13 @@ function Downloads:_retryChaptersNow(comic, chapters)
     local queued,err,skipped = self:_enqueueRetry(comic, chapters)
     self:repaintAfterRetry()
     self:startTimer()
-    UIManager:show(InfoMessage:new{
-        text = queued>0 and T(_("已重新加入 %1 %2下载"), queued,chapter_unit(comic))
-            or self:retryStatusMessage(err, skipped, comic),
-        timeout = queued>0 and 3 or 4,
-    }, "ui")
+    local message,timeout
+    if queued>0 then
+        message,timeout=T(_("已重新加入 %1 %2下载"),queued,chapter_unit(comic)),1
+    else
+        message,timeout=self:retryStatusMessage(err,skipped,comic)
+    end
+    UIManager:show(InfoMessage:new{text=message,timeout=timeout},"ui")
     return queued
 end
 
@@ -397,19 +398,17 @@ function Downloads:_retryAllFailedNow()
         if queued <= 0 and not first_err then first_err = err end
     end
     if total <= 0 then
-        local message=self:retryStatusMessage(first_err, skipped)
+        local message,timeout=self:retryStatusMessage(first_err, skipped)
         self:repaintAfterRetry();self:startTimer()
         UIManager:show(InfoMessage:new{
-            text = message,
-            timeout = 4,
+            text = message, timeout = timeout,
         }, "ui")
         return 0
     end
     self:repaintAfterRetry();self:startTimer()
-    UIManager:show(InfoMessage:new{
-        text = T(_("已重新加入 %1 个章节下载"), total),
-        timeout = 3,
-    }, "ui")
+    local message=T(_("已重新加入 %1 个章节下载"),total)
+    if first_err then message=message.."\n"..self:retryStatusMessage(first_err) end
+    UIManager:show(InfoMessage:new{text=message,timeout=not first_err and 1 or nil},"ui")
     return total
 end
 
@@ -474,7 +473,6 @@ function Downloads:openComic(comic, navigation)
         else
             UIManager:show(InfoMessage:new{
                 text = _("这部作品还没有完整下载的章节"),
-                timeout = 3,
             }, "ui")
         end
         return
@@ -552,7 +550,6 @@ function Downloads:showDeleteMenu()
     if #entries == 0 then
         UIManager:show(InfoMessage:new{
             text = _("还没有下载任何作品"),
-            timeout = 3,
         }, "ui")
         return
     end
@@ -676,7 +673,7 @@ function Downloads:deleteDownload(entry,progress,read_only)
 
     local orders=read_only and require("model.comic"):completedChapters(cid,sid)
     if orders and not next(orders)then
-        UIManager:show(InfoMessage:new{text=_("没有已读完的下载章节，未删除任何文件。"),timeout=3},"ui")
+        UIManager:show(InfoMessage:new{text=_("没有已读完的下载章节，未删除任何文件。")},"ui")
         return false
     end
     -- 1) 停掉这一部在跑的/排队的任务 (别的漫画不受影响)
@@ -687,7 +684,7 @@ function Downloads:deleteDownload(entry,progress,read_only)
         end)
         if not ok then
             logger.warn("Picayomi Downloads: 取消下载任务失败: " .. tostring(err))
-            UIManager:show(InfoMessage:new{text=_("停止下载失败，未删除文件，请重试。"),timeout=3},"ui")
+            UIManager:show(InfoMessage:new{text=_("停止下载失败，未删除文件，请重试。")},"ui")
             return false
         end
     end
@@ -699,7 +696,6 @@ function Downloads:deleteDownload(entry,progress,read_only)
     if not ok then
         UIManager:show(InfoMessage:new{
             text = T(_("删除未能完成：%1"),require("ui.common.error_message").describe(remove_error,_("该作品不在下载清单中。"))),
-            timeout = 3,
         }, "ui")
         return false
     end

@@ -260,7 +260,7 @@ function M.promptLocalSync(source)
         return source:isLoggedIn() and (not generation or source:sessionGeneration()==generation)
             and require("source.registry"):getCurrent()==source
     end
-    local Info=require("ui/widget/infomessage")
+    local Info=require("ui.common.result_notice")
     local function full_refresh() UI:setDirty(nil,"full") end
     local function start_sync()
         if not same_session() then M.syncing=false;return end
@@ -283,7 +283,7 @@ function M.promptLocalSync(source)
                     text=string.format("同步完成：新增 %d 本，跳过 %d 本，失败 %d 本。\n本地收藏已保留。",stats.uploaded,stats.skipped,stats.failed)
                     if stats.failed>0 then text=text.."\n可在账号管理中重试同步。" end
                 else text="同步未完成："..require("ui.common.error_message").describe(err).."\n本地收藏已保留，可在账号管理中重试。" end
-                UI:show(Info:new{text=text,timeout=5},"full")
+                UI:show(Info:new{text=text,timeout=ok and stats.failed==0 and 1 or nil},"full")
                 full_refresh()
             end,
         }
@@ -293,7 +293,7 @@ function M.promptLocalSync(source)
         text=require("ffi/util").template(_("发现当前源有 %1 本本地收藏，是否同步到当前登录账号？\n已在线上收藏的作品会跳过，本地收藏始终保留。"),LocalFavorites.count(source.identifier)),
         ok_text=_("同步"),cancel_text=_("暂不"),
         ok_callback=function()
-            if not same_session() then UI:show(Info:new{text=_("账号或源已变化，请重新发起同步。"),timeout=3},"ui");return end
+            if not same_session() then UI:show(Info:new{text=_("账号或源已变化，请重新发起同步。")},"ui");return end
             if M.syncing then UI:show(Info:new{text=_("正在同步本地收藏，请稍候。"),timeout=2},"ui");return end
             M.syncing=true
             -- Native ConfirmBox closes itself after this callback. Start only

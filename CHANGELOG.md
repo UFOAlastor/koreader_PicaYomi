@@ -1,5 +1,23 @@
 # 更新记录
 
+## 1.6.7 — 2026-11-22
+
+### 中文
+
+- 漫画慢页会先显示加载提示，回翻时可复用上一页；打开漫画时点击加载提示即可取消。
+- 小说切章时显示下载和缓存进度，进度未知时显示滚动条，章节就绪后再提示打开阅读器。
+- 打开已缓存的小说章节时减少重复读取，保留原来的阅读位置。
+- 成功提示显示一秒；失败提示显示原因并标明“点击关闭”，方便读完再关闭。
+- 恢复后，新版界面会将恢复按钮置灰。恢复到 1.6.6 时，旧版仍可再次点击恢复按钮，切回刚才使用的版本。
+
+### English
+
+- Slow manga pages show a loading indicator, and turning back can reuse the previous page. Tap the opening notice to cancel.
+- Chapter changes show download and cache progress, with an animated bar when progress is unknown. The reader opening notice appears once the chapter is ready.
+- Cached novel chapters open with fewer repeated reads while preserving your reading position.
+- Success notices appear for one second. Error notices explain the problem and show a tap-to-close hint so you can dismiss them when ready.
+- The new interface disables the restore button after a rollback. If you restore 1.6.6, its older interface still lets you use the button to switch back.
+
 ## 1.6.6 — 2026-11-22
 
 ### 中文

@@ -4,12 +4,15 @@
 -- per-document settings. Do not override the font or maintain a second font list.
 local Document=require("novel.document")
 local M={}
-function M.open(prepared,options)
+-- Foreground cache hits arrive directly from Document.load in this call stack.
+-- Delayed, newly prepared and external handoffs use open() to recheck the files.
+function M.openVerified(prepared,options)
     options=options or {}
-    assert(Document.load(prepared.root,prepared.key,prepared.generation),"incomplete novel document")
+    local timing=require("novel.open_timing").start()
     prepared=require("novel.filters").document(prepared,options.source)
     local Reader=require("apps/reader/readerui")
     local function ready(ui)
+        if timing then timing:ready(ui) end
         assert(ui.rolling and ui.document,"HTML did not open in text reader")
         ui._picayomi_content_type="novel"
         -- The host resets document.getToc when typography or handmade TOCs
@@ -100,8 +103,11 @@ function M.open(prepared,options)
         end
         require("novel.controls").install(ui,options)
         local saved=not options.from_beginning and Document.position(prepared)
-        if saved then ui.rolling:onGotoXPointer(saved)
-        else ui.rolling:onGotoPage(1) end
+        if saved then
+            if ui.document:getXPointer()~=saved then ui.rolling:onGotoXPointer(saved) end
+        elseif ui.document:getCurrentPage()~=1 or (ui.view.view_mode=="scroll" and ui.document:getCurrentPos()~=0) then
+            ui.rolling:onGotoPage(1)
+        end
         local Listener=require("ui/widget/container/inputcontainer"):extend{}
         local function save()
             local pointer=ui.document and ui.document:getXPointer()
@@ -125,12 +131,18 @@ function M.open(prepared,options)
         local listener=Listener:new{}
         ui:registerModule("picayomi_novel_position",listener)
         if options.ready then options.ready(ui) end
+        if timing then timing:mark("callbacks_done") end
     end
     local current=Reader.instance
     require("ui.common.loading_task").openReader(function(done)
+        if timing then timing:mark("native_start") end
         local function opened(ui) ready(ui);done() end
         if current then current:switchDocument(prepared.path,true,opened)
         else Reader:showReader(prepared.path,nil,nil,nil,opened) end
-    end)
+    end,"章节已就绪，正在打开阅读器…")
+end
+function M.open(prepared,options)
+    assert(Document.load(prepared.root,prepared.key,prepared.generation),"incomplete novel document")
+    return M.openVerified(prepared,options)
 end
 return M

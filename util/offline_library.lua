@@ -850,8 +850,12 @@ function M.clearAll()
 end
 
 --- 重启后把上次未完成的状态归为 partial，不归零已经落盘的页数。
+local recovered_on_startup = false
 function M.markInterrupted()
+    if recovered_on_startup then return end
     local data = M.load()
+    if M.load_error then return end
+    recovered_on_startup = true
     local changed = false
     for _sid, bucket in pairs(data.comics or {}) do
         for _cid, entry in pairs(bucket) do

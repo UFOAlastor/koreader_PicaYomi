@@ -176,7 +176,9 @@ function AboutSettings:show()
     automatic.picayomi_compact_actions=true
     automatic.picayomi_actions={{text=automaticText(),plain=true,callback=function()automatic.callback()end}}
     local state_ok,state=pcall(require("util.plugin_update").state)
-    if state_ok and state.previous and not state.pending then
+    if state_ok and state.restored and not state.pending then
+        automatic.picayomi_actions[2]={text=_("已恢复上一版"),enabled=false,bold=false}
+    elseif state_ok and state.previous and not state.pending then
         automatic.picayomi_actions[2]={text=_("恢复上一版插件"),bold=false,callback=function()
             self._license_taps=0
             require("ui.settings.plugin_update").rollback()

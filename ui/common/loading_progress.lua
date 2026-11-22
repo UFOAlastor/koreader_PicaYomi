@@ -31,13 +31,13 @@ function Progress:init()
     }
     if not self.determinate then
         local paint=self.bar.paintTo
-        local elapsed=math.floor(socket.gettime()-self.started)
+        local phase=self.activity_phase or 0
         self.bar.paintTo=function(bar,bb,x,y)
             paint(bar,bb,x,y)
             local inset=bar.margin_h+bar.bordersize
             local width=bar.width-2*inset
             local segment=math.floor(width*.22)
-            local offset=math.floor((width-segment)*(elapsed%5)/4)
+            local offset=math.floor((width-segment)*(4-math.abs(4-phase))/4)
             bb:paintRect(x+inset+offset,y+bar.margin_v+bar.bordersize,segment,
                 bar.height-2*(bar.margin_v+bar.bordersize),require("ffi/blitbuffer").COLOR_DARK_GRAY)
         end
@@ -61,10 +61,11 @@ function Progress:onShow()
     Info.onShow(self)
     self.refresh_tick=function()
         if self.closed then return end
+        self.activity_phase=((self.activity_phase or 0)+1)%8
         self:update()
-        UI:scheduleIn(1,self.refresh_tick)
+        UI:scheduleIn(self.determinate and 1 or 0.5,self.refresh_tick)
     end
-    UI:scheduleIn(1,self.refresh_tick)
+    UI:scheduleIn(self.determinate and 1 or 0.5,self.refresh_tick)
 end
 function Progress:onCloseWidget()
     self.closed=true

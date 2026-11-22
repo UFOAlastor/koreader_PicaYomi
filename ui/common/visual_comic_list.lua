@@ -11,7 +11,7 @@ local GestureRange = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local ImageWidget = require("ui/widget/imagewidget")
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local ListView = require("ui/widget/listview")
 local Menu = require("ui.common.action_style").Menu
@@ -1056,7 +1056,6 @@ function VisualComicList:loadServerPage(page, notify, display_page)
                     .. tostring(err or ok))
                 UIManager:show(InfoMessage:new{
                     text = T(_("加载第 %1 页失败：%2"), page, require("ui.common.error_message").describe(err)),
-                    timeout = 3,
                 }, "ui")
                 if notify then notify(false) end
                 return
@@ -1144,7 +1143,7 @@ function VisualComicList:fetchMore(silent, on_done)
     end
     local loading
     if not silent then
-        loading = InfoMessage:new{ text = _("加载中…（点击取消）") }
+        loading = require("ui/widget/infomessage"):new{ text = _("加载中…（点击取消）") }
         UIManager:show(loading, "ui")
         -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
         -- 不等这一下的话事件循环没机会重绘, 提示等于没显示
@@ -1176,7 +1175,6 @@ function VisualComicList:fetchMore(silent, on_done)
             if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
                     text = T(_("加载失败: %1"), require("ui.common.error_message").describe(ok)),
-                    timeout = 3,
                 }, "ui")
             end
             self:updatePageButtons()
@@ -1198,7 +1196,6 @@ function VisualComicList:fetchMore(silent, on_done)
             if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
                     text = T(_("加载失败：%1"), require("ui.common.error_message").describe(err)),
-                    timeout = 3,
                 }, "ui")
             end
             self:updatePageText()
@@ -1275,7 +1272,7 @@ function VisualComicList:fetchMore(silent, on_done)
             if self._closed then return end
             if not silent or self.advance_after_fetch then
                 UIManager:show(InfoMessage:new{
-                    text = T(_("加载失败：%1"), require("ui.common.error_message").describe(err)), timeout = 3,
+                    text = T(_("加载失败：%1"), require("ui.common.error_message").describe(err)),
                 }, "ui")
             end
             if on_done then on_done(false) end

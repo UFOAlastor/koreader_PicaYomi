@@ -1,4 +1,4 @@
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
@@ -204,7 +204,7 @@ end
 function History:showHistoryDetail(history, navigation, preview_comic)
     local comic_detail=preview_comic
     if not comic_detail then
-    local loading = InfoMessage:new{
+    local loading = require("ui/widget/infomessage"):new{
         text = _("加载作品信息..."),
     }
     UIManager:show(loading, "ui")
@@ -280,6 +280,7 @@ function History:removeFromHistory(comic_id)
                 -- 显示成功消息
                 UIManager:show(InfoMessage:new{
                     text = _("已从历史记录中删除"),
+                    timeout = 1,
                 }, "ui")
 
                 -- 重新加载历史记录
@@ -309,6 +310,7 @@ function History:confirmClearHistory()
                 -- 显示成功消息
                 UIManager:show(InfoMessage:new{
                     text = _("已清空历史记录"),
+                    timeout = 1,
                 }, "ui")
 
                 -- 重新加载历史记录

@@ -120,7 +120,18 @@ function M.collect()
  end
 end
 function M.markHealthy()
- M.context().boot.healthy()
+ local ctx=M.context()
+ ctx.boot.healthy()
+ -- Older installed loaders retain the newer payload as "previous" after rollback.
+ local state=M.state()
+ if state.previous and not state.trial then
+  local ok,_,previous=pcall(ctx.boot.payload,ctx.root,state.previous)
+  if ok and previous and ctx.boot.compare(previous,M.version())>=0 then
+   state.previous=nil;state.restored=true;M.save(state)
+  elseif ok and previous and state.restored then
+   state.restored=nil;M.save(state)
+  end
+ end
  M.collect()
 end
 function M.cancelPending()
@@ -128,7 +139,7 @@ function M.cancelPending()
  M.collect()
 end
 function M.rollback()
- local s=M.state();assert(s.previous and not s.pending,'没有可恢复版本')
+ local s=M.state();assert(s.previous and not s.restored and not s.pending,'没有可恢复版本')
  M.context().boot.payload(M.root(),s.previous);s.pending=s.previous;s.rollback=true;M.save(s)
 end
 return M

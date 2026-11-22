@@ -1,4 +1,4 @@
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -79,7 +79,7 @@ function Categories:loadCategories(force)
     end
     local loading
     if not self.categories then
-        loading=InfoMessage:new{text=_("加载分类列表...")}
+        loading=require("ui/widget/infomessage"):new{text=_("加载分类列表...")}
         UIManager:show(loading,"ui")
     end
     local function failure(err)
@@ -171,7 +171,6 @@ function Categories:onCategorySelected(category)
     if category.isWeb then
         UIManager:show(InfoMessage:new{
             text = T(_("【%1】是外部链接，Kindle设备无法打开"), category.title),
-            timeout = 3,
         }, "ui")
         return
     end
@@ -204,7 +203,7 @@ function Categories:onCategoryHold(category)
                 require("device").input.setClipboardText(category.link)
                 UIManager:show(InfoMessage:new{
                     text = _("链接已复制"),
-                    timeout = 3,
+                    timeout = 1,
                 }, "ui")
             end,
         })
@@ -282,7 +281,6 @@ function Categories:loadCategoryComics(category, page, sort)
                 UIManager:show(InfoMessage:new{
                     text = T(isNovel() and _("获取【%1】分类小说失败: %2") or _("获取【%1】分类漫画失败: %2"), category.title,
                         require("ui.common.error_message").describe(error_msg)),
-                    timeout = 3,
                 }, "ui")
             end
         end,

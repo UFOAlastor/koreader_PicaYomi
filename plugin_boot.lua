@@ -89,7 +89,7 @@ function B.select(root)
   if preserved then changed=true end
  end
  if s.trial then
-  s.blocked=s.trial;s.active=s.previous or 'base';s.previous=nil;s.pending=nil;s.trial=nil
+  s.restored=true;s.blocked=s.trial;s.active=s.previous or 'base';s.previous=nil;s.pending=nil;s.trial=nil
   s.error='上次新版启动未完成，已恢复上一版';changed=true
  end
  local base=B.version(root)
@@ -101,6 +101,7 @@ function B.select(root)
   local valid,path,version=pcall(B.payload,root,s.pending)
   local _,current=B.payload(root,s.active)
   if valid and (s.rollback or B.compare(version,current)>0)then
+   s.restored=s.rollback or nil
    s.previous=s.active;s.active=s.pending;s.trial=s.active;s.error=nil
   else s.error='待安装更新已失效，继续使用原版本'end
   s.pending=nil;s.rollback=nil;changed=true
@@ -117,6 +118,9 @@ end
 function B.healthy()
  local ctx=package.loaded['picayomi.boot.context'];if not ctx then return end
  local s=B.state(ctx.root)
- if s.trial==ctx.id then s.trial=nil;B.write(ctx.root..'/.updates/state.json',s)end
+ if s.trial==ctx.id then
+  if s.restored then s.previous=nil end
+  s.trial=nil;B.write(ctx.root..'/.updates/state.json',s)
+ end
 end
 return B

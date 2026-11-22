@@ -5,7 +5,7 @@
 local CenterContainer = require("ui/widget/container/centercontainer")
 local Device = require("device")
 local Font = require("ui/font")
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local Menu = require("ui.common.action_style").Menu
 local Notification = require("ui/widget/notification")
@@ -487,7 +487,7 @@ function Home:showRecommended(sort, kind)
     if source and source.content_type=="novel" then title=kind=="recommendations" and _("推荐小说") or _("最新小说") end
     local status = require("source.capabilities").query(source, kind)
     if source and source._extension_digest and not status.available then
-        UIManager:show(InfoMessage:new{ text=status.reason,timeout=3 },"ui"); return
+        UIManager:show(InfoMessage:new{ text=status.reason },"ui"); return
     end
     local fetch = function(page, order)
         if source[method] then return source[method](source, page, order) end
@@ -512,7 +512,7 @@ function Home:showRecommended(sort, kind)
     end
 
     if logger.enabled then logger.info("Picayomi Home: 加载" .. title .. " (排序 " .. tostring(self.current_sort) .. ")") end
-    local loading = InfoMessage:new{ text = title .. _("加载中…（点击取消）") }
+    local loading = require("ui/widget/infomessage"):new{ text = title .. _("加载中…（点击取消）") }
     UIManager:show(loading, "ui")
     -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
     -- 不等这一下的话事件循环没机会重绘, 提示等于没显示
@@ -539,7 +539,7 @@ function Home:showRanking()
         end
     end
     if #ranking_types==0 then
-        UIManager:show(InfoMessage:new{text=_("当前源没有可用的排行榜类型"),timeout=3},"ui")
+        UIManager:show(InfoMessage:new{text=_("当前源没有可用的排行榜类型")},"ui")
         return
     end
 
@@ -610,7 +610,7 @@ end
 function Home:loadRanking(type_value, type_text, page)
     if not SourceAccess.check(self.source, "rankings") then return end
     page = page or 1
-    local loading = InfoMessage:new{ text = T(_("加载%1排行榜…（点击取消）"), type_text) }
+    local loading = require("ui/widget/infomessage"):new{ text = T(_("加载%1排行榜…（点击取消）"), type_text) }
     UIManager:show(loading, "ui")
     -- 同步刷一次: show 只是把刷新入队, 而这里马上要阻塞做网络请求,
     -- 不等这一下的话事件循环没机会重绘, 提示等于没显示
@@ -661,7 +661,6 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
             logger.warn("Picayomi Home: 列表取数异常: " .. tostring(ok))
             UIManager:show(InfoMessage:new{
                 text = T(_("获取失败: %1"), require("ui.common.error_message").describe(ok)),
-                timeout = 3,
             }, "ui")
             self:returnToListBase()
             return
@@ -673,7 +672,6 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
             if type(msg) ~= "string" then msg = "获取数据失败" end
             UIManager:show(InfoMessage:new{
                 text = T(_("获取失败: %1"), require("ui.common.error_message").describe(msg)),
-                timeout = 3,
             }, "ui")
             self:returnToListBase()
             return
@@ -704,7 +702,7 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
         is_cancelled = function() return self.source ~= source end,
         on_error = function(err)
             UIManager:show(InfoMessage:new{
-                text = T(_("获取失败: %1"), require("ui.common.error_message").describe(err)), timeout = 3,
+                text = T(_("获取失败: %1"), require("ui.common.error_message").describe(err)),
             }, "ui")
         end,
     })
@@ -934,7 +932,7 @@ end
 function Home:switchSource(identifier)
     local SourceRegistry = require("source.registry")
     if not SourceRegistry:switch(identifier) then
-        UIManager:show(InfoMessage:new{ text = _("切换源失败"), timeout = 3 }, "ui")
+        UIManager:show(InfoMessage:new{ text = _("切换源失败") }, "ui")
         return
     end
 
@@ -961,7 +959,7 @@ function Home:switchSource(identifier)
 
     UIManager:show(InfoMessage:new{
         text = T(_("已切换到 %1"), self.source and self.source.name or identifier),
-        timeout = 2,
+        timeout = 1,
     }, "ui")
 end
 

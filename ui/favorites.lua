@@ -1,4 +1,4 @@
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local LoadingTask = require("ui.common.loading_task")
@@ -236,7 +236,7 @@ function Favorites:loadRemoteFavorites()
         return not scope or current and current.generation==scope.generation
             and current.key==scope.key and current.revision==scope.revision
     end
-    local loading=InfoMessage:new{is_picayomi_page=true,
+    local loading=require("ui/widget/infomessage"):new{is_picayomi_page=true,
         text=source and source.content_type=="novel" and _("加载收藏小说…（点击取消）") or _("加载收藏漫画…（点击取消）")}
     local function finish()
         if load.finished then return end

@@ -4,7 +4,7 @@ function M.open(detail,episode,options)
     if detail._novel_task or detail.opening_reader then return end
     local UI=require("ui/uimanager")
     local Loading=require("ui.common.loading_task")
-    local Info=require("ui/widget/infomessage")
+    local Info=require("ui.common.result_notice")
     local Document=require("novel.document")
     local Library=require("util.offline_library")
     local base=require("util.cache").BASE_DIR.."/novels"
@@ -85,7 +85,7 @@ function M.open(detail,episode,options)
     local function prepare(ep,progress,cleanup)
         local chapter=tostring(ep._id or ep.id)
         local prepared=downloaded(ep) or Document.cached(base.."/reading",source.identifier,book,chapter)
-        if prepared then return true,prepared end
+        if prepared then return true,prepared,nil,true end
         if detail.offline then return false,nil end
         return Document.prepare(require("novel.native").session(source,book,chapter),{
             root=base.."/reading",book=book,chapter=chapter,title=ep.title,
@@ -197,35 +197,13 @@ function M.open(detail,episode,options)
             detail._novel_task=nil
             if not state.reader then finish() end
         end
-        if adopting then
-            job.waiting=true
-            loading:update(job.progress)
-            job.on_done=function(ok,prepared,err)
-                job.waiting=false;job.on_done=nil
-                close_loading();detail._novel_task=nil
-                if state.closed or detail._closed then finish();return end
-                if ok then start(ep,from_beginning)
-                elseif not (err and err.cancelled) then UI:show(Info:new{text=err and err.message or "下一章加载失败，请重试"},"ui")end
-            end
-            detail._novel_task={cancel=function()
-                job.waiting=false;job.on_done=nil;cancel_prefetch();cancelled()
-            end}
-            loading.dismiss_callback=function()if detail._novel_task then detail._novel_task:cancel()end end
-            return
-        end
-        detail._novel_task=Loading.background(loading,function()
-            local ok,prepared,err=prepare(ep,function(p)loading:update(p)end,function(fn)cleanup=fn end)
-            cleanup=nil;detail._novel_task=nil
-            if state.closed or detail._closed then close_loading();finish();return end
-            if not ok then
-                close_loading()
-                UI:show(Info:new{text=err and err.message or "本章尚未完整下载，暂时无法离线阅读"},"ui")
-                if not state.reader then finish() end
-                return
-            end
+        local function openPrepared(prepared,verified_cache_hit)
+            close_loading()
             prepared.progress_root=base.."/progress"
             state.switching=switching
-            local opened,failure=pcall(require("novel.reader").open,prepared,{
+            local reader=require("novel.reader")
+            local open=verified_cache_hit and reader.openVerified or reader.open
+            local opened,failure=pcall(open,prepared,{
                 title=detail.comic.title,chapter_title=ep.title,
                 source=source,from_beginning=from_beginning,is_switching=function()return state.switching end,
                 on_closing=function()
@@ -248,15 +226,39 @@ function M.open(detail,episode,options)
                 end,
             })
             if not opened then
-                close_loading()
                 state.switching=false
                 UI:show(Info:new{text="小说阅读器打开失败，请返回详情重试"},"ui")
                 local active=require("apps/reader/readerui").instance
                 if not active or active~=state.reader then state.reader=nil;finish() end
             end
-            -- The host queues opening before switchDocument returns. Close the
-            -- cover only after that attempt reaches the reader window stack.
-            UI:nextTick(close_loading)
+        end
+        if adopting then
+            job.waiting=true
+            loading:update(job.progress)
+            job.on_done=function(ok,prepared,err)
+                job.waiting=false;job.on_done=nil
+                close_loading();detail._novel_task=nil
+                if state.closed or detail._closed then finish();return end
+                if ok then openPrepared(prepared)
+                elseif not (err and err.cancelled) then UI:show(Info:new{text=err and err.message or "下一章加载失败，请重试"},"ui")end
+            end
+            detail._novel_task={cancel=function()
+                job.waiting=false;job.on_done=nil;cancel_prefetch();cancelled()
+            end}
+            loading.dismiss_callback=function()if detail._novel_task then detail._novel_task:cancel()end end
+            return
+        end
+        detail._novel_task=Loading.background(loading,function()
+            local ok,prepared,err,verified_cache_hit=prepare(ep,function(p)loading:update(p)end,function(fn)cleanup=fn end)
+            cleanup=nil;detail._novel_task=nil
+            if state.closed or detail._closed then close_loading();finish();return end
+            if not ok then
+                close_loading()
+                UI:show(Info:new{text=err and err.message or "本章尚未完整下载，暂时无法离线阅读"},"ui")
+                if not state.reader then finish() end
+                return
+            end
+            openPrepared(prepared,verified_cache_hit)
         end,{delay=.1,timeout=65,reuse_worker=true,on_cancel=cancelled,on_error=function()cancelled();Loading.showFailure() end})
     end
     state.close=finish

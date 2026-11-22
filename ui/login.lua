@@ -1,5 +1,5 @@
 local CenterContainer = require("ui/widget/container/centercontainer")
-local InfoMessage = require("ui/widget/infomessage")
+local InfoMessage = require("ui.common.result_notice")
 local InputDialog = require("ui.common.action_style").InputDialog
 local KeyValuePage = require("ui/widget/keyvaluepage")
 local Menu = require("ui.common.action_style").Menu
@@ -157,7 +157,6 @@ function Login:showCookieLoginForm()
                         if not value or value:match("^%s*$") then
                             UIManager:show(InfoMessage:new{
                                 text = _("请输入 Cookie"),
-                                timeout = 2,
                             }, "ui")
                             return
                         end
@@ -188,7 +187,7 @@ function Login:login(email, password)
     if logger.enabled then logger.info("Login: 开始登录") end
 
     -- 显示登录中消息
-    local loading = InfoMessage:new{
+    local loading = require("ui/widget/infomessage"):new{
         text = _("登录中..."),
     }
     UIManager:show(loading, "ui")
@@ -219,25 +218,20 @@ function Login:login(email, password)
             -- 显示欢迎消息
             welcome=InfoMessage:new{
                 text = _("登录成功，欢迎 ") .. (profile.name or _("未知用户")),
-                timeout = 2,
+                timeout = 1,
             }
         else
             -- 显示登录成功但无法获取用户信息的消息
             welcome=InfoMessage:new{
                 text = _("登录成功，但无法获取用户信息。")
                     .. require("ui.common.error_message").describe(profile_err, _("可稍后在账号管理中刷新。")),
-                timeout = 2,
             }
         end
-        UIManager:show(welcome,"ui")
-
-        -- 打开主界面
-        UIManager:scheduleIn(1, function()
+        local function returnHome()
             -- 复用已在窗口栈里的主页菜单, 不要再 new 一个 (会堆叠出重复菜单)
             -- 延迟任务: 任务队列不兜异常, 抛出来 = 整个 KOReader 退出 (用户刚点了登录)。
             -- 回主页失败时用户仍停在原页面, 可以手动返回。
             local ok, err = pcall(function()
-                LoadingTask.close(welcome)
                 require("ui.home").returnToHome()
                 if login_source then require("util.favorites").promptLocalSync(login_source) end
             end)
@@ -245,16 +239,16 @@ function Login:login(email, password)
                 logger.warn("Login: 登录后回主页失败: " .. tostring(err))
                 require("ui.common.loading_task").showFailure(err)
             end
-        end)
+        end
+        welcome.dismiss_callback=function() UIManager:nextTick(returnHome) end
+        UIManager:show(welcome,"ui")
     else
-        -- 登录失败
+        -- 先恢复表单，再在它上方显示失败原因。
+        self:showLoginForm()
         UIManager:show(InfoMessage:new{
             text = T(_("登录失败: %1"), require("ui.common.error_message").describe(error_msg)),
-            timeout = 3,
         }, "ui")
 
-        -- 重新显示登录表单
-        self:showLoginForm()
     end
 end
 
@@ -273,11 +267,10 @@ function Login:showUserInfo()
                 UIManager:close(self.user_dialog, "ui")
                 self.user_dialog = nil
             end
+            self:showLoginForm()
             UIManager:show(InfoMessage:new{
                 text = _("无法获取用户信息，请重新登录"),
-                timeout = 2,
             }, "ui")
-            self:showLoginForm()
             return
         end
     end
@@ -349,7 +342,7 @@ end
 
 function Login:fetchUserProfile()
     -- 显示加载消息
-    local loading = InfoMessage:new{
+    local loading = require("ui/widget/infomessage"):new{
         text = _("获取用户信息..."),
         timeout = 30,
     }
@@ -368,7 +361,7 @@ function Login:fetchUserProfile()
         -- 显示成功消息
         UIManager:show(InfoMessage:new{
             text = _("用户信息获取成功"),
-            timeout = 2,
+            timeout = 1,
         }, "ui")
         -- 重新显示用户信息
         self:showUserInfo()
@@ -376,7 +369,6 @@ function Login:fetchUserProfile()
         -- 显示错误消息
         UIManager:show(InfoMessage:new{
             text = T(_("获取用户信息失败: %1"), require("ui.common.error_message").describe(error_msg)),
-            timeout = 3,
         }, "ui")
     end
 end
@@ -407,7 +399,7 @@ function Login:confirmLogout()
 
             UIManager:show(InfoMessage:new{
                 text = _("已退出登录"),
-                timeout = 2,
+                timeout = 1,
             }, "ui")
 
             -- 延迟返回主界面

@@ -64,7 +64,7 @@ Do not force a restart, delete reading data, or change other plugins.
 
 1. **Sources**: choose **安装** (Install) on first entry to get manga and novel sources from the built-in subscription, then restart KOReader. If you choose **稍后** (Later), use **设置 → 源管理 → 更新源（全部订阅）** to install them when ready. See the [source repository](https://github.com/UFOAlastor/PicaYomi_Sources) for available sources and account requirements.
 2. **Find a title**: select a manga or novel source and sign in if required. Search the current source or all sources of the same content type.
-3. **Read**: **开始** starts from the beginning; **继续** resumes. Home cover previews also open reading directly. Leaving the reader returns to details, then to the original page.
+3. **Read**: Tap a list cover to enlarge it, then tap anywhere to close. Tap the title to open details. **开始** starts from the beginning; **继续** resumes. Home cover previews also open reading directly. Leaving the reader returns to details, then to the original page.
 4. **Save offline**: choose **下载章节** on the details page, then open completed chapters from **已下载** on the home page. Online caches may be cleared; explicitly download chapters you want to keep offline.
 
 ## Reading and settings

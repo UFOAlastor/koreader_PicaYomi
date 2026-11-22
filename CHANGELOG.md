@@ -1,5 +1,19 @@
 # 更新记录
 
+## 1.6.6 — 2026-11-22
+
+### 中文
+
+- 漫画单页加载较慢时仍会提前下载下一页。连续下载失败后会尝试恢复预取，翻过大图后也会重新判断下一页可用的内存。
+- 点列表封面可放大查看，再点屏幕任意位置关闭。点标题仍可进入详情。
+- 返回、关闭和更新失败等提示改为短暂显示，操作提前完成时立即收起返回提示。
+
+### English
+
+- Manga preloading continues after a slow page. The reader can resume preloading after consecutive download failures and reassesses available memory after you turn past a large image.
+- Tap a list cover to enlarge it, then tap anywhere to close it. Tap the title to open details.
+- Return, close, and update error notices now appear briefly. The return notice closes as soon as navigation finishes.
+
 ## 1.6.5 — 2026-11-22
 
 ### 中文

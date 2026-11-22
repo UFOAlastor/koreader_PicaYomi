@@ -36,7 +36,7 @@ local Worker = {}
 --- 等网络 (DNS / TLS / 首字节 / 传输) —— 实测一张图真机上要好几秒, 子进程报上来的
 --- 却是 "0.1s"。这个数字有两个消费者, 都会因此判错:
 ---   * Diag 的 "page N ok X.Xs" (排查"翻页慢"时唯一的耗时证据);
----   * 调度器的慢链路熔断 (policy.slow_seconds), 它按这个值决定要不要停预取。
+---   * 调度器的慢页诊断 (policy.slow_seconds)。
 local function wall_time()
     local ok, socket = pcall(require, "socket")
     if ok and type(socket) == "table" and socket.gettime then return socket.gettime() end

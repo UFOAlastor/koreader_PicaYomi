@@ -2,7 +2,7 @@ local U={}
 local UI=require('ui/uimanager')
 local Core=require('util.plugin_update')
 local Style=require('ui.common.action_style')
-local function info(text)UI:show(require('ui/widget/infomessage'):new{text=text},'ui')end
+local function info(text)UI:show(require('ui/widget/infomessage'):new{text=text,timeout=require('ui.common.loading_task').brief_seconds},'ui')end
 local function online()return require('ui/network/manager'):isConnected()end
 local function manualCooling(state,now)
  local remaining=(tonumber(state.manual_check_after)or 0)-now

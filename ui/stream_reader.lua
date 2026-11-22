@@ -483,6 +483,7 @@ function StreamSession.new(opts)
             max_harvest_per_step = 2,
         } or nil,
         on_ready = function(n, path, elapsed, size, post)
+            self._probed_outage = nil
             self:measure_page(n, path)
             -- 缓存总量记账: 纯内存加法, 只有估计值越过 max_cache_size 时才真去遍历清理。
             -- 没有它的话, 总量上限只在**启动时**检查一次 —— 一直读、从不重启的会话里
@@ -539,14 +540,33 @@ end
 
 --- 把 store 的权威状态同步到会话的镜像字段上
 --
--- 熔断是单向的 (一旦停预取就不再自动恢复), 所以只做"或"不覆盖 —— 既不会把
--- 熔断状态抹掉, 也不会把外部显式置的 prefetch_disabled 抹掉。
 function StreamSession:_sync_mirrors()
     self.downloaded = self.store.downloaded
     self.consecutive_failures = self.store.consecutive_failures
-    if self.store.prefetch_disabled then
-        self.prefetch_disabled = true
-        if #self.prefetch_queue > 0 then self.prefetch_queue = {} end
+    if not self.store.prefetch_disabled then return end
+    self.prefetch_disabled = true
+    self.prefetch_queue = {}
+    if self.suspended or self.cancelled then return end
+
+    local function resume()
+        self.store.prefetch_disabled = false
+        self.prefetch_disabled = false
+        local dir = self.scheduler.direction or 1
+        local page = self.scheduler.current_page + dir
+        self:prefetch(page, 1)
+    end
+    if self.consecutive_failures == 0 then
+        self:_cancel_prefetch_timer()
+        resume()
+    elseif not self._recover_prefetch and not self._probed_outage then
+        local function probe()
+            if self._recover_prefetch ~= probe then return end
+            self._recover_prefetch = nil
+            self._probed_outage = true
+            resume()
+        end
+        self._recover_prefetch = probe
+        UIManager:scheduleIn(self.scheduler.policy.cooldown, probe)
     end
 end
 
@@ -797,6 +817,8 @@ function StreamSession:cancel_memory_wait()
 end
 
 function StreamSession:_cancel_prefetch_timer()
+    if self._recover_prefetch then UIManager:unschedule(self._recover_prefetch) end
+    self._recover_prefetch = nil
     if self._prefetch_task then UIManager:unschedule(self._prefetch_task)end
     self._prefetch_task=nil;self.prefetch_scheduled=false
 end
@@ -816,6 +838,7 @@ function StreamSession:set_suspended(asleep)
             self:wait_for_memory(wait.page,wait.can_retry,wait.required)
             if self.memory_wait then self.memory_wait.checks=wait.checks or 0 end
         end
+        self:_sync_mirrors()
         self:_schedule_prefetch()
     end
 end
@@ -825,6 +848,7 @@ function StreamSession:wait_for_memory(n, can_retry, required)
     self.memory_blocked = self.memory_blocked or {}
     self.memory_retry_counts = self.memory_retry_counts or {}
     self.memory_blocked[n] = true
+    self.memory_requirement_page = n
     if required then self.memory_required=math.max(self.memory_required or 0,required) end
     self.prefetch_queue={}
     self.scheduler:_drop_prefetch_entries()
@@ -1009,6 +1033,9 @@ function StreamSession:on_page_turn(page, dir)
     if not page then return end
     local stats=self._prefetch_stats or {hits=0,misses=0};self._prefetch_stats=stats
     local kind=self.store:has_local(page) and 'hits' or 'misses';stats[kind]=stats[kind]+1
+    if self.memory_requirement_page ~= page then
+        self.memory_required, self.memory_requirement_page = nil, nil
+    end
     if self.memory_wait and self.memory_wait.page~=page then
         self:cancel_memory_wait()
     end
@@ -1039,7 +1066,7 @@ function StreamSession:on_hint_page(pageno)
     -- DHINTCOUNT=1), 也就是**向前**。用户正在回看时它是反方向的噪音:
     -- 会把刚翻过的那页塞进预取队列, 与"下一张"抢带宽。
     if (self.scheduler.direction or 1) < 0 then return end
-    self:prefetch_around(pageno, 1)
+    self:prefetch(pageno)
 end
 
 --- 每隔 PREFETCH_DELAY 从预取队列取一页交给调度器

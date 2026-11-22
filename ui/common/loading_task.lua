@@ -26,7 +26,7 @@ local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
 local logger = require("util.logger")
 
-local LoadingTask = {}
+local LoadingTask = { brief_seconds = 1 }
 local handles=setmetatable({},{__mode="k"})
 function LoadingTask.setSuspended(value)
     LoadingTask.suspended=value
@@ -42,8 +42,9 @@ function LoadingTask.cancelAll()
 end
 
 -- Shared by comic and novel return paths; paint before blocking reader cleanup.
-function LoadingTask.showReturning(reason)
-    local notice=InfoMessage:new{text=reason or require("gettext")("返回中…"),dismissable=false}
+function LoadingTask.showReturning(reason, until_ready)
+    local notice=InfoMessage:new{text=reason or require("gettext")("返回中…"),dismissable=false,
+        timeout=not until_ready and LoadingTask.brief_seconds or nil}
     -- A queued ReaderView repaint may decode/filter a large page. The return
     -- notice must not wait for it: cover that view with its already drawn
     -- framebuffer instead. One screen only, freed on every close path.
@@ -93,7 +94,7 @@ end
 -- Keep a painted snapshot notice until the host ready callback. The queued
 -- cleanup is only a failure fallback, and cannot close a later opening notice.
 function LoadingTask.openReader(open, text)
-    local notice=LoadingTask.showReturning(text or require("gettext")("正在打开阅读器…"))
+    local notice=LoadingTask.showReturning(text or require("gettext")("正在打开阅读器…"), true)
     local handle={}
     local function close()
         if not notice then return end
@@ -108,6 +109,7 @@ end
 
 function LoadingTask.showFailure(err)
     UIManager:show(InfoMessage:new{
+        timeout = LoadingTask.brief_seconds,
         text = require("ui.common.error_message").describe(err,
             require("gettext")("加载失败，请检查网络后重试；若仍失败，请重新打开此页面。")),
     }, "ui")

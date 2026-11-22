@@ -28,6 +28,7 @@ local LoadingTask = require("ui.common.loading_task")
 local Screen = Device.screen
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
+local CoverZoom = require("ui.common.cover_zoom")
 local CoverPlaceholder = require("ui.common.cover_placeholder")
 local _ = require("gettext")
 local T = require("ffi/util").template
@@ -422,7 +423,14 @@ function ComicListItem:select(continue_reading)
     return true
 end
 
-function ComicListItem:onTapSelect()
+function ComicListItem:onTapSelect(_, ges)
+    local cover = self.content[1][1]
+    if ges and ges.pos and cover.dimen and cover.dimen:contains(ges.pos) then
+        if cover.file and self.list_ui and not self.list_ui._closed then
+            CoverZoom.show(self.list_ui, cover.file)
+        end
+        return true
+    end
     return self:select(false)
 end
 
@@ -1755,6 +1763,7 @@ end
 --      (阅读器) 发多余的局部刷新。
 -- 实测: 关掉列表后继续泵事件循环, 仍会发生 6 次封面下载。
 function VisualComicList:onCloseWidget()
+    CoverZoom.close(self)
     self._closed = true
     self._render_sample = nil
     self:cancelCoverSubscriptions()

@@ -102,15 +102,16 @@ function BaseSettingsModule:goBack()
     end
 end
 
-function BaseSettingsModule:showInfo(text)
+function BaseSettingsModule:showInfo(text, timeout)
     UIManager:show(InfoMessage:new{
-        text = text,
+        text = text, timeout = timeout,
     }, "ui")
 end
 
 function BaseSettingsModule:showError(text)
     logger.err("Settings error:", text)
     UIManager:show(InfoMessage:new{
+        timeout = require("ui.common.loading_task").brief_seconds,
         text = _("错误：") .. require("ui.common.error_message").describe(text),
     }, "ui")
 end

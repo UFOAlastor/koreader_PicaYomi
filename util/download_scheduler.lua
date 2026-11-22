@@ -42,15 +42,7 @@ Scheduler.P_HINT    = 2    -- 后台预取补的页 (熔断时整批丢掉)
 
 local DEFAULT_POLICY = {
     concurrency        = 1,          -- 同时在跑的下载数 (Kindle 上带宽/内存都紧)
-    -- 单页超过这么久 => 认为链路"病态", 停预取。
-    --
-    -- 3s -> 10s (2026-10-18): 这个阈值原本是配"同步下载"时代的 —— 那时一页下 3 秒
-    -- 就是界面冻 3 秒, 停预取是对的。现在下载跑在 fork 子进程里, 主线程一秒都不占,
-    -- 慢链路**不再**等于界面卡; 而预取恰恰是慢链路下唯一能让翻页不等图的手段
-    -- (用户读完一页的几秒里, 后台已经把下一张下好了)。3 秒会把"正常但慢"的 CDN
-    -- 判成病态, 一停预取就退化成"每翻一页现下一张", 体验更差。
-    -- 真正卡死的连接由 socket 超时 (20s) 走失败路径, 不靠这里。
-    slow_seconds       = 10,
+    slow_seconds       = 10,         -- 慢页诊断阈值
     failure_threshold  = 2,          -- 连续失败这么多次 => 停预取
     cooldown           = 15,         -- 失败页冷却 (秒), 冷却期内不重复发起
     max_start_per_step = 1,          -- 单步最多发起几个
@@ -367,6 +359,7 @@ end
 --- 收割一个完成的下载
 function Scheduler:_complete(item)
     local n = item.page
+    local flight = self.inflight[n]
     self.inflight[n] = nil
 
     if item.ok then
@@ -403,10 +396,10 @@ function Scheduler:_complete(item)
         end
     end
 
-    -- 慢链路熔断: transport 报告的单页耗时超阈值 => 别再后台补页, 否则界面
-    -- 会被反复的长下载冻住。
     if item.elapsed and item.elapsed >= self.policy.slow_seconds then
-        self:disable_prefetch(string.format("单页耗时 %.1fs", item.elapsed))
+        logger.warn("Picayomi: slow page", n, "request",
+            flight and flight.priority == Scheduler.P_CURRENT and "current" or "prefetch",
+            "ok", item.ok, "total_s", item.elapsed, "post_s", item.post or "unknown")
     end
 
     -- 连续失败熔断
@@ -454,7 +447,7 @@ function Scheduler:_start(entry)
 
     local imgs = self.store:page_images()
     local img = imgs and imgs[n]
-    self.inflight[n] = { started = self.wall_clock(), attempt = self.attempts[n] }
+    self.inflight[n] = { started = self.wall_clock(), attempt = self.attempts[n], priority = entry.priority }
     self.stats.started = self.stats.started + 1
 
     self.transport:start{

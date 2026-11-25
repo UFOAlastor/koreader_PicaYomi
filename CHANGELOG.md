@@ -1,5 +1,15 @@
 # 更新记录
 
+## 1.6.8 — 2026-11-26
+
+### 中文
+
+- 修复源状态发生冲突后，关闭更新失败提示仍反复弹出、无法退出首页的问题。
+
+### English
+
+- Fixed an update error that repeatedly reopened after dismissal and prevented leaving the home screen when source settings conflicted.
+
 ## 1.6.7 — 2026-11-22
 
 ### 中文

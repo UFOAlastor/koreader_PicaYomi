@@ -101,7 +101,10 @@ function Manager:_save(state)
         local ok,same=pcall(function()return equal(json.decode(current),json.decode(self._state_raw))end)
         unchanged=ok and same
     end
-    assert(unchanged,"源状态已由其他操作更新，请重启 KOReader 后再试；已保留新状态")
+    if not unchanged then
+        self.state_conflict="源状态已由其他操作更新，请重启 KOReader 后再试；已保留新状态"
+        error(self.state_conflict)
+    end
     Storage.json(path,state)
     self._state_raw=Storage.read(path)
     self.state=state

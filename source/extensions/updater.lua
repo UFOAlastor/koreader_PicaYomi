@@ -57,6 +57,13 @@ end
 local function refresh() UI:setDirty(nil,"full") end
 local function notify(m)
     if not idle() or U.prompt or U.downloading then return end
+    if m.state_conflict then
+        if U.error then
+            U.error=nil
+            require("ui.settings.sources"):showInfo(m.state_conflict,false)
+        end
+        return
+    end
     local available=m.state.auto_check and candidates(m) or {}
     if #available>0 then
         local lines={"发现 "..#available.." 个源可安装或更新，是否下载？"}
@@ -211,6 +218,7 @@ local function refreshDue(m,recovering,network)
         if m:due(url) then
             local ok,reason=pcall(m.refreshRepository,m,url)
             if not ok then
+                if m.state_conflict then return {reason} end
                 local repo=m.state.repositories[url]
                 if recovering and wakeTransportError(reason) and repo then
                     retry[url]=repo
@@ -239,6 +247,7 @@ function U.schedule(network_restored)
     if network_restored then U.recovery_until=clock()+10 end
     local m=manager()
     if U.start or U.prompt or U.downloading or U.task and not U.task.done then return end
+    if m.state_conflict and not U.error then return end
     local first=m:needsOnboarding()
     if first and U.onboarding_deferred then return end
     local notices=first or unnotified(m)>0 or U.error~=nil
@@ -249,6 +258,11 @@ function U.schedule(network_restored)
         U.start=nil
         if generation~=U.generation or not shownHome() then return end
         local current=manager()
+        if current.state_conflict then
+            if idle() then notify(current)
+            elseif U.error then U.start=start;UI:scheduleIn(1,start) end
+            return
+        end
         if current:needsOnboarding() and not idle() then U.start=start;UI:scheduleIn(1,start);return end
         if onboarding(current) then return end
         if not current.state.auto_check or not due(current) then notify(current);return end

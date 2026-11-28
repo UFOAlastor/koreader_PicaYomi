@@ -12,7 +12,7 @@ function M.tone(mode,tone)
     return (gamma[tone] or tone=="contrast") and tone or "off"
 end
 function M.key(mode,tone,adaptive)
-    return "display-filter-v7:"..M.normalize(mode)..":"..M.tone(mode,tone)..(adaptive==false and ":fixed" or ":adaptive")
+    return "display-filter-v8:"..M.normalize(mode)..":"..M.tone(mode,tone)..(adaptive==false and ":fixed" or ":adaptive")
 end
 -- Small images keep source-resolution filtering. At a material downscale,
 -- filter the display-resolution neighborhood instead of every source pixel.

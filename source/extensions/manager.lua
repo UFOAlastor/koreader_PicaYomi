@@ -19,6 +19,46 @@ local function version()
     return assert(dofile(path.."/../../_meta.lua").version)
 end
 local function blank() return {format=2,sources={},repositories={},removed={},archives={},auto_check=true,onboarding_pending=true,update_policy_version=1} end
+local function decodeState(raw,host_version)
+    local s=json.decode(raw)
+    assert(type(s)=="table" and (s.format==1 or s.format==2) and type(s.sources)=="table" and type(s.repositories)=="table","扩展状态损坏")
+    local migrating=s.format==1
+    s.removed=s.removed or {}; s.archives=s.archives or {}; s.auto_check=s.update_policy_version==1 and s.auto_check==true
+    s.update_policy_version=1
+    assert(type(s.archives)=="table","处理包信任记录损坏")
+    for id,versions in pairs(s.archives) do
+        assert(Bundle.id(id) and type(versions)=="table","处理包信任记录损坏")
+        for hash,record in pairs(versions) do
+            assert(Catalog.digest(hash) and type(record)=="table" and type(record.legacy)=="boolean","处理包信任记录损坏")
+        end
+    end
+    assert(type(s.removed)=="table", "卸载状态损坏")
+    for id,value in pairs(s.removed) do assert(Bundle.id(id) and value==true,"卸载状态损坏") end
+    for id,r in pairs(s.sources) do
+        assert(Bundle.id(id) and type(r)=="table" and Catalog.digest(r.current)
+            and (not r.previous or Catalog.digest(r.previous)) and type(r.enabled)=="boolean" and type(r.origin)=="string","扩展状态条目损坏")
+        Bundle.manifest(r.manifest,host_version,true); assert(r.manifest.id==id,"扩展状态 ID 不符")
+        if migrating then r.pending=r.current; r.active=nil; r.last_good=r.previous end
+        for _,key in ipairs({"active","pending","last_good","activating","failed"}) do
+            assert(r[key]==nil or Catalog.digest(r[key]),"扩展版本状态损坏")
+        end
+        r.quarantine=r.quarantine or {}
+        assert(type(r.quarantine)=="table", "失败隔离状态损坏")
+    end
+    for url,repo in pairs(s.repositories) do
+        assert(Net.validURL(url) and type(repo)=="table" and type(repo.name)=="string" and type(repo.sources)=="table","订阅状态损坏")
+        if repo.public_key and not repo.revision then
+            assert(#repo.sources==0,"预置信任订阅不能带未验证目录")
+        else
+            Catalog.validate({format=repo.catalog_format or (repo.public_key and 2 or 1),name=repo.name,sources=repo.sources,
+                publisher_id=repo.publisher_id,revision=repo.revision})
+        end
+        if repo.public_key then require("source.extensions.signature").unhex(repo.public_key,32) end
+        repo.url=url; repo.auto_install=repo.auto_install==true
+    end
+    s.format=2
+    return s,migrating
+end
 function Manager.new(opts)
     opts=opts or {}
     local self=setmetatable({root=opts.root or os.getenv("PICAYOMI_EXTENSION_DATA_DIR") or require("datastorage"):getDataDir().."/picayomi/extensions",
@@ -28,43 +68,7 @@ function Manager.new(opts)
     local ok,state=pcall(function()
         raw=Storage.read(self.root.."/state.json")
         if not raw then return blank() end
-        local s=json.decode(raw)
-        assert(type(s)=="table" and (s.format==1 or s.format==2) and type(s.sources)=="table" and type(s.repositories)=="table","扩展状态损坏")
-        local migrating=s.format==1
-        s.removed=s.removed or {}; s.archives=s.archives or {}; s.auto_check=s.update_policy_version==1 and s.auto_check==true
-        s.update_policy_version=1
-        assert(type(s.archives)=="table","处理包信任记录损坏")
-        for id,versions in pairs(s.archives) do
-            assert(Bundle.id(id) and type(versions)=="table","处理包信任记录损坏")
-            for hash,record in pairs(versions) do
-                assert(Catalog.digest(hash) and type(record)=="table" and type(record.legacy)=="boolean","处理包信任记录损坏")
-            end
-        end
-        assert(type(s.removed)=="table", "卸载状态损坏")
-        for id,value in pairs(s.removed) do assert(Bundle.id(id) and value==true,"卸载状态损坏") end
-        for id,r in pairs(s.sources) do
-            assert(Bundle.id(id) and type(r)=="table" and Catalog.digest(r.current)
-                and (not r.previous or Catalog.digest(r.previous)) and type(r.enabled)=="boolean" and type(r.origin)=="string","扩展状态条目损坏")
-            Bundle.manifest(r.manifest,self.host_version,true); assert(r.manifest.id==id,"扩展状态 ID 不符")
-            if migrating then r.pending=r.current; r.active=nil; r.last_good=r.previous end
-            for _,key in ipairs({"active","pending","last_good","activating","failed"}) do
-                assert(r[key]==nil or Catalog.digest(r[key]),"扩展版本状态损坏")
-            end
-            r.quarantine=r.quarantine or {}
-            assert(type(r.quarantine)=="table", "失败隔离状态损坏")
-        end
-        for url,repo in pairs(s.repositories) do
-            assert(Net.validURL(url) and type(repo)=="table" and type(repo.name)=="string" and type(repo.sources)=="table","订阅状态损坏")
-            if repo.public_key and not repo.revision then
-                assert(#repo.sources==0,"预置信任订阅不能带未验证目录")
-            else
-                Catalog.validate({format=repo.catalog_format or (repo.public_key and 2 or 1),name=repo.name,sources=repo.sources,
-                    publisher_id=repo.publisher_id,revision=repo.revision})
-            end
-            if repo.public_key then require("source.extensions.signature").unhex(repo.public_key,32) end
-            repo.url=url; repo.auto_install=repo.auto_install==true
-        end
-        s.format=2
+        local s,migrating=decodeState(raw,self.host_version)
         if migrating then Storage.write(self.root.."/state.v1.backup.json",raw) end
         return s
     end)
@@ -102,7 +106,7 @@ function Manager:_save(state)
         unchanged=ok and same
     end
     if not unchanged then
-        self.state_conflict="源状态已由其他操作更新，请重启 KOReader 后再试；已保留新状态"
+        self.state_conflict="源状态已由其他操作更新，已保留新状态。可在源管理中重新检查更新。"
         error(self.state_conflict)
     end
     Storage.json(path,state)
@@ -627,5 +631,22 @@ function Manager:due(url,force)
     return now>=next_check
 end
 local instance
-function Manager.instance() if not instance then instance=Manager.new() end; return instance end
+-- A manual update starts a new transaction. Keep readers and their loaded
+-- modules alive; outstanding operations still own their original write guard.
+function Manager:forUpdate()
+    local raw=Storage.read(self.root.."/state.json")
+    if raw==self._state_raw and not self.state_conflict then return self end
+    assert(raw,"源状态文件缺失，请先恢复状态文件")
+    local state,migrating=decodeState(raw,self.host_version)
+    assert(not migrating,"源状态需要迁移，请重启 KOReader")
+    local fresh=setmetatable({},Manager)
+    for key,value in pairs(self) do fresh[key]=value end
+    fresh.state,fresh._state_raw,fresh.state_conflict=state,raw,nil
+    return fresh
+end
+function Manager.instance(refresh)
+    if not instance then instance=Manager.new() end
+    if refresh then instance=instance:forUpdate() end
+    return instance
+end
 return Manager

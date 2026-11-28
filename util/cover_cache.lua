@@ -274,7 +274,8 @@ function pump(ch)
     end
 
     if next(pauses) or not ch.transport then return end
-    if res.idle and not next(ch.jobs) and #waiting>0 then
+    -- Only a live worker or a remembered spawn failure benefits from an idle grace period.
+    if res.idle and not next(ch.jobs) and (#waiting>0 or not ch.transport.session and not ch.transport.worker_error) then
         release_channel(ch)
     elseif res.idle and not next(ch.jobs) then
         -- 空闲就准备关掉通道: fork 出来的子进程不该常驻。

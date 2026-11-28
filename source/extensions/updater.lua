@@ -154,7 +154,7 @@ function U.downloadUpdates(m,available)
                 U.result=table.concat(stats.lines,"\n")
                 for _,r in ipairs(pending(m)) do U.notified[r.id]=nil end
             elseif ok and stats and stats.failed==0 and #pending(m)==0 then
-                require("ui.settings.sources"):showInfo("源已是最新，无需下载")
+                require("ui.settings.sources"):showInfo("源已是最新，无需下载",1)
                 refresh();return
             end
             notify(m);U.schedule()

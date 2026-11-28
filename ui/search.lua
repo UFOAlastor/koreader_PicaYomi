@@ -172,7 +172,8 @@ function Search:_leaveNow()
 end
 
 --- 用历史里的一个关键词直接重搜
-function Search:searchFromHistory(keyword)
+function Search:searchFromHistory(keyword, mode)
+    if mode then self.search_all = mode == "all" end
     self.current_keyword = keyword
     self.current_page = 1
     self:performSearch()
@@ -189,18 +190,15 @@ end
 
 function Search:_showHistoryMenuNow(page)
     local old_menu = self.history_menu
-    local items = SearchHistory.list()
+    local items = SearchHistory.entries()
     if #items == 0 then
         if old_menu then
             self.history_menu = nil
             if WidgetSweep.isInStack(old_menu) then UIManager:close(old_menu, "ui") end
         end
         -- 兜底: 「历史」按钮在无历史时是禁用态, 正常走不到这里
-        UIManager:show(InfoMessage:new{
-            text = _("还没有搜索历史"),
-            timeout = 3,
-        }, "ui")
         self:leave()
+        UIManager:show(InfoMessage:new{ text = _("还没有搜索历史") }, "ui")
         return
     end
 
@@ -211,16 +209,18 @@ function Search:_showHistoryMenuNow(page)
     -- 其余菜单 (分类 / 排行榜 / 漫画源 / 章节列表) 都是"先建表再 new"。
     local item_table = {}
     local menu
-    for _i, keyword in ipairs(items) do
+    for _i, entry in ipairs(items) do
+        local keyword, mode = entry.keyword, entry.mode
         table.insert(item_table, {
-            text = keyword,
+            text = mode=="all" and T(_("%1（全部源）"), keyword) or keyword,
             search_keyword = keyword,
+            search_mode = mode,
             picayomi_underline = true,
             callback = function()
                 if self.history_menu~=menu or not WidgetSweep.isInStack(menu)then return end
                 UIManager:close(menu, "ui")
                 self.history_menu = nil
-                self:searchFromHistory(keyword)
+                self:searchFromHistory(keyword, mode)
             end,
         })
     end
@@ -273,7 +273,7 @@ function Search:_showHistoryMenuNow(page)
         onMenuHold = function(_, item)
             if self.history_menu~=menu then return true end
             if item and item.search_keyword then
-                self:confirmRemoveHistoryKeyword(item.search_keyword)
+                self:confirmRemoveHistoryKeyword(item.search_keyword, item.search_mode)
             end
             return true
         end,
@@ -300,7 +300,7 @@ function Search:_showHistoryMenuNow(page)
     WidgetSweep.replace_page(old_menu, self.history_menu)
 end
 
-function Search:confirmRemoveHistoryKeyword(keyword)
+function Search:confirmRemoveHistoryKeyword(keyword, mode)
     local menu = self.history_menu
     if not menu or not WidgetSweep.isInStack(menu) then return end
     if self.history_delete_dialog and WidgetSweep.isInStack(self.history_delete_dialog) then return end
@@ -318,7 +318,7 @@ function Search:confirmRemoveHistoryKeyword(keyword)
             self.history_delete_dialog = nil
             -- A confirmation owned by an earlier page must not act after navigation.
             if self.history_menu ~= menu or not WidgetSweep.isInStack(menu) then return end
-            local ok, err = SearchHistory.remove(keyword)
+            local ok, err = SearchHistory.remove(keyword, mode)
             if not ok then
                 UIManager:show(InfoMessage:new{
                     text = T(_("删除失败：%1"), require("ui.common.error_message").describe(err)),
@@ -334,15 +334,15 @@ end
 
 function Search:performSearch()
     self:closeSearchDialog()
-    local keyword=type(self.current_keyword)=="string" and self.current_keyword:gsub("^%s+",""):gsub("%s+$","")or ""
-    if keyword==""then
+    local keyword=SearchHistory.normalize(self.current_keyword)
+    if not keyword then
         UIManager:show(InfoMessage:new{text=_("请输入搜索关键词")},"ui")
         return
     end
     self.current_keyword=keyword
     -- Save the user's attempt before access checks or asynchronous HTTP. A
     -- failed, cancelled or empty response must never decide history retention.
-    local saved,save_error=SearchHistory.add(keyword)
+    local saved,save_error=SearchHistory.add(keyword, self.search_all and "all" or "current")
     if not saved then
         UIManager:show(InfoMessage:new{text=T(_("搜索历史保存失败：%1"),save_error)},"ui")
     end
@@ -373,7 +373,21 @@ function Search:performSearch()
             self.result_has_more=data.has_more;self.total_count=data.total
             self:showSearchResults()
         else
-            UIManager:show(InfoMessage:new{text=T(_("搜索失败: %1"),require("ui.common.error_message").describe(err))},"ui")
+            local reason=require("ui.common.error_message").describe(err)
+            if reason:find("浏览器验证",1,true) then
+                UIManager:show(ConfirmBox:new{
+                    text=reason.."\n".._("要用同一关键词搜索全部源吗？"),
+                    ok_text=_("搜索全部源"),cancel_text=_("关闭"),
+                    ok_callback=function()
+                        if not current() then return end
+                        self.search_all=true
+                        self.current_page=1
+                        self:performSearch()
+                    end,
+                },"ui")
+            else
+                UIManager:show(InfoMessage:new{text=T(_("搜索失败: %1"),reason)},"ui")
+            end
         end
     end,{
         is_cancelled=function()return not current()end,

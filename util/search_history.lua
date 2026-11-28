@@ -2,13 +2,14 @@
 -- 搜索历史: 记住搜过的关键词, 下次点一下就能重搜
 --
 -- 存储位置: util/config.lua 管的 config.json, 键 `search_history`,
--- 值是一个**关键词字符串数组** (最新搜的排在最前)。
+-- 当前源记录沿用关键词字符串，全部源记录为 {keyword=..., mode="all"}。
+-- 最新在前；list() 兼容关键词调用方，entries() 供界面恢复搜索范围。
 --
 -- 为什么是全局一份而不是按源分桶: 关键词是用户脑子里的词, 不是某个源的内部
 -- 编号 —— 换源之后"再看一眼刚才搜的那个词"是最常见的诉求。与「本地收藏」不同,
--- 收藏存的是漫画 id (各源编号空间不同, 必须分桶), 而这里存的是纯文本。
+-- 收藏存的是漫画 id (各源编号空间不同, 必须分桶)，历史则可跨源重用。
 --
--- 只存关键词本身, 不存结果: 结果是时效性的 (源会更新), 存下来反而会误导用户。
+-- 不存结果: 结果是时效性的 (源会更新), 存下来反而会误导用户。
 local Config = require("util.config")
 local logger = require("util.logger")
 
@@ -31,6 +32,9 @@ local function normalize(keyword)
     return s
 end
 
+-- Request boundaries use the same effective keyword as the history writer.
+M.normalize = normalize
+
 --- 读出普通数组
 --
 -- **踩过的坑**: `rapidjson.decode` 返回的表带 metatable, 被标记为"JSON 对象";
@@ -43,8 +47,11 @@ local function read()
     if type(raw) == "table" then
         for _i, v in ipairs(raw) do
             -- 坏数据 (非字符串 / 空串) 直接丢掉, 不让它污染界面
-            local s = normalize(v)
-            if s then out[#out + 1] = s end
+            local s = normalize(type(v) == "table" and v.keyword or v)
+            if s then
+                out[#out + 1] = type(v) == "table" and v.mode == "all"
+                    and {keyword=s, mode="all"} or s
+            end
         end
     end
     return out
@@ -52,7 +59,24 @@ end
 
 --- 全部历史关键词 (最新在前; 总是返回数组)
 function M.list()
-    return read()
+    local out = {}
+    for i, v in ipairs(read()) do out[i] = type(v) == "table" and v.keyword or v end
+    return out
+end
+
+-- Old strings mean current-source search; aggregate searches retain their mode.
+function M.entries()
+    local out = {}
+    for i, v in ipairs(read()) do
+        out[i] = {keyword=type(v)=="table" and v.keyword or v,
+            mode=type(v)=="table" and "all" or "current"}
+    end
+    return out
+end
+
+local function matches(item, keyword, mode)
+    return (type(item)=="table" and item.keyword or item)==keyword
+        and (type(item)=="table" and "all" or "current")==mode
 end
 
 function M.count()
@@ -61,15 +85,16 @@ end
 
 --- 记录一次搜索 (已存在则提到最前, 不重复插入)
 -- @return ok, err
-function M.add(keyword)
+function M.add(keyword, mode)
     local s = normalize(keyword)
     if not s then return false, "关键词为空" end
 
+    mode = mode == "all" and "all" or "current"
     local items = read()
     for i = #items, 1, -1 do
-        if items[i] == s then table.remove(items, i) end
+        if matches(items[i], s, mode) then table.remove(items, i) end
     end
-    table.insert(items, 1, s)
+    table.insert(items, 1, mode=="all" and {keyword=s, mode="all"} or s)
     while #items > MAX_ITEMS do table.remove(items) end
 
     local ok = Config:set(KEY, items)
@@ -79,14 +104,14 @@ end
 
 --- 删除某个关键词 (不存在也算成功: 幂等)
 -- @return ok, err
-function M.remove(keyword)
+function M.remove(keyword, mode)
     local s = normalize(keyword)
     if not s then return true end
 
     local items = read()
     local found = false
     for i = #items, 1, -1 do
-        if items[i] == s then
+        if matches(items[i], s, mode == "all" and "all" or "current") then
             table.remove(items, i)
             found = true
         end

@@ -2020,12 +2020,22 @@ end
 -- @param sort 可选: 结果列表里切换排序时传入
 function ComicDetail:searchByKeyword(keyword, sort)
     if not require("ui.common.source_access").check(self.source,"search") then return end
-    keyword = tostring(keyword or "")
-    if keyword == "" then return end
+    local SearchHistory = require("util.search_history")
+    keyword = SearchHistory.normalize(keyword)
+    if not keyword then return end
 
     if not (self.source and self.source.search) then
         UIManager:show(InfoMessage:new{ text = _("当前源不支持搜索") }, "ui")
         return
+    end
+
+    -- Record an actual submitted search, never merely opening the tag menu.
+    -- Match manual submission: failed/empty responses still retain the attempt.
+    local saved, save_error = SearchHistory.add(keyword)
+    if not saved then
+        UIManager:show(InfoMessage:new{
+            text = T(_("搜索历史保存失败：%1"), save_error),
+        }, "ui")
     end
 
     -- 抛异常时也关掉提示, 否则"搜索【…】…"永久盖屏 (见 loading_task 注释)
@@ -2173,7 +2183,6 @@ function ComicDetail:showDownloadSelect()
     if not self.episodes_data then
         UIManager:show(InfoMessage:new{
             text = _("章节还在加载，请稍后再试"),
-            timeout = 3,
         }, "ui")
         return
     end

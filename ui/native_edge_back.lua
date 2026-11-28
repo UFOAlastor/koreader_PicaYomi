@@ -8,7 +8,7 @@ local Listener=require('ui/widget/container/inputcontainer'):extend{}
 local M={}
 function Listener:eligible()
     local reader=self.ui
-    if self.closed or not reader or require('apps/reader/readerui').instance~=reader
+    if self.closed or not reader or self.host_class.instance~=reader
         or not Config:get('native_reader_edge_back',false)then return false end
     if reader._picayomi_novel_controls or reader.document and reader.document.provider=='picayomi_stream'then return false end
     if reader.highlight and(reader.highlight.hold_pos or reader.highlight.select_mode)then return false end
@@ -23,7 +23,12 @@ function Listener:back()
         self.return_task=nil
         local reader=self.ui
         if self:eligible()then
-            local ok,err=pcall(reader.handleEvent,reader,Event:new('Home'))
+            local ok,err
+            if self.file_browser then
+                ok,err=pcall(reader.file_chooser.onFolderUp,reader.file_chooser)
+            else
+                ok,err=pcall(reader.handleEvent,reader,Event:new('Home'))
+            end
             if not ok then require('ui.common.loading_task').showFailure(err)end
         end
         if self.notice then UI:close(self.notice,'ui');self.notice=nil end
@@ -44,11 +49,13 @@ function Listener:onCloseDocument()
     self.ui=nil;self.zones=nil
 end
 Listener.onCloseWidget=Listener.onCloseDocument
-function M.install(reader)
+function M.install(reader,file_browser)
     if not Device:isTouchDevice()or reader._picayomi_native_edge then return end
-    local self=Listener:new{ui=reader}
+    local self=Listener:new{ui=reader,file_browser=file_browser,
+        host_class=file_browser and require('apps/filemanager/filemanager') or require('apps/reader/readerui')}
     local zone={ratio_x=0,ratio_y=0,ratio_w=1,ratio_h=1}
     local swipe={'rolling_swipe','paging_swipe','swipe_link','short_diagonal_swipe'}
+    if file_browser then swipe[#swipe+1]='filemanager_swipe' end
     local pan={'rolling_pan','paging_pan'};local release={'rolling_pan_release','paging_pan_release'}
     for _,name in ipairs{'one_finger_swipe_top_edge_right','one_finger_swipe_top_edge_left','one_finger_swipe_bottom_edge_right','one_finger_swipe_bottom_edge_left'}do
         swipe[#swipe+1]=name;pan[#pan+1]=name..'_pan';release[#release+1]=name..'_pan_release'

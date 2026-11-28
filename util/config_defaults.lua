@@ -126,7 +126,7 @@ ConfigDefaults.descriptions = {
     refresh_on_page_turn = _("翻页刷新"),
     webtoon_scroll = _("条漫滚动阅读"),
     swipe_edge_back = _("边缘滑动返回"),
-    native_reader_edge_back = _("原生 Reader 边缘返回"),
+    native_reader_edge_back = _("KOReader 边缘返回"),
     swipe_edge_side = _("允许返回的边缘"),
     swipe_edge_width = _("边缘宽度"),
 }

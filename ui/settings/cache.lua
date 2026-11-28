@@ -169,7 +169,7 @@ function CacheSettings:clearImageCache()
 
             if success then
                 self:showInfo(T(_("已清除 %1 MB 图片缓存"),
-                    math.floor(cleared / 1024 / 1024 * 100) / 100))
+                    math.floor(cleared / 1024 / 1024 * 100) / 100), 1)
                 -- 原地刷新缓存大小显示 (不能直接 show: 会叠出第二层缓存页)
                 self:refresh()
             else
@@ -191,7 +191,7 @@ function CacheSettings:clearAllCache()
 
             if success then
                 self:showInfo(T(_("已清除 %1 MB 缓存"),
-                    math.floor(cleared / 1024 / 1024 * 100) / 100))
+                    math.floor(cleared / 1024 / 1024 * 100) / 100), 1)
                 -- 原地刷新缓存大小显示 (不能直接 show: 会叠出第二层缓存页)
                 self:refresh()
             else
@@ -207,7 +207,7 @@ function CacheSettings:clearNovelCache()
     UIManager:show(self:createConfirmBox{text=_("清除小说正文与插图缓存？已下载小说、阅读进度、收藏和账号会保留。"),ok_callback=function()
         local ok,bytes=pcall(self.cache.clearNovelCache,self.cache)
         if not ok then self:showError(bytes);return end
-        self:showInfo(T(_("已清除 %1 MB 小说缓存"),to_mb(bytes)));self:refresh()
+        self:showInfo(T(_("已清除 %1 MB 小说缓存"),to_mb(bytes)), 1);self:refresh()
     end},"ui")
 end
 
@@ -227,7 +227,7 @@ function CacheSettings:clearDownloads(kind)
                 return true,Library.clearAll()
             end)
             if not ok then self:showError(err);return end
-            self:showInfo(T(_("已清空 %1 部下载，释放 %2 MB"),result.comics,to_mb(result.bytes)))
+            self:showInfo(T(_("已清空 %1 部下载，释放 %2 MB"),result.comics,to_mb(result.bytes)), 1)
             self:refresh()
         end,
     },"ui")

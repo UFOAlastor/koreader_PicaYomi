@@ -78,7 +78,7 @@ Do not force a restart, delete reading data, or change other plugins.
 - **Manage chapter downloads**: select all or unread chapters without selecting completed downloads again. Delete all downloads or only read chapters, keeping unread and unfinished chapters. Downloads pause while reading and resume afterward; disconnection keeps queued tasks, persistent failures can be retried, and screen-off downloading is configurable.
 - **Favorites and history**: use local favorites, supported online bookshelves, and reading history. Home covers start or resume reading directly. Online favorites require source and account support. Clearing caches keeps accounts, settings, favorites, history, and explicit downloads.
 - **Read title comments**: supported sources offer full comments and replies, subject to source capabilities and login requirements. Posting and chapter comments are not available.
-- **Gestures and storage**: swipe inward from an edge to go back, or left/right in the middle of lists to change pages. Edge gestures can be adjusted or disabled. **设置 → 存储管理** shows manga and novel cache and download usage, with separate cleanup controls.
+- **Gestures and storage**: swipe inward from an edge to go back, or left/right in the middle of lists to change pages. Edge gestures can be adjusted or disabled. Enable **设置 → 操作与手势 → KOReader 边缘返回** to swipe back to the file browser from a book or up one directory in the file browser. **设置 → 存储管理** shows manga and novel cache and download usage, with separate cleanup controls.
 
 Lower preloading if your network or device struggles. Use full refresh to reduce e-ink ghosting. Reopen a chapter after changing manga display settings.
 

@@ -1,5 +1,25 @@
 # 更新记录
 
+## 1.6.9 — 2026-11-29
+
+### 中文
+
+- 开启 KOReader 边缘返回后，在文件浏览器从屏幕边缘向内滑动即可返回上级目录。
+- 修复源状态发生变化后，反复手动更新仍然失败的问题。
+- 当前源搜索要求浏览器验证时，可沿用关键词改搜全部源。
+- 更新失败、源被跳过和需要处理的问题会持续显示，点击后关闭。
+- 切换内容源时完整刷新主页，减少底部按钮栏缺失的情况。
+- 提高漫画锐化强度，让细线和文字边缘更清楚。
+
+### English
+
+- Swipe inward from the screen edge to open the parent folder when KOReader edge gestures are enabled.
+- Fixed repeated manual update failures after another operation changed the source settings.
+- When a source requires browser verification for search, you can retry the same query across all sources.
+- Failed updates, skipped sources, and messages that need your attention stay visible until dismissed.
+- Switching sources refreshes the entire home screen to keep the bottom controls visible.
+- Increased manga sharpening strength for clearer fine lines and text edges.
+
 ## 1.6.8 — 2026-11-26
 
 ### 中文

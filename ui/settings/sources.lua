@@ -45,7 +45,7 @@ function Sources:perform(fn, message, fallback_redraw)
     local task
     hint.dismiss_callback = function() if task then task:cancel() end end
     task = require("network.async_task").run(function()
-        local result, reason, restart = fn()
+        local result, reason, restart, stats = fn()
         assert(result, reason or "操作失败")
         Loading.close(hint)
         if not self.manager or self.manager.current_menu == owner then
@@ -55,7 +55,11 @@ function Sources:perform(fn, message, fallback_redraw)
             self.task = nil
             self:reload(redraw)
             if restart then self:offerRestart(message or reason)
-            elseif message ~= false then self:showInfo(message or reason or "已保存，重启 KOReader 后生效") end
+            elseif message ~= false then
+                local complete = stats and stats.failed == 0 and (stats.skipped or 0) == 0
+                local brief = complete or (not stats and (message or not reason))
+                self:showInfo(message or reason or "已保存，重启 KOReader 后生效", brief and 1 or nil)
+            end
         end
     end, {
         is_cancelled = function() return self.manager and self.manager.current_menu ~= owner end,
@@ -304,8 +308,13 @@ function Sources:repository(url)
             items[#items+1]={text="源："..chosen.name.." "..chosen.version.." · "..status.label,
                 enabled=status.code=="update",callback=function()
                     self:perform(function()
-                        local added=m.state.sources[id]==nil
-                        local ok,err=m:installFromRepository(url,id)
+                        local current=Manager.instance(true)
+                        local offer=current:candidate(url,id)
+                        if offer.code=="latest" then return true,"源已是最新，无需更新",false end
+                        assert(offer.code=="update" and offer.entry and offer.entry.sha256==chosen.sha256,
+                            "可用版本已变化，请重新检查")
+                        local added=current.state.sources[id]==nil
+                        local ok,err=current:installFromRepository(url,id)
                         return ok,ok and ((added and "新增成功：" or "更新成功：")..chosen.name.." "..chosen.version.."，重启 KOReader 后生效") or err,true
                     end)
                 end}
@@ -328,8 +337,8 @@ function Sources:repository(url)
     self:page(repo.name, items, function() self:repository(url) end, "repository:"..url)
 end
 
-function Sources:updateRepository(url)
-    local m=Manager.instance()
+function Sources:updateRepository(url,manager)
+    local m=manager or Manager.instance(true)
     local preview=m:previewRepository(url)
     local repo=m.state.repositories[url]
     -- Entering the subscription URL authorizes its initial identity. Existing
@@ -373,7 +382,7 @@ function Sources:updateSubscriptions(redraw)
 end
 
 function Sources:updateRepositories()
-    local m=Manager.instance()
+    local m=Manager.instance(true)
     local urls={}
     for url in pairs(m.state.repositories) do urls[#urls+1]=url end
     table.sort(urls)
@@ -383,7 +392,7 @@ function Sources:updateRepositories()
     local unchanged={}
     for _,url in ipairs(urls) do
         local name=m.state.repositories[url].name or "订阅"
-        local ok,result,message,_,stats=pcall(self.updateRepository,self,url)
+        local ok,result,message,_,stats=pcall(self.updateRepository,self,url,m)
         if ok and result then
             updated=updated+stats.updated;failed=failed+stats.failed;skipped=skipped+stats.skipped
             added=added+(stats.added or 0)
@@ -403,7 +412,7 @@ function Sources:updateRepositories()
     if skipped>0 then summary=summary.."，跳过 "..skipped.." 个源" end
     if repo_failed>0 then summary=summary.."，检查失败 "..repo_failed.." 个订阅" end
     if updated+added>0 then summary=summary.."\n源变更将在重启 KOReader 后生效" end
-    return true,summary.."\n\n"..table.concat(lines,"\n"),updated+added>0
+    return true,summary.."\n\n"..table.concat(lines,"\n"),updated+added>0,{failed=failed+repo_failed,skipped=skipped}
 end
 
 return Sources

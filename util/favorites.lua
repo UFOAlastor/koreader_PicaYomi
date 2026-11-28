@@ -294,7 +294,7 @@ function M.promptLocalSync(source)
         ok_text=_("同步"),cancel_text=_("暂不"),
         ok_callback=function()
             if not same_session() then UI:show(Info:new{text=_("账号或源已变化，请重新发起同步。")},"ui");return end
-            if M.syncing then UI:show(Info:new{text=_("正在同步本地收藏，请稍候。"),timeout=2},"ui");return end
+            if M.syncing then UI:show(Info:new{text=_("正在同步本地收藏，请稍候。")},"ui");return end
             M.syncing=true
             -- Native ConfirmBox closes itself after this callback. Start only
             -- after it has left the stack, so its close cannot repaint over loading.

@@ -1072,7 +1072,7 @@ function VisualComicList:loadServerPage(page, notify, display_page)
                 self.server_page=tonumber(data.page) or page
                 self.has_more=data.has_more==true
                 self.prefetch_blocked=self.has_more
-                UIManager:show(InfoMessage:new{ text = self.has_more and _("本批暂无内容，可继续翻页") or _("没有更多内容了"), timeout = 2 }, "ui")
+                UIManager:show(InfoMessage:new{ text = self.has_more and _("本批暂无内容，可继续翻页") or _("没有更多内容了"), timeout = not self.has_more and 2 or nil }, "ui")
                 self:updatePageText()
                 self:updatePageButtons()
                 if notify then notify(false) end
@@ -1190,7 +1190,7 @@ function VisualComicList:fetchMore(silent, on_done)
         -- 现在: 失败只提示 + 保留 has_more (手动点"下页"可以重试), 只有**真的取回
         -- 空列表**才算到底。
         if not ok then
-            logger.warn("Picayomi VisualComicList: 补货失败: " .. tostring(err))
+            logger.warn("Picayomi VisualComicList: 补货失败", "source", self.source_id or "unknown", "page", page, require("util.log_redact").text(tostring(err)))
             -- 不再自动预取 (否则失败会自己循环), 但手动"下页"仍然放行
             self.prefetch_blocked = true
             if not silent or self.advance_after_fetch then

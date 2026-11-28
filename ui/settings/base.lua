@@ -104,7 +104,7 @@ end
 
 function BaseSettingsModule:showInfo(text, timeout)
     UIManager:show(InfoMessage:new{
-        text = text, timeout = timeout == nil and 1 or timeout,
+        text = text, timeout = timeout,
     }, "ui")
 end
 
@@ -174,7 +174,7 @@ function BaseSettingsModule:safeConfigSet(key, value, success_message)
 
     if success and err ~= false then
         if success_message then
-            self:showInfo(success_message)
+            self:showInfo(success_message, 1)
         end
         if logger.enabled then logger.info("Config updated:", key) end
         return true
@@ -225,7 +225,7 @@ function BaseSettingsModule:createToggleItem(text, config_key, on_message, off_m
             local new_value = not current_value
 
             if self:safeConfigSet(config_key, new_value) then
-                self:showInfo(new_value and on_message or off_message)
+                self:showInfo(new_value and on_message or off_message, 1)
             end
         end,
     }
@@ -239,7 +239,7 @@ function BaseSettingsModule:createResetButton(config_keys, reset_message)
                 text = _("确定要重置设置为默认值吗？"),
                 ok_callback = function()
                     self.config_defaults:resetToDefaults(self.config, config_keys)
-                    self:showInfo(reset_message or _("设置已重置为默认值"))
+                    self:showInfo(reset_message or _("设置已重置为默认值"), 1)
                     -- 刷新当前菜单以显示更新后的值
                     if self.show then
                         self:show()

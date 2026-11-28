@@ -53,7 +53,7 @@ function SwipeSettings:show()
             mandatory_func = function() return WIDTH_LABELS[self:safeConfigGet(SwipeRules.CONFIG_WIDTH)] or WIDTH_LABELS.normal end,
             callback = function() self:chooseWidth() end,
         },
-        {text=_("原生 Reader 边缘返回"),
+        {text=_("KOReader 边缘返回"),
             mandatory_func=function()return self:safeConfigGet("native_reader_edge_back",false)and _("开启")or _("关闭")end,
             callback=function()self:chooseNative()end},
         self:createBackButton(),
@@ -97,15 +97,15 @@ end
 function SwipeSettings:chooseNative()
     local current=self:safeConfigGet("native_reader_edge_back",false)
     local items={}
-    for index,option in ipairs{{text=_("开启：返回文件浏览器"),value=true},{text=_("关闭（默认）"),value=false}}do
+    for index,option in ipairs{{text=_("开启：阅读时返回文件浏览器，浏览时返回上级目录"),value=true},{text=_("关闭（默认）"),value=false}}do
         local opt=option
         items[#items+1]={text=checkLabel(current==opt.value,opt.text),callback=function()
-            self:apply("native_reader_edge_back",opt.value,_("原生阅读边缘返回设置已保存，即时生效"))
+            self:apply("native_reader_edge_back",opt.value,_("KOReader 边缘返回设置已保存，即时生效"))
         end}
     end
     items[#items+1]={text=_("沿用允许的边缘与宽度，独立于 PicaYomi 返回开关"),enabled=false,select_enabled=false}
     items[#items+1]=self:createBackButton()
-    self:showMenu(self:createMenu(_("原生 Reader 边缘返回"),items))
+    self:showMenu(self:createMenu(_("KOReader 边缘返回"),items))
 end
 
 --- 允许哪一侧边缘

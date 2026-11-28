@@ -194,6 +194,11 @@ function Picayomi:init()
                 end
             end)
         else
+            if self.ui.registerPostInitCallback then
+                self.ui:registerPostInitCallback(function()
+                    require("ui.native_edge_back").install(self.ui,true)
+                end)
+            end
             -- 在文件管理器中: 注册主菜单
             self.ui.menu:registerToMainMenu(self)
         end

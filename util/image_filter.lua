@@ -157,7 +157,7 @@ local function apply_piece(bb,mode,budget,fast,resize)
         local denoised=(mode=='denoise_sharpen' or mode=='denoise' or mode=='denoise_bounded_sharpen') and not fast and keep(l.pixBlockBilateralExact(src,0.7,24))or src
         local result
         if mode=='denoise' or resize and (not resize.sharpen or ow<8 or oh<8)then result=denoised
-        else result=keep(l.pixUnsharpMaskingFast(denoised,1,0.35,3))end
+        else result=keep(l.pixUnsharpMaskingFast(denoised,1,0.55,3))end
         if (mode=='bounded_sharpen' or mode=='denoise_bounded_sharpen') and result~=denoised then
             -- Bound the sharpener to its 3x3 input neighborhood in C. Release
             -- each bound before allocating the next to retain the same budget.

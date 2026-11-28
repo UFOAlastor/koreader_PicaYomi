@@ -681,7 +681,6 @@ function Home:_loadComicList(fetch_fn, title, loading, page, sort_spec, fetch_pa
             close_loading()
             UIManager:show(InfoMessage:new{
                 text = source and source.content_type=="novel" and _("没有找到小说") or _("没有找到漫画"),
-                timeout = 2,
             }, "ui")
             self:returnToListBase()
             return
@@ -957,6 +956,7 @@ function Home:switchSource(identifier)
         self.source_menu = nil
     end
 
+    UIManager:setDirty(self.main_menu, "flashui")
     UIManager:show(InfoMessage:new{
         text = T(_("已切换到 %1"), self.source and self.source.name or identifier),
         timeout = 1,
